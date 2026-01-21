@@ -11,11 +11,14 @@
 
             <!-- Converters -->
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+            <converters:BoolToVisibilityHiddenConverter x:Key="BoolToVisibilityHiddenConverter"/>
             <converters:EnumToBoolConverter x:Key="EnumToBoolConverter"/>
             <converters:EnumToInverseBoolConverter x:Key="EnumToInverseBoolConverter"/>
             <converters:EnumToDescriptionConverter x:Key="EnumToDescriptionConverter"/>
             <converters:NullToDefaultConverter x:Key="NullToDefaultConverter"/>
             <converters:InverseBoolConverter x:Key="InverseBoolConverter"/>
+            <converters:ListToStringConverter x:Key="ListToStringConverter"/>
+            <converters:ColorToBrushConverter x:Key="ColorToBrushConverter"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
