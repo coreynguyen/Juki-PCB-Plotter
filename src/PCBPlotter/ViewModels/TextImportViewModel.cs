@@ -8,6 +8,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Input;
 using PCBPlotter.Core.Models;
+using PCBPlotter.Core.Utilities;
 
 namespace PCBPlotter.ViewModels
 {
@@ -35,13 +36,23 @@ namespace PCBPlotter.ViewModels
         }
     }
 
+    /// <summary>
+    /// Result of a BOM import with reference expansion
+    /// </summary>
+    public class BomImportResult
+    {
+        public List<BomLine> BomLines { get; set; } = new List<BomLine>();
+        public List<string> Warnings { get; set; } = new List<string>();
+        public int TotalReferences { get; set; }
+    }
+
     public class TextImportViewModel : ViewModelBase
     {
         private string _filePath;
         private string _selectedDelimiter = "Tab";
         private string _selectedEncoding = "UTF-8";
         private int _skipRows = 0;
-        private bool _firstRowIsHeader = true;
+        private bool _useFirstRowAsHeader = true;
         private bool _mergeDelimiters = false;
         private string _importType = "Placements (PNP)";
         private string _boardSide = "Top";
@@ -50,6 +61,8 @@ namespace PCBPlotter.ViewModels
         private DataTable _previewData;
         private int _recordCount;
         private ObservableCollection<ColumnMapping> _columnMappings;
+        private bool _showPlacementOptions = true;
+        private string _importWarnings;
 
         public string FilePath
         {
@@ -99,12 +112,12 @@ namespace PCBPlotter.ViewModels
             }
         }
 
-        public bool FirstRowIsHeader
+        public bool UseFirstRowAsHeader
         {
-            get { return _firstRowIsHeader; }
+            get { return _useFirstRowAsHeader; }
             set
             {
-                if (SetProperty(ref _firstRowIsHeader, value))
+                if (SetProperty(ref _useFirstRowAsHeader, value))
                 {
                     ParseFile();
                 }
@@ -131,6 +144,7 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _importType, value))
                 {
                     UpdateAvailableFields();
+                    ShowPlacementOptions = (value == "Placements (PNP)");
                 }
             }
         }
@@ -171,6 +185,18 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _columnMappings, value); }
         }
 
+        public bool ShowPlacementOptions
+        {
+            get { return _showPlacementOptions; }
+            set { SetProperty(ref _showPlacementOptions, value); }
+        }
+
+        public string ImportWarnings
+        {
+            get { return _importWarnings; }
+            set { SetProperty(ref _importWarnings, value); }
+        }
+
         public List<string> Delimiters { get; } = new List<string>
         {
             "Tab", "Comma", "Semicolon", "Space", "Pipe"
@@ -179,11 +205,6 @@ namespace PCBPlotter.ViewModels
         public List<string> Encodings { get; } = new List<string>
         {
             "UTF-8", "ASCII", "Unicode", "UTF-16", "Windows-1252"
-        };
-
-        public List<string> ImportTypes { get; } = new List<string>
-        {
-            "Placements (PNP)", "BOM", "Components"
         };
 
         public List<string> BoardSides { get; } = new List<string>
@@ -199,6 +220,11 @@ namespace PCBPlotter.ViewModels
         public List<string> AngleFormats { get; } = new List<string>
         {
             "Degrees", "Radians"
+        };
+
+        public List<string> ImportTypes { get; } = new List<string>
+        {
+            "Placements (PNP)", "BOM"
         };
 
         public ObservableCollection<ImportField> AvailableFields { get; private set; }
@@ -250,20 +276,21 @@ namespace PCBPlotter.ViewModels
                 AvailableFields.Add(new ImportField { FieldName = "Description", DisplayName = "Description" });
                 AvailableFields.Add(new ImportField { FieldName = "Quantity", DisplayName = "Quantity" });
             }
-            else if (ImportType == "Components")
-            {
-                AvailableFields.Add(new ImportField { FieldName = "PartNumber", DisplayName = "Part Number" });
-                AvailableFields.Add(new ImportField { FieldName = "Value", DisplayName = "Value" });
-                AvailableFields.Add(new ImportField { FieldName = "PackageName", DisplayName = "Package" });
-                AvailableFields.Add(new ImportField { FieldName = "Manufacturer", DisplayName = "Manufacturer" });
-                AvailableFields.Add(new ImportField { FieldName = "MPN", DisplayName = "MPN" });
-                AvailableFields.Add(new ImportField { FieldName = "Description", DisplayName = "Description" });
-            }
 
-            // Reset column mappings to skip
+            // Re-detect fields after changing type
             foreach (var mapping in ColumnMappings)
             {
-                mapping.SelectedField = AvailableFields[0];
+                mapping.SelectedField = DetectField(mapping.HeaderText);
+            }
+        }
+
+        private LengthUnit GetSelectedUnit()
+        {
+            switch (Units)
+            {
+                case "Mils": return LengthUnit.Mils;
+                case "Inches": return LengthUnit.Inches;
+                default: return LengthUnit.Millimeters;
             }
         }
 
@@ -308,7 +335,7 @@ namespace PCBPlotter.ViewModels
                 var delimiter = GetDelimiterChar();
                 var dataTable = new DataTable();
 
-                // Skip rows
+                // Skip rows (for comments/headers at top of file)
                 var dataLines = lines.Skip(SkipRows).ToList();
                 if (dataLines.Count == 0)
                 {
@@ -317,7 +344,7 @@ namespace PCBPlotter.ViewModels
                     return;
                 }
 
-                // Parse first line to determine column count
+                // Parse first data line to determine column count
                 var firstLine = dataLines[0];
                 var firstFields = ParseLine(firstLine, delimiter);
                 var columnCount = firstFields.Length;
@@ -326,7 +353,7 @@ namespace PCBPlotter.ViewModels
                 ColumnMappings.Clear();
                 for (int i = 0; i < columnCount; i++)
                 {
-                    var columnName = FirstRowIsHeader ? firstFields[i] : string.Format("Column {0}", i + 1);
+                    var columnName = UseFirstRowAsHeader ? firstFields[i] : string.Format("Column {0}", i + 1);
                     if (string.IsNullOrWhiteSpace(columnName))
                         columnName = string.Format("Column {0}", i + 1);
 
@@ -345,7 +372,7 @@ namespace PCBPlotter.ViewModels
                 }
 
                 // Parse data rows
-                int startRow = FirstRowIsHeader ? 1 : 0;
+                int startRow = UseFirstRowAsHeader ? 1 : 0;
                 int maxPreviewRows = 100;
                 int rowCount = 0;
 
@@ -365,7 +392,7 @@ namespace PCBPlotter.ViewModels
                 }
 
                 PreviewData = dataTable;
-                RecordCount = FirstRowIsHeader ? dataLines.Count - 1 : dataLines.Count;
+                RecordCount = UseFirstRowAsHeader ? dataLines.Count - 1 : dataLines.Count;
             }
             catch (Exception ex)
             {
@@ -387,20 +414,23 @@ namespace PCBPlotter.ViewModels
 
         private ImportField DetectField(string columnName)
         {
+            if (string.IsNullOrEmpty(columnName))
+                return AvailableFields[0];
+
             columnName = columnName.ToLowerInvariant().Trim();
 
-            // Reference designator
+            // Reference designator (for PNP)
             if (columnName.Contains("ref") || columnName == "designator" || columnName == "part")
                 return FindField("Reference");
 
             // X position
             if (columnName == "x" || columnName.Contains("pos x") || columnName.Contains("x pos") ||
-                columnName == "center-x" || columnName == "mid x")
+                columnName == "center-x" || columnName == "mid x" || columnName == "posx")
                 return FindField("X");
 
             // Y position
             if (columnName == "y" || columnName.Contains("pos y") || columnName.Contains("y pos") ||
-                columnName == "center-y" || columnName == "mid y")
+                columnName == "center-y" || columnName == "mid y" || columnName == "posy")
                 return FindField("Y");
 
             // Rotation
@@ -413,8 +443,9 @@ namespace PCBPlotter.ViewModels
                 return FindField("Side");
 
             // Part number
-            if (columnName.Contains("part") && columnName.Contains("num") ||
-                columnName == "pn" || columnName == "p/n" || columnName == "mfr pn")
+            if ((columnName.Contains("part") && columnName.Contains("num")) ||
+                columnName == "pn" || columnName == "p/n" || columnName == "mfr pn" ||
+                columnName == "internal pn" || columnName == "ipn")
                 return FindField("PartNumber");
 
             // Package
@@ -431,19 +462,20 @@ namespace PCBPlotter.ViewModels
                 return FindField("Description");
 
             // Manufacturer
-            if (columnName.Contains("manuf") || columnName == "mfr")
+            if (columnName.Contains("manuf") || columnName == "mfr" || columnName == "mfg")
                 return FindField("Manufacturer");
 
             // MPN
-            if (columnName == "mpn" || columnName.Contains("mfr part"))
+            if (columnName == "mpn" || columnName.Contains("mfr part") || columnName.Contains("mfg part"))
                 return FindField("MPN");
 
             // Quantity
-            if (columnName.Contains("qty") || columnName.Contains("quantity"))
+            if (columnName.Contains("qty") || columnName.Contains("quantity") || columnName == "count")
                 return FindField("Quantity");
 
             // References (for BOM)
-            if (columnName.Contains("references") || columnName.Contains("designators"))
+            if (columnName.Contains("references") || columnName.Contains("designators") ||
+                columnName.Contains("ref des") || columnName == "refs")
                 return FindField("References");
 
             return AvailableFields[0]; // Skip
@@ -469,7 +501,6 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteImport()
         {
-            // TODO: Create placements/components from mapped data
             var window = Application.Current.Windows.OfType<Views.TextImportDialog>().FirstOrDefault();
             if (window != null)
             {
@@ -480,11 +511,13 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteSaveMapping()
         {
-            // TODO: Save column mapping to file for reuse
             MessageBox.Show("Save mapping functionality coming soon.", "Save Mapping",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
+        /// <summary>
+        /// Gets placements from the imported data with unit conversion
+        /// </summary>
         public List<Placement> GetPlacements()
         {
             var placements = new List<Placement>();
@@ -499,32 +532,126 @@ namespace PCBPlotter.ViewModels
             var pkgIndex = GetMappedColumnIndex("PackageName");
             var valIndex = GetMappedColumnIndex("Value");
 
+            var inputUnit = GetSelectedUnit();
+            var targetUnit = LengthUnit.Millimeters; // App default
+
             foreach (DataRow row in PreviewData.Rows)
             {
                 var placement = new Placement();
 
-                if (refIndex >= 0) placement.Reference = row[refIndex].ToString();
-                if (xIndex >= 0) placement.X = ParseDouble(row[xIndex].ToString());
-                if (yIndex >= 0) placement.Y = ParseDouble(row[yIndex].ToString());
-                if (rotIndex >= 0) placement.Rotation = ParseDouble(row[rotIndex].ToString());
+                if (refIndex >= 0) placement.Reference = row[refIndex].ToString().Trim();
 
+                // Parse and convert coordinates
+                if (xIndex >= 0)
+                {
+                    double x = ParseDouble(row[xIndex].ToString());
+                    placement.X = UnitConverter.Convert(x, inputUnit, targetUnit);
+                }
+
+                if (yIndex >= 0)
+                {
+                    double y = ParseDouble(row[yIndex].ToString());
+                    placement.Y = UnitConverter.Convert(y, inputUnit, targetUnit);
+                }
+
+                // Parse rotation
+                if (rotIndex >= 0)
+                {
+                    double rot = ParseDouble(row[rotIndex].ToString());
+                    if (AngleFormat == "Radians")
+                    {
+                        rot = rot * 180.0 / Math.PI; // Convert to degrees
+                    }
+                    placement.Rotation = rot;
+                }
+
+                // Parse side
                 if (sideIndex >= 0)
                 {
                     var sideStr = row[sideIndex].ToString().ToLower();
-                    placement.Side = (sideStr.Contains("bot") || sideStr == "b")
-                        ? PCBPlotter.Core.Models.BoardSide.Bottom : PCBPlotter.Core.Models.BoardSide.Top;
+                    placement.Side = (sideStr.Contains("bot") || sideStr == "b" || sideStr == "bottom")
+                        ? BoardSide.Bottom : BoardSide.Top;
                 }
                 else
                 {
                     placement.Side = this.BoardSide == "Bottom"
-                        ? PCBPlotter.Core.Models.BoardSide.Bottom
-                        : PCBPlotter.Core.Models.BoardSide.Top;
+                        ? BoardSide.Bottom
+                        : BoardSide.Top;
                 }
+
+                // Optional fields
+                if (partIndex >= 0) placement.PartNumber = row[partIndex].ToString().Trim();
+                if (pkgIndex >= 0) placement.PackageName = row[pkgIndex].ToString().Trim();
 
                 placements.Add(placement);
             }
 
             return placements;
+        }
+
+        /// <summary>
+        /// Gets BOM data from the imported data with reference expansion
+        /// </summary>
+        public BomImportResult GetBomData()
+        {
+            var result = new BomImportResult();
+            if (PreviewData == null) return result;
+
+            var partIndex = GetMappedColumnIndex("PartNumber");
+            var refsIndex = GetMappedColumnIndex("References");
+            var valIndex = GetMappedColumnIndex("Value");
+            var pkgIndex = GetMappedColumnIndex("PackageName");
+            var mfrIndex = GetMappedColumnIndex("Manufacturer");
+            var mpnIndex = GetMappedColumnIndex("MPN");
+            var descIndex = GetMappedColumnIndex("Description");
+            var qtyIndex = GetMappedColumnIndex("Quantity");
+
+            foreach (DataRow row in PreviewData.Rows)
+            {
+                var bomLine = new BomLine();
+
+                if (partIndex >= 0) bomLine.PartNumber = row[partIndex].ToString().Trim();
+                if (valIndex >= 0) bomLine.Value = row[valIndex].ToString().Trim();
+                if (pkgIndex >= 0) bomLine.PackageName = row[pkgIndex].ToString().Trim();
+                if (mfrIndex >= 0) bomLine.Manufacturer = row[mfrIndex].ToString().Trim();
+                if (mpnIndex >= 0) bomLine.ManufacturerPartNumber = row[mpnIndex].ToString().Trim();
+                if (descIndex >= 0) bomLine.Description = row[descIndex].ToString().Trim();
+
+                // Expand references
+                if (refsIndex >= 0)
+                {
+                    string refsStr = row[refsIndex].ToString();
+                    var expansion = ReferenceExpander.ExpandReferences(refsStr);
+
+                    bomLine.References.AddRange(expansion.References);
+                    result.TotalReferences += expansion.References.Count;
+
+                    if (expansion.Warnings.Count > 0)
+                    {
+                        foreach (var warning in expansion.Warnings)
+                        {
+                            result.Warnings.Add(string.Format("Line '{0}': {1}", bomLine.PartNumber, warning));
+                        }
+                    }
+                }
+
+                // Parse quantity (optional - can be derived from reference count)
+                if (qtyIndex >= 0)
+                {
+                    if (int.TryParse(row[qtyIndex].ToString(), out int qty))
+                    {
+                        bomLine.Quantity = qty;
+                    }
+                }
+                else
+                {
+                    bomLine.Quantity = bomLine.References.Count;
+                }
+
+                result.BomLines.Add(bomLine);
+            }
+
+            return result;
         }
 
         private int GetMappedColumnIndex(string fieldName)
@@ -538,6 +665,9 @@ namespace PCBPlotter.ViewModels
         {
             if (string.IsNullOrWhiteSpace(value)) return 0;
             value = value.Trim();
+
+            // Remove any unit suffixes
+            value = value.Replace("mm", "").Replace("mil", "").Replace("in", "").Trim();
 
             // Handle common formats
             if (double.TryParse(value, System.Globalization.NumberStyles.Float,

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Services;
@@ -93,27 +94,110 @@ namespace PCBPlotter.Views
                 vm.ImportType = importType == "BomImport" ? "BOM" : "Placements (PNP)";
             }
 
-            if (dialog.ShowDialog() == true)
+            if (dialog.ShowDialog() == true && vm != null)
             {
-                // Import completed - get placements from the dialog
-                if (vm != null && importType == "PnpImport")
+                var mainVm = DataContext as MainViewModel;
+                if (mainVm?.CurrentProject == null) return;
+
+                if (importType == "PnpImport")
                 {
+                    // Import placements
                     var placements = vm.GetPlacements();
-                    var mainVm = DataContext as MainViewModel;
-                    if (mainVm?.CurrentProject != null)
+                    foreach (var placement in placements)
                     {
-                        foreach (var placement in placements)
-                        {
-                            mainVm.CurrentProject.Placements.Add(placement);
-                        }
-                        EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
-                        EventAggregator.Instance.Publish(new StatusMessageEvent
-                        {
-                            Message = string.Format("Imported {0} placements", placements.Count)
-                        });
+                        mainVm.CurrentProject.Placements.Add(placement);
                     }
+
+                    EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+                    EventAggregator.Instance.Publish(new StatusMessageEvent
+                    {
+                        Message = string.Format("Imported {0} placements", placements.Count)
+                    });
+                }
+                else if (importType == "BomImport")
+                {
+                    // Import BOM data
+                    var bomResult = vm.GetBomData();
+
+                    // Convert BomLines to Components
+                    int newComponents = 0;
+                    int updatedComponents = 0;
+
+                    foreach (var bomLine in bomResult.BomLines)
+                    {
+                        // Find existing component by part number or create new
+                        var existing = FindComponentByPartNumber(mainVm.CurrentProject, bomLine.PartNumber);
+                        if (existing != null)
+                        {
+                            // Update existing component
+                            existing.Description = bomLine.Description;
+                            existing.Manufacturer = bomLine.Manufacturer;
+                            existing.ManufacturerPartNumber = bomLine.ManufacturerPartNumber;
+                            existing.Value = bomLine.Value;
+
+                            // Merge references
+                            foreach (var reference in bomLine.References)
+                            {
+                                if (!existing.ReferenceDesignators.Contains(reference))
+                                {
+                                    existing.ReferenceDesignators.Add(reference);
+                                }
+                            }
+                            updatedComponents++;
+                        }
+                        else
+                        {
+                            // Create new component
+                            var component = new Core.Models.Component
+                            {
+                                PartNumber = bomLine.PartNumber,
+                                Description = bomLine.Description,
+                                Manufacturer = bomLine.Manufacturer,
+                                ManufacturerPartNumber = bomLine.ManufacturerPartNumber,
+                                Value = bomLine.Value
+                            };
+                            component.ReferenceDesignators = new System.Collections.Generic.List<string>(bomLine.References);
+
+                            mainVm.CurrentProject.Components.Add(component);
+                            newComponents++;
+                        }
+                    }
+
+                    // Show warnings if any
+                    if (bomResult.Warnings.Count > 0)
+                    {
+                        var warningMsg = string.Format("{0} warnings during import:\n\n{1}",
+                            bomResult.Warnings.Count,
+                            string.Join("\n", bomResult.Warnings.Take(10)));
+
+                        if (bomResult.Warnings.Count > 10)
+                            warningMsg += string.Format("\n... and {0} more", bomResult.Warnings.Count - 10);
+
+                        MessageBox.Show(warningMsg, "Import Warnings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+
+                    EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+                    EventAggregator.Instance.Publish(new StatusMessageEvent
+                    {
+                        Message = string.Format("BOM imported: {0} new, {1} updated, {2} total references",
+                            newComponents, updatedComponents, bomResult.TotalReferences)
+                    });
                 }
             }
+        }
+
+        private Core.Models.Component FindComponentByPartNumber(Core.Models.Project project, string partNumber)
+        {
+            if (string.IsNullOrEmpty(partNumber)) return null;
+
+            foreach (var component in project.Components)
+            {
+                if (string.Equals(component.PartNumber, partNumber, StringComparison.OrdinalIgnoreCase))
+                {
+                    return component;
+                }
+            }
+            return null;
         }
 
         private void ShowCadImportDialog()
