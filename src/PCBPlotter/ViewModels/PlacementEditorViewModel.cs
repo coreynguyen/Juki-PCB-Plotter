@@ -22,6 +22,8 @@ namespace PCBPlotter.ViewModels
         private BoardSide? _filterSide;
         private PlacementStatus? _filterStatus;
         private ObservableCollection<Placement> _selectedPlacements;
+        private string _currentSelectionSetName;
+        private ObservableCollection<string> _selectionSetNames;
 
         public Project Project
         {
@@ -106,6 +108,24 @@ namespace PCBPlotter.ViewModels
             get { return Project?.Components; }
         }
 
+        /// <summary>
+        /// Names of all selection sets for the dropdown
+        /// </summary>
+        public ObservableCollection<string> SelectionSetNames
+        {
+            get { return _selectionSetNames; }
+            set { SetProperty(ref _selectionSetNames, value); }
+        }
+
+        /// <summary>
+        /// Current selection set name (for typing new names)
+        /// </summary>
+        public string CurrentSelectionSetName
+        {
+            get { return _currentSelectionSetName; }
+            set { SetProperty(ref _currentSelectionSetName, value); }
+        }
+
         // Commands
         public ICommand ClearFilterCommand { get; private set; }
         public ICommand SelectAllVisibleCommand { get; private set; }
@@ -118,11 +138,14 @@ namespace PCBPlotter.ViewModels
         public ICommand DisableExportCommand { get; private set; }
         public ICommand DeleteSelectedCommand { get; private set; }
         public ICommand RotateSelectedCommand { get; private set; }
+        public ICommand DeleteSelectionSetCommand { get; private set; }
+        public ICommand TranslateSelectedCommand { get; private set; }
 
         public PlacementEditorViewModel()
         {
             _selectedPlacements = new ObservableCollection<Placement>();
             _selectedPlacements.CollectionChanged += (s, e) => OnPropertyChanged("SelectedCount");
+            _selectionSetNames = new ObservableCollection<string>();
             InitializeCommands();
             SubscribeToEvents();
         }
@@ -146,6 +169,8 @@ namespace PCBPlotter.ViewModels
             DisableExportCommand = new RelayCommand(ExecuteDisableExport, () => SelectedPlacements.Count > 0);
             DeleteSelectedCommand = new RelayCommand(ExecuteDeleteSelected, () => SelectedPlacements.Count > 0);
             RotateSelectedCommand = new RelayCommand<double>(ExecuteRotateSelected, d => SelectedPlacements.Count > 0);
+            DeleteSelectionSetCommand = new RelayCommand(ExecuteDeleteSelectionSet, () => !string.IsNullOrEmpty(CurrentSelectionSetName));
+            TranslateSelectedCommand = new RelayCommand(ExecuteTranslateSelected, () => SelectedPlacements.Count > 0);
         }
 
         private void SubscribeToEvents()
@@ -170,6 +195,19 @@ namespace PCBPlotter.ViewModels
             OnPropertyChanged("TotalCount");
             OnPropertyChanged("FilteredCount");
             OnPropertyChanged("AvailableComponents");
+            RefreshSelectionSetNames();
+        }
+
+        private void RefreshSelectionSetNames()
+        {
+            SelectionSetNames.Clear();
+            if (Project?.SelectionSets != null)
+            {
+                foreach (var set in Project.SelectionSets)
+                {
+                    SelectionSetNames.Add(set.Name);
+                }
+            }
         }
 
         private bool FilterPlacement(object obj)
@@ -319,6 +357,100 @@ namespace PCBPlotter.ViewModels
                 p.Rotation += angle;
             }
             Publish(new RequestRefreshEvent { FullRefresh = false });
+        }
+
+        private void ExecuteDeleteSelectionSet()
+        {
+            if (Project == null || string.IsNullOrEmpty(CurrentSelectionSetName)) return;
+
+            var set = Project.SelectionSets.FirstOrDefault(s => s.Name == CurrentSelectionSetName);
+            if (set != null)
+            {
+                Project.SelectionSets.Remove(set);
+                RefreshSelectionSetNames();
+                CurrentSelectionSetName = null;
+            }
+        }
+
+        private void ExecuteTranslateSelected()
+        {
+            Publish(new ShowDialogEvent
+            {
+                DialogType = "TranslatePlacements",
+                Parameter = SelectedPlacements.ToList()
+            });
+        }
+
+        /// <summary>
+        /// Creates a new selection set or updates existing one with current selection
+        /// </summary>
+        public void CreateOrUpdateSelectionSet(string name)
+        {
+            if (Project == null || string.IsNullOrEmpty(name)) return;
+
+            // Find existing set or create new
+            var existing = Project.SelectionSets.FirstOrDefault(s =>
+                string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+
+            if (existing != null)
+            {
+                // Update existing
+                existing.PlacementIds.Clear();
+                foreach (var p in SelectedPlacements)
+                {
+                    existing.Add(p);
+                }
+            }
+            else
+            {
+                // Create new
+                var newSet = new SelectionSet(name, SelectedPlacements);
+                Project.SelectionSets.Add(newSet);
+                RefreshSelectionSetNames();
+            }
+
+            CurrentSelectionSetName = name;
+            Publish(new StatusMessageEvent
+            {
+                Message = string.Format("Selection set '{0}' saved with {1} items", name, SelectedPlacements.Count)
+            });
+        }
+
+        /// <summary>
+        /// Recalls a selection set by name, returns the placements
+        /// </summary>
+        public List<Placement> RecallSelectionSet(string name)
+        {
+            if (Project == null || string.IsNullOrEmpty(name)) return null;
+
+            var set = Project.SelectionSets.FirstOrDefault(s => s.Name == name);
+            if (set == null) return null;
+
+            var result = new List<Placement>();
+            foreach (var id in set.PlacementIds)
+            {
+                var placement = Project.Placements.FirstOrDefault(p => p.Id == id);
+                if (placement != null)
+                {
+                    result.Add(placement);
+                }
+            }
+
+            CurrentSelectionSetName = name;
+            return result;
+        }
+
+        /// <summary>
+        /// Translates placements by the given offset
+        /// </summary>
+        public void TranslatePlacements(IEnumerable<Placement> placements, double offsetX, double offsetY)
+        {
+            foreach (var p in placements)
+            {
+                p.X += offsetX;
+                p.Y += offsetY;
+            }
+            Publish(new RequestRefreshEvent { FullRefresh = true });
         }
 
         #endregion

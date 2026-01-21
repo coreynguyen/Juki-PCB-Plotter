@@ -60,6 +60,13 @@
                 <MenuItem Header="Select _All" InputGestureText="Ctrl+A"/>
                 <MenuItem Header="Select _None" InputGestureText="Escape"/>
             </MenuItem>
+            <MenuItem Header="_Board">
+                <MenuItem Header="_Set Board Area..." Command="{Binding SetBoardAreaCommand}"/>
+                <Separator/>
+                <MenuItem Header="_Translate Board..." Command="{Binding TranslateBoardCommand}"/>
+                <MenuItem Header="Translate _Top Placements..." Command="{Binding TranslateTopPlacementsCommand}"/>
+                <MenuItem Header="Translate B_ottom Placements..." Command="{Binding TranslateBottomPlacementsCommand}"/>
+            </MenuItem>
             <MenuItem Header="_Import">
                 <MenuItem Header="Import _PNP Text File..." Command="{Binding ImportPnpTextCommand}"/>
                 <MenuItem Header="Import _CAD Data..." Command="{Binding ImportCadCommand}"/>

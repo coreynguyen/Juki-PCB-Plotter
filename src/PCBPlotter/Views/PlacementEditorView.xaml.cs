@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using PCBPlotter.Core.Models;
 using PCBPlotter.ViewModels;
 using Component = PCBPlotter.Core.Models.Component;
@@ -12,9 +13,61 @@ namespace PCBPlotter.Views
     /// </summary>
     public partial class PlacementEditorView : UserControl
     {
+        private bool _isSelectingSet = false;
+
         public PlacementEditorView()
         {
             InitializeComponent();
+        }
+
+        private void SelectionSetComboBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                var comboBox = sender as ComboBox;
+                var vm = DataContext as PlacementEditorViewModel;
+                if (comboBox == null || vm == null) return;
+
+                string name = comboBox.Text?.Trim();
+                if (!string.IsNullOrEmpty(name))
+                {
+                    // Create or update selection set with current selection
+                    vm.CreateOrUpdateSelectionSet(name);
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private void SelectionSetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isSelectingSet) return;
+
+            var comboBox = sender as ComboBox;
+            var vm = DataContext as PlacementEditorViewModel;
+            if (comboBox == null || vm == null) return;
+
+            string selectedName = comboBox.SelectedItem as string;
+            if (!string.IsNullOrEmpty(selectedName))
+            {
+                _isSelectingSet = true;
+                try
+                {
+                    // Recall the selection set
+                    var placements = vm.RecallSelectionSet(selectedName);
+                    if (placements != null && placements.Count > 0)
+                    {
+                        PlacementsGrid.SelectedItems.Clear();
+                        foreach (var p in placements)
+                        {
+                            PlacementsGrid.SelectedItems.Add(p);
+                        }
+                    }
+                }
+                finally
+                {
+                    _isSelectingSet = false;
+                }
+            }
         }
 
         private void PlacementsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)

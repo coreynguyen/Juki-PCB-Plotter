@@ -209,6 +209,12 @@ namespace PCBPlotter.ViewModels
         public ICommand FloatGerberViewerCommand { get; private set; }
         public ICommand AboutCommand { get; private set; }
 
+        // Board commands
+        public ICommand SetBoardAreaCommand { get; private set; }
+        public ICommand TranslateBoardCommand { get; private set; }
+        public ICommand TranslateTopPlacementsCommand { get; private set; }
+        public ICommand TranslateBottomPlacementsCommand { get; private set; }
+
         // Start screen quick commands
         public ICommand QuickImportPnpCommand { get; private set; }
         public ICommand QuickImportCadCommand { get; private set; }
@@ -250,6 +256,12 @@ namespace PCBPlotter.ViewModels
             FloatBomEditorCommand = new RelayCommand(o => ExecuteFloatWindow("BOM"));
             FloatGerberViewerCommand = new RelayCommand(o => ExecuteFloatWindow("Gerber"));
             AboutCommand = new RelayCommand(ExecuteAbout);
+
+            // Board commands
+            SetBoardAreaCommand = new RelayCommand(ExecuteSetBoardArea, () => IsProjectLoaded);
+            TranslateBoardCommand = new RelayCommand(ExecuteTranslateBoard, () => IsProjectLoaded);
+            TranslateTopPlacementsCommand = new RelayCommand(ExecuteTranslateTopPlacements, () => IsProjectLoaded);
+            TranslateBottomPlacementsCommand = new RelayCommand(ExecuteTranslateBottomPlacements, () => IsProjectLoaded);
 
             // Start screen quick commands
             QuickImportPnpCommand = new RelayCommand(ExecuteQuickImportPnp);
@@ -576,6 +588,66 @@ namespace PCBPlotter.ViewModels
         private void ExecuteCreateBlankProject()
         {
             ExecuteNewProject();
+        }
+
+        private void ExecuteSetBoardArea()
+        {
+            Publish(new ShowDialogEvent { DialogType = "PcbArea" });
+        }
+
+        private void ExecuteTranslateBoard()
+        {
+            // Translates board origin and all placements together
+            if (CurrentProject == null) return;
+
+            var allPlacements = CurrentProject.Placements.ToList();
+            Publish(new ShowDialogEvent
+            {
+                DialogType = "TranslatePlacements",
+                Parameter = allPlacements
+            });
+        }
+
+        private void ExecuteTranslateTopPlacements()
+        {
+            if (CurrentProject == null) return;
+
+            var topPlacements = CurrentProject.Placements
+                .Where(p => p.Side == BoardSide.Top)
+                .ToList();
+
+            if (topPlacements.Count == 0)
+            {
+                StatusMessage = "No top side placements found";
+                return;
+            }
+
+            Publish(new ShowDialogEvent
+            {
+                DialogType = "TranslatePlacements",
+                Parameter = topPlacements
+            });
+        }
+
+        private void ExecuteTranslateBottomPlacements()
+        {
+            if (CurrentProject == null) return;
+
+            var bottomPlacements = CurrentProject.Placements
+                .Where(p => p.Side == BoardSide.Bottom)
+                .ToList();
+
+            if (bottomPlacements.Count == 0)
+            {
+                StatusMessage = "No bottom side placements found";
+                return;
+            }
+
+            Publish(new ShowDialogEvent
+            {
+                DialogType = "TranslatePlacements",
+                Parameter = bottomPlacements
+            });
         }
 
         #endregion

@@ -101,9 +101,11 @@ namespace PCBPlotter.Views
                     break;
 
                 case "PcbArea":
-                    // TODO: Show PCB area dialog
-                    MessageBox.Show("PCB Area dialog coming soon.", "Add PCB Area",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    ShowPcbAreaDialog();
+                    break;
+
+                case "TranslatePlacements":
+                    ShowTranslatePlacementsDialog(e.Parameter as System.Collections.Generic.List<Core.Models.Placement>);
                     break;
 
                 default:
@@ -335,6 +337,65 @@ namespace PCBPlotter.Views
                 // TODO: Implement machine export
                 MessageBox.Show("Machine export not yet implemented.\nTarget: " + dialog.FileName,
                     "Export", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        private void ShowPcbAreaDialog()
+        {
+            var mainVm = DataContext as MainViewModel;
+            if (mainVm?.CurrentProject == null) return;
+
+            // Pass existing board definition if available
+            var dialog = new PcbAreaDialog(mainVm.CurrentProject.Board);
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                // Update or create board definition
+                if (mainVm.CurrentProject.Board == null)
+                {
+                    mainVm.CurrentProject.Board = new Core.Models.BoardDefinition();
+                }
+
+                mainVm.CurrentProject.Board.Width = dialog.BoardWidth;
+                mainVm.CurrentProject.Board.Height = dialog.BoardHeight;
+                mainVm.CurrentProject.Board.Origin = new System.Windows.Point(dialog.OriginX, dialog.OriginY);
+
+                EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+                EventAggregator.Instance.Publish(new StatusMessageEvent
+                {
+                    Message = string.Format("Board area set to {0}x{1}mm", dialog.BoardWidth, dialog.BoardHeight)
+                });
+            }
+        }
+
+        private void ShowTranslatePlacementsDialog(System.Collections.Generic.List<Core.Models.Placement> placements)
+        {
+            if (placements == null || placements.Count == 0)
+            {
+                MessageBox.Show("No placements selected to translate.",
+                    "Translate", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new TranslateDialog(placements);
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                // Apply translation to placements
+                foreach (var p in placements)
+                {
+                    p.X += dialog.OffsetX;
+                    p.Y += dialog.OffsetY;
+                }
+
+                EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+                EventAggregator.Instance.Publish(new StatusMessageEvent
+                {
+                    Message = string.Format("Translated {0} placements by ({1}, {2})mm",
+                        placements.Count, dialog.OffsetX, dialog.OffsetY)
+                });
             }
         }
     }
