@@ -245,39 +245,30 @@ namespace PCBPlotter.Controls
 
         #region Rendering
 
-        protected override void OnRender(DrawingContext drawingContext)
+        protected override void OnRender(DrawingContext dc)
         {
-            base.OnRender(drawingContext);
+            base.OnRender(dc);
 
-            // Render background (grid, origin)
-            RenderBackground();
+            // Draw background
+            dc.DrawRectangle(new SolidColorBrush(BackgroundColor), null,
+                new Rect(0, 0, ActualWidth, ActualHeight));
+
+            // Draw grid if enabled
+            if (ShowGrid && Zoom > 0.1)
+            {
+                RenderGrid(dc);
+            }
+
+            // Draw origin crosshair
+            RenderOrigin(dc);
 
             // Render placements and content
-            RenderPlacements();
+            RenderPlacementsDirect(dc);
 
             // Render selection overlay if selecting
             if (_isSelecting)
             {
-                RenderSelectionOverlay();
-            }
-        }
-
-        private void RenderBackground()
-        {
-            using (var dc = _backgroundVisual.RenderOpen())
-            {
-                // Draw background
-                dc.DrawRectangle(new SolidColorBrush(BackgroundColor), null,
-                    new Rect(0, 0, ActualWidth, ActualHeight));
-
-                // Draw grid if enabled
-                if (ShowGrid && Zoom > 0.1)
-                {
-                    RenderGrid(dc);
-                }
-
-                // Draw origin crosshair
-                RenderOrigin(dc);
+                RenderSelectionOverlayDirect(dc);
             }
         }
 
@@ -340,172 +331,165 @@ namespace PCBPlotter.Controls
             dc.DrawEllipse(new SolidColorBrush(RenderColors.OriginMarker), null, screenOrigin, 4, 4);
         }
 
-        private void RenderSelectionOverlay()
+        private void RenderSelectionOverlayDirect(DrawingContext dc)
         {
-            using (var dc = _overlayVisual.RenderOpen())
+            if (_selectionRect.Width > 0 && _selectionRect.Height > 0)
             {
-                if (_selectionRect.Width > 0 && _selectionRect.Height > 0)
-                {
-                    var fillBrush = new SolidColorBrush(RenderColors.SelectionBox);
-                    fillBrush.Freeze();
-                    var strokePen = new Pen(new SolidColorBrush(RenderColors.SelectionBorder), 1);
-                    strokePen.DashStyle = DashStyles.Dash;
-                    strokePen.Freeze();
+                var fillBrush = new SolidColorBrush(RenderColors.SelectionBox);
+                fillBrush.Freeze();
+                var strokePen = new Pen(new SolidColorBrush(RenderColors.SelectionBorder), 1);
+                strokePen.DashStyle = DashStyles.Dash;
+                strokePen.Freeze();
 
-                    dc.DrawRectangle(fillBrush, strokePen, _selectionRect);
-                }
+                dc.DrawRectangle(fillBrush, strokePen, _selectionRect);
             }
         }
 
-        private void RenderPlacements()
+        private void RenderPlacementsDirect(DrawingContext dc)
         {
-            using (var dc = _contentVisual.RenderOpen())
+            if (Placements == null || Placements.Count == 0)
+                return;
+
+            // Constants for placement rendering
+            double placementSize = 2.0; // Base size in mm
+
+            foreach (var placement in Placements)
             {
-                if (Placements == null || Placements.Count == 0)
-                    return;
+                // Skip placements on the wrong side
+                if (placement.Side != ViewSide)
+                    continue;
 
-                // Constants for placement rendering
-                double placementSize = 2.0; // Base size in mm
-                double labelOffset = 3.0;   // Label offset in mm
+                // Convert world position to screen
+                Point screenPos = WorldToScreen(placement.Position);
 
-                foreach (var placement in Placements)
+                // Calculate size based on zoom
+                double size = placementSize * Zoom;
+                double halfSize = size / 2;
+
+                // Choose brush/pen based on state
+                SolidColorBrush fillBrush = _placementFillBrush;
+                Pen outlinePen = _placementOutlinePen;
+
+                if (placement.IsSelected)
                 {
-                    // Skip placements on the wrong side
-                    if (placement.Side != ViewSide)
+                    fillBrush = _placementSelectedBrush;
+                    outlinePen = _placementSelectedPen;
+                }
+                else if (placement.Status != PlacementStatus.Valid)
+                {
+                    fillBrush = _placementErrorBrush;
+                }
+
+                // Draw placement marker (rounded rectangle for modern look)
+                var placementRect = new Rect(
+                    screenPos.X - halfSize,
+                    screenPos.Y - halfSize,
+                    size,
+                    size
+                );
+                dc.DrawRoundedRectangle(fillBrush, outlinePen, placementRect, 2, 2);
+
+                // Draw pin 1 indicator (small circle at top-left)
+                double pin1Size = Math.Max(2, size * 0.2);
+                double pin1Offset = halfSize * 0.6;
+                Point pin1Pos = new Point(
+                    screenPos.X - pin1Offset,
+                    screenPos.Y - pin1Offset
+                );
+                dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(255, 100, 100)), null, pin1Pos, pin1Size, pin1Size);
+
+                // Draw center crosshair
+                double crossSize = Math.Max(2, size * 0.3);
+                var crossPen = new Pen(new SolidColorBrush(Colors.White), 1);
+                crossPen.Freeze();
+                dc.DrawLine(crossPen,
+                    new Point(screenPos.X - crossSize, screenPos.Y),
+                    new Point(screenPos.X + crossSize, screenPos.Y));
+                dc.DrawLine(crossPen,
+                    new Point(screenPos.X, screenPos.Y - crossSize),
+                    new Point(screenPos.X, screenPos.Y + crossSize));
+
+                // Draw reference label if enabled
+                if (ShowLabels && !string.IsNullOrEmpty(placement.Reference))
+                {
+                    double fontSize = Math.Max(8, Math.Min(14, 10 * Zoom));
+                    var formattedText = new FormattedText(
+                        placement.Reference,
+                        CultureInfo.CurrentCulture,
+                        FlowDirection.LeftToRight,
+                        _labelTypeface,
+                        fontSize,
+                        _labelBrush,
+                        VisualTreeHelper.GetDpi(this).PixelsPerDip
+                    );
+
+                    // Position label below the placement
+                    Point labelPos = new Point(
+                        screenPos.X - formattedText.Width / 2,
+                        screenPos.Y + halfSize + 2
+                    );
+
+                    // Draw label background for readability
+                    var labelBgRect = new Rect(
+                        labelPos.X - 2,
+                        labelPos.Y - 1,
+                        formattedText.Width + 4,
+                        formattedText.Height + 2
+                    );
+                    var labelBgBrush = new SolidColorBrush(Color.FromArgb(180, 30, 30, 35));
+                    labelBgBrush.Freeze();
+                    dc.DrawRoundedRectangle(labelBgBrush, null, labelBgRect, 2, 2);
+
+                    dc.DrawText(formattedText, labelPos);
+                }
+            }
+
+            // Render fiducials
+            if (Fiducials != null)
+            {
+                foreach (var fiducial in Fiducials)
+                {
+                    if (fiducial.Side != ViewSide)
                         continue;
 
-                    // Convert world position to screen
-                    Point screenPos = WorldToScreen(placement.Position);
+                    Point screenPos = WorldToScreen(new Point(fiducial.X, fiducial.Y));
+                    double fidSize = 3.0 * Zoom;
 
-                    // Calculate size based on zoom
-                    double size = placementSize * Zoom;
-                    double halfSize = size / 2;
+                    // Draw fiducial as a diamond shape
+                    var fidBrush = new SolidColorBrush(Color.FromRgb(255, 0, 255));
+                    fidBrush.Freeze();
+                    var fidPen = new Pen(fidBrush, 2);
+                    fidPen.Freeze();
 
-                    // Choose brush/pen based on state
-                    SolidColorBrush fillBrush = _placementFillBrush;
-                    Pen outlinePen = _placementOutlinePen;
-
-                    if (placement.IsSelected)
+                    // Draw diamond
+                    var diamondGeometry = new StreamGeometry();
+                    using (var ctx = diamondGeometry.Open())
                     {
-                        fillBrush = _placementSelectedBrush;
-                        outlinePen = _placementSelectedPen;
+                        ctx.BeginFigure(new Point(screenPos.X, screenPos.Y - fidSize), true, true);
+                        ctx.LineTo(new Point(screenPos.X + fidSize, screenPos.Y), true, false);
+                        ctx.LineTo(new Point(screenPos.X, screenPos.Y + fidSize), true, false);
+                        ctx.LineTo(new Point(screenPos.X - fidSize, screenPos.Y), true, false);
                     }
-                    else if (placement.Status != PlacementStatus.Valid)
+                    diamondGeometry.Freeze();
+                    dc.DrawGeometry(null, fidPen, diamondGeometry);
+
+                    // Draw center dot
+                    dc.DrawEllipse(fidBrush, null, screenPos, 2, 2);
+
+                    // Draw label if enabled
+                    if (ShowLabels && !string.IsNullOrEmpty(fiducial.Name))
                     {
-                        fillBrush = _placementErrorBrush;
-                    }
-
-                    // Draw placement marker (rounded rectangle for modern look)
-                    var placementRect = new Rect(
-                        screenPos.X - halfSize,
-                        screenPos.Y - halfSize,
-                        size,
-                        size
-                    );
-                    dc.DrawRoundedRectangle(fillBrush, outlinePen, placementRect, 2, 2);
-
-                    // Draw pin 1 indicator (small circle at top-left)
-                    double pin1Size = Math.Max(2, size * 0.2);
-                    double pin1Offset = halfSize * 0.6;
-                    Point pin1Pos = new Point(
-                        screenPos.X - pin1Offset,
-                        screenPos.Y - pin1Offset
-                    );
-                    dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(255, 100, 100)), null, pin1Pos, pin1Size, pin1Size);
-
-                    // Draw center crosshair
-                    double crossSize = Math.Max(2, size * 0.3);
-                    var crossPen = new Pen(new SolidColorBrush(Colors.White), 1);
-                    crossPen.Freeze();
-                    dc.DrawLine(crossPen,
-                        new Point(screenPos.X - crossSize, screenPos.Y),
-                        new Point(screenPos.X + crossSize, screenPos.Y));
-                    dc.DrawLine(crossPen,
-                        new Point(screenPos.X, screenPos.Y - crossSize),
-                        new Point(screenPos.X, screenPos.Y + crossSize));
-
-                    // Draw reference label if enabled
-                    if (ShowLabels && !string.IsNullOrEmpty(placement.Reference))
-                    {
-                        double fontSize = Math.Max(8, Math.Min(14, 10 * Zoom));
+                        double fontSize = Math.Max(8, Math.Min(12, 9 * Zoom));
                         var formattedText = new FormattedText(
-                            placement.Reference,
+                            fiducial.Name,
                             CultureInfo.CurrentCulture,
                             FlowDirection.LeftToRight,
                             _labelTypeface,
                             fontSize,
-                            _labelBrush,
+                            fidBrush,
                             VisualTreeHelper.GetDpi(this).PixelsPerDip
                         );
-
-                        // Position label below the placement
-                        Point labelPos = new Point(
-                            screenPos.X - formattedText.Width / 2,
-                            screenPos.Y + halfSize + 2
-                        );
-
-                        // Draw label background for readability
-                        var labelBgRect = new Rect(
-                            labelPos.X - 2,
-                            labelPos.Y - 1,
-                            formattedText.Width + 4,
-                            formattedText.Height + 2
-                        );
-                        var labelBgBrush = new SolidColorBrush(Color.FromArgb(180, 30, 30, 35));
-                        labelBgBrush.Freeze();
-                        dc.DrawRoundedRectangle(labelBgBrush, null, labelBgRect, 2, 2);
-
-                        dc.DrawText(formattedText, labelPos);
-                    }
-                }
-
-                // Render fiducials
-                if (Fiducials != null)
-                {
-                    foreach (var fiducial in Fiducials)
-                    {
-                        if (fiducial.Side != ViewSide)
-                            continue;
-
-                        Point screenPos = WorldToScreen(new Point(fiducial.X, fiducial.Y));
-                        double fidSize = 3.0 * Zoom;
-
-                        // Draw fiducial as a diamond shape
-                        var fidBrush = new SolidColorBrush(Color.FromRgb(255, 0, 255));
-                        fidBrush.Freeze();
-                        var fidPen = new Pen(fidBrush, 2);
-                        fidPen.Freeze();
-
-                        // Draw diamond
-                        var diamondGeometry = new StreamGeometry();
-                        using (var ctx = diamondGeometry.Open())
-                        {
-                            ctx.BeginFigure(new Point(screenPos.X, screenPos.Y - fidSize), true, true);
-                            ctx.LineTo(new Point(screenPos.X + fidSize, screenPos.Y), true, false);
-                            ctx.LineTo(new Point(screenPos.X, screenPos.Y + fidSize), true, false);
-                            ctx.LineTo(new Point(screenPos.X - fidSize, screenPos.Y), true, false);
-                        }
-                        diamondGeometry.Freeze();
-                        dc.DrawGeometry(null, fidPen, diamondGeometry);
-
-                        // Draw center dot
-                        dc.DrawEllipse(fidBrush, null, screenPos, 2, 2);
-
-                        // Draw label if enabled
-                        if (ShowLabels && !string.IsNullOrEmpty(fiducial.Name))
-                        {
-                            double fontSize = Math.Max(8, Math.Min(12, 9 * Zoom));
-                            var formattedText = new FormattedText(
-                                fiducial.Name,
-                                CultureInfo.CurrentCulture,
-                                FlowDirection.LeftToRight,
-                                _labelTypeface,
-                                fontSize,
-                                fidBrush,
-                                VisualTreeHelper.GetDpi(this).PixelsPerDip
-                            );
-                            dc.DrawText(formattedText, new Point(screenPos.X + fidSize + 2, screenPos.Y - fontSize / 2));
-                        }
+                        dc.DrawText(formattedText, new Point(screenPos.X + fidSize + 2, screenPos.Y - fontSize / 2));
                     }
                 }
             }
@@ -653,28 +637,25 @@ namespace PCBPlotter.Controls
             base.OnMouseRightButtonDown(e);
             Focus();
 
-            // Don't start panning immediately - wait for mouse move
+            // Store start position for potential panning, but don't capture mouse yet
             _panStart = e.GetPosition(this);
             _lastMousePosition = _panStart;
-            _isPanning = false; // Will be set to true on first move
-            CaptureMouse();
+            _isPanning = false;
+            // Don't capture mouse - this allows context menu to show
         }
 
         protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseRightButtonUp(e);
 
-            bool wasPanning = _isPanning;
-            _isPanning = false;
-            ReleaseMouseCapture();
-            Cursor = Cursors.Arrow;
-
-            // If we didn't actually pan (no movement), allow context menu
-            if (!wasPanning)
+            if (_isPanning)
             {
-                // Re-raise the event to allow context menu to show
-                e.Handled = false;
+                _isPanning = false;
+                ReleaseMouseCapture();
+                Cursor = Cursors.Arrow;
+                e.Handled = true; // Prevent context menu after panning
             }
+            // If not panning, don't handle - let context menu show
         }
 
         private void StartPanningIfNeeded(Point currentPos)
@@ -682,9 +663,10 @@ namespace PCBPlotter.Controls
             // Start panning after 3 pixels of movement
             double dist = Math.Sqrt(Math.Pow(currentPos.X - _panStart.X, 2) +
                                    Math.Pow(currentPos.Y - _panStart.Y, 2));
-            if (dist > 3)
+            if (dist > 3 && !_isPanning)
             {
                 _isPanning = true;
+                CaptureMouse(); // Only capture when actually panning
                 Cursor = Cursors.Hand;
             }
         }

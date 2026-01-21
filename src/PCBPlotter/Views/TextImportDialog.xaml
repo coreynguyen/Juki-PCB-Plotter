@@ -92,37 +92,19 @@
                     </ItemsControl>
                 </Border>
 
-                <!-- Data Grid with minimal headers for column resizing (Ctrl+Scroll to zoom) -->
+                <!-- Data Grid (Ctrl+Scroll to zoom) -->
                 <DataGrid Grid.Row="1" ItemsSource="{Binding PreviewData}"
                           AutoGenerateColumns="True"
                           IsReadOnly="True"
                           CanUserAddRows="False"
                           CanUserDeleteRows="False"
-                          CanUserResizeColumns="True"
                           CanUserReorderColumns="False"
-                          HeadersVisibility="Column"
+                          HeadersVisibility="None"
                           HorizontalScrollBarVisibility="Auto"
                           VerticalScrollBarVisibility="Auto"
                           MinColumnWidth="60"
                           ColumnWidth="120"
-                          behaviors:DataGridZoomBehavior.EnableZoom="True">
-                    <DataGrid.ColumnHeaderStyle>
-                        <Style TargetType="DataGridColumnHeader">
-                            <Setter Property="Height" Value="8"/>
-                            <Setter Property="Background" Value="{StaticResource BackgroundDarkBrush}"/>
-                            <Setter Property="BorderBrush" Value="{StaticResource BorderDarkBrush}"/>
-                            <Setter Property="BorderThickness" Value="0,0,1,1"/>
-                            <Setter Property="Padding" Value="0"/>
-                            <Setter Property="ContentTemplate">
-                                <Setter.Value>
-                                    <DataTemplate>
-                                        <TextBlock/>
-                                    </DataTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </DataGrid.ColumnHeaderStyle>
-                </DataGrid>
+                          behaviors:DataGridZoomBehavior.EnableZoom="True"/>
             </Grid>
         </GroupBox>
 

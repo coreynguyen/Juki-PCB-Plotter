@@ -446,8 +446,12 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteOpenSettings()
         {
-            // TODO: Open settings dialog
-            StatusMessage = "Settings dialog not yet implemented";
+            var dialog = new Views.SettingsDialog();
+            dialog.Owner = Application.Current.MainWindow;
+            if (dialog.ShowDialog() == true)
+            {
+                StatusMessage = "Settings saved";
+            }
         }
 
         private void ExecuteExit()
