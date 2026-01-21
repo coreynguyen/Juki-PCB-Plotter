@@ -239,6 +239,15 @@ namespace PCBPlotter.Core.Events
         public string Details { get; set; }
     }
 
+    /// <summary>
+    /// Event to navigate to a specific tab and optionally scroll to a placement
+    /// </summary>
+    public class NavigateToTabEvent
+    {
+        public int TabIndex { get; set; }
+        public Placement ScrollToPlacement { get; set; }
+    }
+
     #endregion
 
     #region Gerber Events

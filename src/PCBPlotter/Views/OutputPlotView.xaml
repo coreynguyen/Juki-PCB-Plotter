@@ -88,6 +88,9 @@
                                Board="{Binding Project.Board}">
             <controls:DesignCanvas.ContextMenu>
                 <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                    <MenuItem Header="Show Placement" Command="{Binding ShowPlacementCommand}"
+                              ToolTip="Opens Placement tab and scrolls to selected item"/>
+                    <Separator/>
                     <MenuItem Header="Add PCB Area..." Command="{Binding AddPcbAreaCommand}"/>
                     <MenuItem Header="Add Placement..." Command="{Binding AddPlacementCommand}"/>
                     <MenuItem Header="Add Fiducial..." Command="{Binding AddFiducialCommand}"/>

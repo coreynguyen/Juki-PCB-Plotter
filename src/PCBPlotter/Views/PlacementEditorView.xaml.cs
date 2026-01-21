@@ -14,6 +14,7 @@ namespace PCBPlotter.Views
     {
         private bool _isSyncing = false;
         private System.Action<PCBPlotter.Core.Events.SelectionChangedEvent> _selectionHandler;
+        private System.Action<PCBPlotter.Core.Events.FocusPlacementEvent> _focusHandler;
 
         public PlacementEditorView()
         {
@@ -26,17 +27,35 @@ namespace PCBPlotter.Views
         {
             // Subscribe to selection changed events from other tabs
             _selectionHandler = OnExternalSelectionChanged;
-            PCBPlotter.Core.Events.EventAggregator.Instance
-                .Subscribe(_selectionHandler);
+            PCBPlotter.Core.Events.EventAggregator.Instance.Subscribe(_selectionHandler);
+
+            // Subscribe to focus placement events for scrolling
+            _focusHandler = OnFocusPlacement;
+            PCBPlotter.Core.Events.EventAggregator.Instance.Subscribe(_focusHandler);
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
             if (_selectionHandler != null)
             {
-                PCBPlotter.Core.Events.EventAggregator.Instance
-                    .Unsubscribe(_selectionHandler);
+                PCBPlotter.Core.Events.EventAggregator.Instance.Unsubscribe(_selectionHandler);
             }
+            if (_focusHandler != null)
+            {
+                PCBPlotter.Core.Events.EventAggregator.Instance.Unsubscribe(_focusHandler);
+            }
+        }
+
+        private void OnFocusPlacement(PCBPlotter.Core.Events.FocusPlacementEvent e)
+        {
+            if (e.Placement == null) return;
+
+            // Scroll to the placement in the DataGrid
+            Dispatcher.BeginInvoke(new System.Action(() =>
+            {
+                PlacementsGrid.ScrollIntoView(e.Placement);
+                PlacementsGrid.SelectedItem = e.Placement;
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
         private void OnExternalSelectionChanged(PCBPlotter.Core.Events.SelectionChangedEvent e)

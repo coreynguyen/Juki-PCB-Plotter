@@ -16,10 +16,15 @@ namespace PCBPlotter.ViewModels
     {
         private Project _project;
         private ICollectionView _packagesView;
+        private ICollectionView _componentsView;
         private Package _selectedPackage;
+        private Component _selectedComponent;
         private string _filterText;
         private bool _isEditingPackage;
         private PackageGraphic _selectedGraphic;
+        private bool _showComponentsMode = true;
+        private bool _showPackagesMode;
+        private Placement _selectedComponentPlacement;
 
         // Package editing properties
         private string _editName;
@@ -30,6 +35,16 @@ namespace PCBPlotter.ViewModels
         private PartClass _editPartClass;
         private bool _editHasPolarity;
         private double _editDefaultRotation;
+
+        // Component editing properties
+        private string _editComponentPartNumber;
+        private string _editComponentManufacturer;
+        private string _editComponentValue;
+        private string _editComponentDescription;
+        private Package _editComponentPackage;
+        private string _editFeederSlot;
+        private string _editTapeWidth;
+        private string _editTapePitch;
 
         public Project Project
         {
@@ -49,6 +64,12 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _packagesView, value); }
         }
 
+        public ICollectionView ComponentsView
+        {
+            get { return _componentsView; }
+            set { SetProperty(ref _componentsView, value); }
+        }
+
         public Package SelectedPackage
         {
             get { return _selectedPackage; }
@@ -61,6 +82,19 @@ namespace PCBPlotter.ViewModels
             }
         }
 
+        public Component SelectedComponent
+        {
+            get { return _selectedComponent; }
+            set
+            {
+                if (SetProperty(ref _selectedComponent, value))
+                {
+                    LoadComponentForEditing();
+                    OnPropertyChanged("ComponentPlacements");
+                }
+            }
+        }
+
         public string FilterText
         {
             get { return _filterText; }
@@ -69,6 +103,7 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _filterText, value))
                 {
                     PackagesView?.Refresh();
+                    ComponentsView?.Refresh();
                 }
             }
         }
@@ -83,6 +118,51 @@ namespace PCBPlotter.ViewModels
         {
             get { return _selectedGraphic; }
             set { SetProperty(ref _selectedGraphic, value); }
+        }
+
+        public bool ShowComponentsMode
+        {
+            get { return _showComponentsMode; }
+            set
+            {
+                if (SetProperty(ref _showComponentsMode, value) && value)
+                {
+                    ShowPackagesMode = false;
+                }
+            }
+        }
+
+        public bool ShowPackagesMode
+        {
+            get { return _showPackagesMode; }
+            set
+            {
+                if (SetProperty(ref _showPackagesMode, value) && value)
+                {
+                    ShowComponentsMode = false;
+                }
+            }
+        }
+
+        public Placement SelectedComponentPlacement
+        {
+            get { return _selectedComponentPlacement; }
+            set { SetProperty(ref _selectedComponentPlacement, value); }
+        }
+
+        public ObservableCollection<Placement> ComponentPlacements
+        {
+            get
+            {
+                if (SelectedComponent == null || Project == null) return new ObservableCollection<Placement>();
+                return new ObservableCollection<Placement>(
+                    Project.Placements.Where(p => p.Component == SelectedComponent));
+            }
+        }
+
+        public ObservableCollection<Package> AvailablePackages
+        {
+            get { return Project?.Packages; }
         }
 
         #region Editing Properties
@@ -135,11 +215,65 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _editDefaultRotation, value); }
         }
 
+        // Component editing properties
+        public string EditComponentPartNumber
+        {
+            get { return _editComponentPartNumber; }
+            set { SetProperty(ref _editComponentPartNumber, value); }
+        }
+
+        public string EditComponentManufacturer
+        {
+            get { return _editComponentManufacturer; }
+            set { SetProperty(ref _editComponentManufacturer, value); }
+        }
+
+        public string EditComponentValue
+        {
+            get { return _editComponentValue; }
+            set { SetProperty(ref _editComponentValue, value); }
+        }
+
+        public string EditComponentDescription
+        {
+            get { return _editComponentDescription; }
+            set { SetProperty(ref _editComponentDescription, value); }
+        }
+
+        public Package EditComponentPackage
+        {
+            get { return _editComponentPackage; }
+            set { SetProperty(ref _editComponentPackage, value); }
+        }
+
+        public string EditFeederSlot
+        {
+            get { return _editFeederSlot; }
+            set { SetProperty(ref _editFeederSlot, value); }
+        }
+
+        public string EditTapeWidth
+        {
+            get { return _editTapeWidth; }
+            set { SetProperty(ref _editTapeWidth, value); }
+        }
+
+        public string EditTapePitch
+        {
+            get { return _editTapePitch; }
+            set { SetProperty(ref _editTapePitch, value); }
+        }
+
         #endregion
 
         public int PackageCount
         {
             get { return Project?.Packages.Count ?? 0; }
+        }
+
+        public int ComponentCount
+        {
+            get { return Project?.Components.Count ?? 0; }
         }
 
         // Commands
@@ -159,6 +293,14 @@ namespace PCBPlotter.ViewModels
         public ICommand DeleteGraphicCommand { get; private set; }
         public ICommand CenterOriginCommand { get; private set; }
         public ICommand AutoSizeCommand { get; private set; }
+        public ICommand SaveCommand { get; private set; }
+        public ICommand ClearFilterCommand { get; private set; }
+
+        // Component commands
+        public ICommand NewComponentCommand { get; private set; }
+        public ICommand DeleteComponentCommand { get; private set; }
+        public ICommand AutoAssignFeedersCommand { get; private set; }
+        public ICommand FocusComponentPlacementCommand { get; private set; }
 
         public ComponentEditorViewModel()
         {
@@ -172,7 +314,7 @@ namespace PCBPlotter.ViewModels
             DuplicatePackageCommand = new RelayCommand(ExecuteDuplicatePackage, () => SelectedPackage != null);
             DeletePackageCommand = new RelayCommand(ExecuteDeletePackage, () => SelectedPackage != null);
             SavePackageCommand = new RelayCommand(ExecuteSavePackage, () => IsEditingPackage);
-            CancelEditCommand = new RelayCommand(ExecuteCancelEdit, () => IsEditingPackage);
+            CancelEditCommand = new RelayCommand(ExecuteCancelEdit);
             ImportFromLibraryCommand = new RelayCommand(ExecuteImportFromLibrary);
             ExportToLibraryCommand = new RelayCommand(ExecuteExportToLibrary, () => SelectedPackage != null);
             AddRectangleCommand = new RelayCommand(ExecuteAddRectangle, () => SelectedPackage != null);
@@ -184,6 +326,14 @@ namespace PCBPlotter.ViewModels
             DeleteGraphicCommand = new RelayCommand(ExecuteDeleteGraphic, () => SelectedGraphic != null);
             CenterOriginCommand = new RelayCommand(ExecuteCenterOrigin, () => SelectedPackage != null);
             AutoSizeCommand = new RelayCommand(ExecuteAutoSize, () => SelectedPackage != null);
+            SaveCommand = new RelayCommand(ExecuteSave);
+            ClearFilterCommand = new RelayCommand(() => FilterText = "");
+
+            // Component commands
+            NewComponentCommand = new RelayCommand(ExecuteNewComponent, () => Project != null);
+            DeleteComponentCommand = new RelayCommand(ExecuteDeleteComponent, () => SelectedComponent != null);
+            AutoAssignFeedersCommand = new RelayCommand(ExecuteAutoAssignFeeders, () => Project != null && Project.Components.Count > 0);
+            FocusComponentPlacementCommand = new RelayCommand(ExecuteFocusComponentPlacement, () => SelectedComponentPlacement != null);
         }
 
         private void SubscribeToEvents()
@@ -199,12 +349,33 @@ namespace PCBPlotter.ViewModels
                 PackagesView = CollectionViewSource.GetDefaultView(Project.Packages);
                 PackagesView.Filter = FilterPackage;
                 PackagesView.SortDescriptions.Add(new SortDescription("Name", ListSortDirection.Ascending));
+
+                ComponentsView = CollectionViewSource.GetDefaultView(Project.Components);
+                ComponentsView.Filter = FilterComponent;
+                ComponentsView.SortDescriptions.Add(new SortDescription("PartNumber", ListSortDirection.Ascending));
             }
             else
             {
                 PackagesView = null;
+                ComponentsView = null;
             }
             OnPropertyChanged("PackageCount");
+            OnPropertyChanged("ComponentCount");
+            OnPropertyChanged("AvailablePackages");
+        }
+
+        private bool FilterComponent(object obj)
+        {
+            if (string.IsNullOrEmpty(FilterText)) return true;
+
+            var component = obj as Component;
+            if (component == null) return false;
+
+            var text = FilterText.ToLower();
+            return (component.PartNumber ?? "").ToLower().Contains(text) ||
+                   (component.Manufacturer ?? "").ToLower().Contains(text) ||
+                   (component.Value ?? "").ToLower().Contains(text) ||
+                   (component.Description ?? "").ToLower().Contains(text);
         }
 
         private bool FilterPackage(object obj)
@@ -236,6 +407,32 @@ namespace PCBPlotter.ViewModels
             else
             {
                 IsEditingPackage = false;
+            }
+        }
+
+        private void LoadComponentForEditing()
+        {
+            if (SelectedComponent != null)
+            {
+                EditComponentPartNumber = SelectedComponent.PartNumber;
+                EditComponentManufacturer = SelectedComponent.Manufacturer;
+                EditComponentValue = SelectedComponent.Value;
+                EditComponentDescription = SelectedComponent.Description;
+                EditComponentPackage = SelectedComponent.Package;
+                EditFeederSlot = SelectedComponent.FeederSlot;
+                EditTapeWidth = SelectedComponent.TapeWidth;
+                EditTapePitch = SelectedComponent.TapePitch;
+            }
+            else
+            {
+                EditComponentPartNumber = null;
+                EditComponentManufacturer = null;
+                EditComponentValue = null;
+                EditComponentDescription = null;
+                EditComponentPackage = null;
+                EditFeederSlot = null;
+                EditTapeWidth = null;
+                EditTapePitch = null;
             }
         }
 
@@ -515,6 +712,101 @@ namespace PCBPlotter.ViewModels
             var bounds = SelectedPackage.Bounds;
             EditWidth = bounds.Width;
             EditLength = bounds.Height;
+        }
+
+        private void ExecuteSave()
+        {
+            if (ShowComponentsMode && SelectedComponent != null)
+            {
+                // Save component
+                SelectedComponent.PartNumber = EditComponentPartNumber;
+                SelectedComponent.Manufacturer = EditComponentManufacturer;
+                SelectedComponent.Value = EditComponentValue;
+                SelectedComponent.Description = EditComponentDescription;
+                SelectedComponent.Package = EditComponentPackage;
+                SelectedComponent.FeederSlot = EditFeederSlot;
+                SelectedComponent.TapeWidth = EditTapeWidth;
+                SelectedComponent.TapePitch = EditTapePitch;
+
+                Publish(new StatusMessageEvent { Message = "Component saved" });
+            }
+            else if (ShowPackagesMode && SelectedPackage != null)
+            {
+                ExecuteSavePackage();
+            }
+        }
+
+        private void ExecuteNewComponent()
+        {
+            if (Project == null) return;
+
+            var component = new Component
+            {
+                PartNumber = string.Format("PART{0:D4}", Project.Components.Count + 1)
+            };
+
+            Project.Components.Add(component);
+            ComponentsView?.Refresh();
+            SelectedComponent = component;
+            OnPropertyChanged("ComponentCount");
+            Publish(new ComponentAddedEvent { Component = component });
+        }
+
+        private void ExecuteDeleteComponent()
+        {
+            if (Project == null || SelectedComponent == null) return;
+
+            // Check if component is in use
+            var inUse = Project.Placements.Any(p => p.Component == SelectedComponent);
+            if (inUse)
+            {
+                Publish(new StatusMessageEvent
+                {
+                    Message = "Cannot delete component: it is in use by placements",
+                    Type = StatusMessageType.Warning
+                });
+                return;
+            }
+
+            var component = SelectedComponent;
+            Project.Components.Remove(component);
+            SelectedComponent = null;
+            ComponentsView?.Refresh();
+            OnPropertyChanged("ComponentCount");
+            Publish(new ComponentRemovedEvent { Component = component });
+        }
+
+        private void ExecuteAutoAssignFeeders()
+        {
+            if (Project == null) return;
+
+            int slot = 1;
+            var sortedComponents = Project.Components
+                .OrderBy(c => c.Package?.Width ?? 0)
+                .ThenBy(c => c.PartNumber);
+
+            foreach (var component in sortedComponents)
+            {
+                component.FeederSlot = slot.ToString();
+                slot++;
+            }
+
+            ComponentsView?.Refresh();
+            Publish(new StatusMessageEvent
+            {
+                Message = string.Format("Assigned {0} feeder slots", Project.Components.Count)
+            });
+        }
+
+        private void ExecuteFocusComponentPlacement()
+        {
+            if (SelectedComponentPlacement == null) return;
+
+            Publish(new FocusPlacementEvent
+            {
+                Placement = SelectedComponentPlacement,
+                CenterView = true
+            });
         }
 
         #endregion

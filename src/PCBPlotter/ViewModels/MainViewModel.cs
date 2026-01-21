@@ -287,6 +287,7 @@ namespace PCBPlotter.ViewModels
             Subscribe<ProjectClosedEvent>(OnProjectClosed);
             Subscribe<StatusMessageEvent>(OnStatusMessage);
             Subscribe<SelectionChangedEvent>(OnSelectionChanged);
+            Subscribe<NavigateToTabEvent>(OnNavigateToTab);
 
             UndoRedoService.StackChanged += (s, e) =>
             {
@@ -683,6 +684,22 @@ namespace PCBPlotter.ViewModels
             else if (e.SelectedPlacements.Count > 1)
             {
                 StatusMessage = string.Format("Selected: {0} placements", e.SelectedPlacements.Count);
+            }
+        }
+
+        private void OnNavigateToTab(NavigateToTabEvent e)
+        {
+            // Switch to the requested tab
+            SelectedTabIndex = e.TabIndex;
+
+            // If there's a placement to scroll to, publish an event for the view to handle
+            if (e.ScrollToPlacement != null)
+            {
+                Publish(new FocusPlacementEvent
+                {
+                    Placement = e.ScrollToPlacement,
+                    CenterView = false
+                });
             }
         }
 

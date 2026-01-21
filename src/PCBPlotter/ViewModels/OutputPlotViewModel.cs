@@ -243,6 +243,7 @@ namespace PCBPlotter.ViewModels
         public ICommand AddFiducialCommand { get; private set; }
         public ICommand DeleteSelectionSetCommand { get; private set; }
         public ICommand TranslateSelectedCommand { get; private set; }
+        public ICommand ShowPlacementCommand { get; private set; }
 
         public OutputPlotViewModel()
         {
@@ -275,6 +276,7 @@ namespace PCBPlotter.ViewModels
             AddFiducialCommand = new RelayCommand(ExecuteAddFiducial, () => Project != null);
             DeleteSelectionSetCommand = new RelayCommand(ExecuteDeleteSelectionSet, () => !string.IsNullOrEmpty(CurrentSelectionSetName));
             TranslateSelectedCommand = new RelayCommand(ExecuteTranslateSelected, () => SelectedPlacements.Count > 0);
+            ShowPlacementCommand = new RelayCommand(ExecuteShowPlacement, () => SelectedPlacements.Count > 0);
         }
 
         private void SubscribeToEvents()
@@ -633,6 +635,18 @@ namespace PCBPlotter.ViewModels
             {
                 DialogType = "TranslatePlacements",
                 Parameter = SelectedPlacements.ToList()
+            });
+        }
+
+        private void ExecuteShowPlacement()
+        {
+            if (SelectedPlacements.Count == 0) return;
+
+            // Navigate to Placements tab (index 1) and scroll to first selected placement
+            Publish(new NavigateToTabEvent
+            {
+                TabIndex = 1, // Placements tab
+                ScrollToPlacement = SelectedPlacements.First()
             });
         }
 
