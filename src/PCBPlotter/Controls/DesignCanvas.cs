@@ -666,22 +666,31 @@ namespace PCBPlotter.Controls
             }
         }
 
-        protected override void OnMouseMiddleButtonDown(MouseButtonEventArgs e)
+        protected override void OnMouseDown(MouseButtonEventArgs e)
         {
-            base.OnMouseMiddleButtonDown(e);
-            Focus();
-            _panStart = e.GetPosition(this);
-            _lastMousePosition = _panStart;
+            base.OnMouseDown(e);
+
+            // Handle middle mouse button for panning
+            if (e.ChangedButton == MouseButton.Middle)
+            {
+                Focus();
+                _panStart = e.GetPosition(this);
+                _lastMousePosition = _panStart;
+                e.Handled = true;
+            }
         }
 
-        protected override void OnMouseMiddleButtonUp(MouseButtonEventArgs e)
+        protected override void OnMouseUp(MouseButtonEventArgs e)
         {
-            base.OnMouseMiddleButtonUp(e);
-            if (_isPanning)
+            base.OnMouseUp(e);
+
+            // Handle middle mouse button release
+            if (e.ChangedButton == MouseButton.Middle && _isPanning)
             {
                 _isPanning = false;
                 ReleaseMouseCapture();
                 Cursor = Cursors.Arrow;
+                e.Handled = true;
             }
         }
 
