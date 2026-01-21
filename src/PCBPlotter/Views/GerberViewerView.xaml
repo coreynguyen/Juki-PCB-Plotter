@@ -1,0 +1,130 @@
+<UserControl x:Class="PCBPlotter.Views.GerberViewerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:PCBPlotter.Controls"
+             Background="{StaticResource BackgroundMediumBrush}">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="200"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Layer Panel -->
+        <Grid Grid.Column="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Text="Layers" FontWeight="SemiBold" Margin="8"/>
+
+            <!-- Layer List -->
+            <ListBox Grid.Row="1"
+                     ItemsSource="{Binding Layers}"
+                     SelectedItem="{Binding SelectedLayer}"
+                     Margin="8,0">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}"
+                                      VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <Rectangle Grid.Column="1" Width="16" Height="16" Margin="0,0,8,0"
+                                       Fill="{Binding Color, Converter={StaticResource ColorToBrushConverter}}"/>
+                            <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Layer Actions -->
+            <StackPanel Grid.Row="2" Margin="8">
+                <Button Content="Import Gerber" Command="{Binding ImportGerberCommand}" Margin="0,0,0,4"/>
+                <Button Content="Remove Layer" Command="{Binding RemoveLayerCommand}"/>
+            </StackPanel>
+        </Grid>
+
+        <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                      Background="{StaticResource BorderDarkBrush}"/>
+
+        <!-- Gerber Canvas -->
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Toolbar -->
+            <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
+                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
+                    Padding="8">
+                <WrapPanel>
+                    <!-- Zoom Controls -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                        <Button Content="-" Command="{Binding ZoomOutCommand}" Width="24" Height="24" Padding="0"/>
+                        <TextBlock Text="{Binding Zoom, StringFormat={}{0:P0}}"
+                                   VerticalAlignment="Center" Width="50" TextAlignment="Center"/>
+                        <Button Content="+" Command="{Binding ZoomInCommand}" Width="24" Height="24" Padding="0"/>
+                        <Button Content="Fit" Command="{Binding ZoomFitCommand}" Margin="4,0,0,0" Padding="8,4"/>
+                    </StackPanel>
+
+                    <!-- Selection Tools -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                        <Button Content="Select All" Command="{Binding SelectAllCommand}" Padding="8,4" Margin="0,0,4,0"/>
+                        <Button Content="Select None" Command="{Binding SelectNoneCommand}" Padding="8,4"/>
+                    </StackPanel>
+
+                    <!-- Actions -->
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Create Package" Command="{Binding CreatePackageFromSelectionCommand}"
+                                Padding="8,4" Margin="0,0,4,0"/>
+                        <Button Content="Add to Output" Command="{Binding AddSelectionToOutputCommand}"
+                                Padding="8,4" Margin="0,0,4,0"/>
+                        <Button Content="Set Board Outline" Command="{Binding SetBoardOutlineCommand}"
+                                Padding="8,4" Margin="0,0,4,0"/>
+                        <Button Content="Set Circuit Outline" Command="{Binding SetCircuitOutlineCommand}"
+                                Padding="8,4"/>
+                    </StackPanel>
+                </WrapPanel>
+            </Border>
+
+            <!-- Canvas -->
+            <controls:DesignCanvas x:Name="GerberCanvas" Grid.Row="1"
+                                   Zoom="{Binding Zoom, Mode=TwoWay}"
+                                   PanX="{Binding PanX, Mode=TwoWay}"
+                                   PanY="{Binding PanY, Mode=TwoWay}"
+                                   ShowGrid="True"/>
+
+            <!-- Status Bar -->
+            <Border Grid.Row="2" Background="{StaticResource BackgroundLightBrush}"
+                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,1,0,0"
+                    Padding="8,4">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="{Binding CoordinateDisplay}"
+                               FontFamily="Consolas" VerticalAlignment="Center"/>
+
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center">
+                        <Run Text="Selected: "/>
+                        <Run Text="{Binding SelectedPrimitives.Count, Mode=OneWay}" FontWeight="SemiBold"/>
+                        <Run Text=" primitives"/>
+                    </TextBlock>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
