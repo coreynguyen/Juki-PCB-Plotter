@@ -791,10 +791,10 @@ namespace PCBPlotter.Controls
             Point mousePos = e.GetPosition(this);
             Point worldBefore = ScreenToWorld(mousePos);
 
-            // Zoom
+            // Zoom - allow up to 100000% (1000x)
             double zoomFactor = e.Delta > 0 ? 1.2 : 1.0 / 1.2;
             double newZoom = Zoom * zoomFactor;
-            newZoom = Math.Max(0.01, Math.Min(100, newZoom));
+            newZoom = Math.Max(0.001, Math.Min(1000, newZoom));
 
             Zoom = newZoom;
 

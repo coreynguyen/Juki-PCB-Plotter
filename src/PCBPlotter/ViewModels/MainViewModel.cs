@@ -243,7 +243,7 @@ namespace PCBPlotter.ViewModels
             ImportGerberCommand = new RelayCommand(ExecuteImportGerber, () => IsProjectLoaded);
             ExportMachineFileCommand = new RelayCommand(ExecuteExportMachineFile, () => IsProjectLoaded);
             ExportBomCommand = new RelayCommand(ExecuteExportBom, () => IsProjectLoaded);
-            ShowStartScreenCommand = new RelayCommand(() => ShowStartScreen = true);
+            ShowStartScreenCommand = new RelayCommand(() => ShowStartScreen = true, () => !IsProjectLoaded);
             FloatDesignViewCommand = new RelayCommand(o => ExecuteFloatWindow("Design"));
             FloatPlacementEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Placements"));
             FloatComponentEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Components"));

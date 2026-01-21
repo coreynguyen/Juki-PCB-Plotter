@@ -563,8 +563,9 @@ namespace PCBPlotter.ViewModels
                 defaultName = Path.GetFileNameWithoutExtension(FilePath ?? "Mapping");
             }
 
-            // Prompt for name
+            // Prompt for name - set owner to the active window (TextImportDialog)
             var inputDialog = new Views.InputDialog("Save Mapping", "Enter a name for this mapping:", defaultName);
+            inputDialog.Owner = System.Windows.Application.Current.Windows.OfType<System.Windows.Window>().FirstOrDefault(w => w.IsActive);
             if (inputDialog.ShowDialog() != true)
                 return;
 
@@ -706,6 +707,14 @@ namespace PCBPlotter.ViewModels
 
                 // Note: PartNumber and PackageName are stored in Component/Package objects
                 // These will be linked via BOM import or manually after placement import
+
+                // Validate: skip placements with empty reference or no valid coordinates
+                if (string.IsNullOrWhiteSpace(placement.Reference))
+                    continue;
+
+                // Skip if both X and Y are exactly 0 and there's no reference (likely empty row)
+                if (placement.X == 0 && placement.Y == 0 && refIndex < 0)
+                    continue;
 
                 placements.Add(placement);
             }

@@ -49,9 +49,8 @@
         </Border>
 
         <!-- Placement Grid (Ctrl+Scroll to zoom) -->
-        <DataGrid Grid.Row="1"
+        <DataGrid x:Name="PlacementsGrid" Grid.Row="1"
                   ItemsSource="{Binding PlacementsView}"
-                  SelectedItem="{Binding SelectedPlacements}"
                   SelectionMode="Extended"
                   AutoGenerateColumns="False"
                   CanUserAddRows="False"
@@ -60,6 +59,7 @@
                   HeadersVisibility="Column"
                   IsReadOnly="False"
                   Validation.ErrorTemplate="{x:Null}"
+                  SelectionChanged="PlacementsGrid_SelectionChanged"
                   behaviors:DataGridZoomBehavior.EnableZoom="True">
 
             <DataGrid.RowStyle>

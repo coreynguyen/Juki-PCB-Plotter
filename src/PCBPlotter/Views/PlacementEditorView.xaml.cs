@@ -17,39 +17,69 @@ namespace PCBPlotter.Views
             InitializeComponent();
         }
 
+        private void PlacementsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var vm = DataContext as PlacementEditorViewModel;
+            if (vm == null) return;
+
+            // Sync the DataGrid's selected items with the ViewModel's SelectedPlacements
+            vm.SelectedPlacements.Clear();
+            foreach (Placement item in PlacementsGrid.SelectedItems)
+            {
+                if (item != null)
+                {
+                    vm.SelectedPlacements.Add(item);
+                }
+            }
+        }
+
         private void PartNumberComboBox_LostFocus(object sender, RoutedEventArgs e)
         {
-            var comboBox = sender as ComboBox;
-            if (comboBox == null) return;
-
-            var placement = comboBox.DataContext as Placement;
-            if (placement == null) return;
-
-            var vm = DataContext as PlacementEditorViewModel;
-            if (vm?.Project == null) return;
-
-            // Get the typed text
-            string typedText = comboBox.Text?.Trim();
-            if (string.IsNullOrEmpty(typedText)) return;
-
-            // Check if there's already a component with this part number
-            var existingComponent = vm.Project.Components.FirstOrDefault(
-                c => string.Equals(c.PartNumber, typedText, System.StringComparison.OrdinalIgnoreCase));
-
-            if (existingComponent != null)
+            try
             {
-                // Assign existing component
-                placement.Component = existingComponent;
-            }
-            else
-            {
-                // Create new component with this part number
-                var newComponent = new Component
+                var comboBox = sender as ComboBox;
+                if (comboBox == null) return;
+
+                var placement = comboBox.DataContext as Placement;
+                if (placement == null) return;
+
+                var vm = DataContext as PlacementEditorViewModel;
+                if (vm?.Project?.Components == null) return;
+
+                // Get the typed text
+                string typedText = comboBox.Text?.Trim();
+                if (string.IsNullOrEmpty(typedText)) return;
+
+                // If the text matches the current component, no change needed
+                if (placement.Component != null &&
+                    string.Equals(placement.Component.PartNumber, typedText, System.StringComparison.OrdinalIgnoreCase))
                 {
-                    PartNumber = typedText
-                };
-                vm.Project.Components.Add(newComponent);
-                placement.Component = newComponent;
+                    return;
+                }
+
+                // Check if there's already a component with this part number
+                var existingComponent = vm.Project.Components.FirstOrDefault(
+                    c => c != null && string.Equals(c.PartNumber, typedText, System.StringComparison.OrdinalIgnoreCase));
+
+                if (existingComponent != null)
+                {
+                    // Assign existing component
+                    placement.Component = existingComponent;
+                }
+                else
+                {
+                    // Create new component with this part number
+                    var newComponent = new Component
+                    {
+                        PartNumber = typedText
+                    };
+                    vm.Project.Components.Add(newComponent);
+                    placement.Component = newComponent;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("Error in PartNumberComboBox_LostFocus: " + ex.Message);
             }
         }
     }
