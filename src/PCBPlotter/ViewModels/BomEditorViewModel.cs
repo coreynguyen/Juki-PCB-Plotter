@@ -6,6 +6,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Core.Models;
+using Component = PCBPlotter.Core.Models.Component;
 
 namespace PCBPlotter.ViewModels
 {
