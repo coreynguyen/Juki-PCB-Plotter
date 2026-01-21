@@ -163,6 +163,9 @@ namespace PCBPlotter.Views
                         }
                     }
 
+                    // Auto-assign components to placements by matching reference designators
+                    int assignedCount = AssignComponentsToPlacements(mainVm.CurrentProject);
+
                     // Show warnings if any
                     if (bomResult.Warnings.Count > 0)
                     {
@@ -179,8 +182,8 @@ namespace PCBPlotter.Views
                     EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
                     EventAggregator.Instance.Publish(new StatusMessageEvent
                     {
-                        Message = string.Format("BOM imported: {0} new, {1} updated, {2} total references",
-                            newComponents, updatedComponents, bomResult.TotalReferences)
+                        Message = string.Format("BOM imported: {0} new, {1} updated, {2} total refs, {3} placements linked",
+                            newComponents, updatedComponents, bomResult.TotalReferences, assignedCount)
                     });
                 }
             }
@@ -198,6 +201,48 @@ namespace PCBPlotter.Views
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// Auto-assign components to placements by matching reference designators
+        /// </summary>
+        private int AssignComponentsToPlacements(Core.Models.Project project)
+        {
+            if (project == null) return 0;
+
+            int assignedCount = 0;
+
+            // Build a lookup from reference designator to component
+            var refToComponent = new System.Collections.Generic.Dictionary<string, Core.Models.Component>(
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var component in project.Components)
+            {
+                if (component.ReferenceDesignators == null) continue;
+
+                foreach (var refDes in component.ReferenceDesignators)
+                {
+                    if (!string.IsNullOrEmpty(refDes) && !refToComponent.ContainsKey(refDes))
+                    {
+                        refToComponent[refDes] = component;
+                    }
+                }
+            }
+
+            // Match placements to components
+            foreach (var placement in project.Placements)
+            {
+                if (string.IsNullOrEmpty(placement.Reference)) continue;
+
+                Core.Models.Component component;
+                if (refToComponent.TryGetValue(placement.Reference, out component))
+                {
+                    placement.Component = component;
+                    assignedCount++;
+                }
+            }
+
+            return assignedCount;
         }
 
         private void ShowCadImportDialog()

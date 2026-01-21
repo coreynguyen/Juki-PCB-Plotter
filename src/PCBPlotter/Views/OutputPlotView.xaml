@@ -58,7 +58,11 @@
                                PanX="{Binding PanX, Mode=TwoWay}"
                                PanY="{Binding PanY, Mode=TwoWay}"
                                ShowGrid="{Binding ShowGrid}"
-                               GridSpacing="{Binding GridSpacing}">
+                               GridSpacing="{Binding GridSpacing}"
+                               ShowLabels="{Binding ShowLabels}"
+                               ViewSide="{Binding ViewSide}"
+                               Placements="{Binding Project.Placements}"
+                               Fiducials="{Binding Project.Fiducials}">
             <controls:DesignCanvas.ContextMenu>
                 <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                     <MenuItem Header="Add PCB Area..." Command="{Binding AddPcbAreaCommand}"/>

@@ -52,7 +52,7 @@ namespace PCBPlotter.ViewModels
         private string _selectedDelimiter = "Tab";
         private string _selectedEncoding = "UTF-8";
         private int _skipRows = 0;
-        private bool _useFirstRowAsHeader = true;
+        private bool _useFirstRowAsHeader = false;
         private bool _mergeDelimiters = false;
         private string _importType = "Placements (PNP)";
         private string _boardSide = "Top";

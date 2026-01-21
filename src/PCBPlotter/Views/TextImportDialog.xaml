@@ -54,9 +54,6 @@
                              Width="50"/>
                 </StackPanel>
 
-                <CheckBox Content="First Row is Header" IsChecked="{Binding UseFirstRowAsHeader}"
-                          VerticalAlignment="Center" Margin="0,0,16,4"/>
-
                 <CheckBox Content="Treat Consecutive Delimiters as One"
                           IsChecked="{Binding MergeDelimiters}"
                           VerticalAlignment="Center" Margin="0,0,16,4"/>
@@ -106,32 +103,23 @@
             </Grid>
         </GroupBox>
 
-        <!-- Import Options -->
-        <GroupBox Grid.Row="3" Header="Import Options" Margin="0,8,0,8">
+        <!-- Import Options (only shown for placement imports) -->
+        <GroupBox Grid.Row="3" Header="Import Options" Margin="0,8,0,8"
+                  Visibility="{Binding ShowPlacementOptions, Converter={StaticResource BoolToVisibilityConverter}}">
             <WrapPanel Margin="8">
                 <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
-                    <TextBlock Text="Data Type:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ComboBox Width="150" SelectedItem="{Binding ImportType}"
-                              ItemsSource="{Binding ImportTypes}"/>
-                </StackPanel>
-
-                <!-- Placement-specific options (hidden for BOM import) -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,24,0"
-                            Visibility="{Binding ShowPlacementOptions, Converter={StaticResource BoolToVisibilityConverter}}">
                     <TextBlock Text="Board Side:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox Width="100" SelectedItem="{Binding BoardSide}"
                               ItemsSource="{Binding BoardSides}"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,24,0"
-                            Visibility="{Binding ShowPlacementOptions, Converter={StaticResource BoolToVisibilityConverter}}">
+                <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
                     <TextBlock Text="Units:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox Width="100" SelectedItem="{Binding Units}"
                               ItemsSource="{Binding UnitOptions}"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,24,0"
-                            Visibility="{Binding ShowPlacementOptions, Converter={StaticResource BoolToVisibilityConverter}}">
+                <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
                     <TextBlock Text="Angle Format:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox Width="100" SelectedItem="{Binding AngleFormat}"
                               ItemsSource="{Binding AngleFormats}"/>
