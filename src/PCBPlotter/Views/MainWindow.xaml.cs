@@ -156,6 +156,21 @@ namespace PCBPlotter.Views
                     // Import BOM data
                     var bomResult = vm.GetBomData();
 
+                    // Clear existing components if requested
+                    int clearedComponents = 0;
+                    if (vm.ClearExistingOnImport)
+                    {
+                        clearedComponents = mainVm.CurrentProject.Components.Count;
+
+                        // Clear component assignments from placements
+                        foreach (var placement in mainVm.CurrentProject.Placements)
+                        {
+                            placement.Component = null;
+                        }
+
+                        mainVm.CurrentProject.Components.Clear();
+                    }
+
                     // Convert BomLines to Components
                     int newComponents = 0;
                     int updatedComponents = 0;
@@ -217,11 +232,19 @@ namespace PCBPlotter.Views
                     }
 
                     EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
-                    EventAggregator.Instance.Publish(new StatusMessageEvent
+
+                    string statusMessage;
+                    if (clearedComponents > 0)
                     {
-                        Message = string.Format("BOM imported: {0} new, {1} updated, {2} total refs, {3} placements linked",
-                            newComponents, updatedComponents, bomResult.TotalReferences, assignedCount)
-                    });
+                        statusMessage = string.Format("BOM imported: {0} cleared, {1} new components, {2} total refs, {3} placements linked",
+                            clearedComponents, newComponents, bomResult.TotalReferences, assignedCount);
+                    }
+                    else
+                    {
+                        statusMessage = string.Format("BOM imported: {0} new, {1} updated, {2} total refs, {3} placements linked",
+                            newComponents, updatedComponents, bomResult.TotalReferences, assignedCount);
+                    }
+                    EventAggregator.Instance.Publish(new StatusMessageEvent { Message = statusMessage });
                 }
             }
         }

@@ -63,6 +63,16 @@ namespace PCBPlotter.ViewModels
         private ObservableCollection<ColumnMapping> _columnMappings;
         private bool _showPlacementOptions = true;
         private string _importWarnings;
+        private bool _clearExistingOnImport = false;
+
+        /// <summary>
+        /// If true, clear existing BOM data before importing. Only applies to BOM import.
+        /// </summary>
+        public bool ClearExistingOnImport
+        {
+            get { return _clearExistingOnImport; }
+            set { SetProperty(ref _clearExistingOnImport, value); }
+        }
 
         public string FilePath
         {

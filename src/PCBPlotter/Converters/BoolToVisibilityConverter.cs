@@ -100,6 +100,39 @@ namespace PCBPlotter.Converters
     }
 
     /// <summary>
+    /// Inverts a boolean value
+    /// </summary>
+    public class InverseBoolConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            return value is bool && !(bool)value;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            return value is bool && !(bool)value;
+        }
+    }
+
+    /// <summary>
+    /// Inverts boolean and converts to Visibility
+    /// </summary>
+    public class InverseBoolToVisibilityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            bool boolValue = value is bool && (bool)value;
+            return boolValue ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            return value is Visibility && (Visibility)value == Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>
     /// Converts a Color to a SolidColorBrush
     /// </summary>
     public class ColorToBrushConverter : IValueConverter
