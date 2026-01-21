@@ -478,7 +478,7 @@ namespace PCBPlotter.ViewModels
                 X = CursorPosition.X,
                 Y = CursorPosition.Y,
                 Side = ViewSide,
-                IsGlobal = true
+                Type = FiducialType.Global
             };
 
             Project.Fiducials.Add(fiducial);

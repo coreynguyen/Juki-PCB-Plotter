@@ -512,11 +512,13 @@ namespace PCBPlotter.ViewModels
                 {
                     var sideStr = row[sideIndex].ToString().ToLower();
                     placement.Side = (sideStr.Contains("bot") || sideStr == "b")
-                        ? BoardSide.Bottom : BoardSide.Top;
+                        ? PCBPlotter.Core.Models.BoardSide.Bottom : PCBPlotter.Core.Models.BoardSide.Top;
                 }
                 else
                 {
-                    placement.Side = this.BoardSide == "Bottom" ? BoardSide.Bottom : BoardSide.Top;
+                    placement.Side = this.BoardSide == "Bottom"
+                        ? PCBPlotter.Core.Models.BoardSide.Bottom
+                        : PCBPlotter.Core.Models.BoardSide.Top;
                 }
 
                 placements.Add(placement);
