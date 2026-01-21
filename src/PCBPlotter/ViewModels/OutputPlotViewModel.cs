@@ -243,6 +243,21 @@ namespace PCBPlotter.ViewModels
         {
             Subscribe<SelectionChangedEvent>(OnSelectionChanged);
             Subscribe<FocusPlacementEvent>(OnFocusPlacement);
+            Subscribe<ZoomFitRequestEvent>(OnZoomFitRequest);
+            Subscribe<RequestRefreshEvent>(OnRefreshRequest);
+        }
+
+        private void OnZoomFitRequest(ZoomFitRequestEvent e)
+        {
+            ExecuteZoomFit();
+        }
+
+        private void OnRefreshRequest(RequestRefreshEvent e)
+        {
+            // Notify bindings to refresh
+            OnPropertyChanged("Placements");
+            OnPropertyChanged("Fiducials");
+            OnPropertyChanged("Project");
         }
 
         private void UpdateCoordinateDisplay()
@@ -277,10 +292,64 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteZoomFit()
         {
-            // TODO: Calculate bounds and fit to view
-            Zoom = 1.0;
-            PanX = 0;
-            PanY = 0;
+            if (Project == null || !Project.Placements.Any())
+            {
+                Zoom = 1.0;
+                PanX = 0;
+                PanY = 0;
+                return;
+            }
+
+            // Calculate bounds of all placements
+            double minX = double.MaxValue, minY = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue;
+
+            foreach (var placement in Project.Placements)
+            {
+                if (placement.X < minX) minX = placement.X;
+                if (placement.Y < minY) minY = placement.Y;
+                if (placement.X > maxX) maxX = placement.X;
+                if (placement.Y > maxY) maxY = placement.Y;
+            }
+
+            // Add fiducials to bounds
+            foreach (var fiducial in Project.Fiducials)
+            {
+                if (fiducial.X < minX) minX = fiducial.X;
+                if (fiducial.Y < minY) minY = fiducial.Y;
+                if (fiducial.X > maxX) maxX = fiducial.X;
+                if (fiducial.Y > maxY) maxY = fiducial.Y;
+            }
+
+            // Add margin (10%)
+            double margin = Math.Max(maxX - minX, maxY - minY) * 0.1;
+            if (margin < 5) margin = 5;
+            minX -= margin;
+            minY -= margin;
+            maxX += margin;
+            maxY += margin;
+
+            double boundsWidth = maxX - minX;
+            double boundsHeight = maxY - minY;
+
+            if (boundsWidth <= 0) boundsWidth = 100;
+            if (boundsHeight <= 0) boundsHeight = 100;
+
+            // Calculate zoom to fit (assuming 800x600 viewport for now - will be updated by view)
+            double viewportWidth = 800;
+            double viewportHeight = 600;
+
+            double zoomX = viewportWidth / boundsWidth;
+            double zoomY = viewportHeight / boundsHeight;
+            Zoom = Math.Min(zoomX, zoomY) * 0.9; // 90% to leave margin
+
+            // Calculate pan to center
+            double centerX = (minX + maxX) / 2;
+            double centerY = (minY + maxY) / 2;
+            PanX = viewportWidth / 2 - centerX * Zoom;
+            PanY = viewportHeight / 2 - centerY * Zoom;
+
+            Publish(new RequestRefreshEvent { FullRefresh = true });
         }
 
         private void ExecuteSelectAll()

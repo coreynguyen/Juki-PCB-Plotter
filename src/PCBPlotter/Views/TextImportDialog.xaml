@@ -91,12 +91,13 @@
                     </ItemsControl>
                 </Border>
 
-                <!-- Data Grid -->
+                <!-- Data Grid (headers hidden - use dropdown mappings above) -->
                 <DataGrid Grid.Row="1" ItemsSource="{Binding PreviewData}"
                           AutoGenerateColumns="True"
                           IsReadOnly="True"
                           CanUserAddRows="False"
                           CanUserDeleteRows="False"
+                          HeadersVisibility="None"
                           HorizontalScrollBarVisibility="Auto"
                           VerticalScrollBarVisibility="Auto"
                           ColumnWidth="120"/>
@@ -107,12 +108,6 @@
         <GroupBox Grid.Row="3" Header="Import Options" Margin="0,8,0,8"
                   Visibility="{Binding ShowPlacementOptions, Converter={StaticResource BoolToVisibilityConverter}}">
             <WrapPanel Margin="8">
-                <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
-                    <TextBlock Text="Board Side:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ComboBox Width="100" SelectedItem="{Binding BoardSide}"
-                              ItemsSource="{Binding BoardSides}"/>
-                </StackPanel>
-
                 <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
                     <TextBlock Text="Units:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox Width="100" SelectedItem="{Binding Units}"

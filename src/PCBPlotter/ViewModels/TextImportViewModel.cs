@@ -528,12 +528,32 @@ namespace PCBPlotter.ViewModels
             var yIndex = GetMappedColumnIndex("Y");
             var rotIndex = GetMappedColumnIndex("Rotation");
             var sideIndex = GetMappedColumnIndex("Side");
-            var partIndex = GetMappedColumnIndex("PartNumber");
-            var pkgIndex = GetMappedColumnIndex("PackageName");
-            var valIndex = GetMappedColumnIndex("Value");
 
             var inputUnit = GetSelectedUnit();
             var targetUnit = LengthUnit.Millimeters; // App default
+
+            // Smart side detection: collect unique side values first
+            // First unique value = Top (Side 1), Second unique value = Bottom (Side 2)
+            string side1Value = null;
+            string side2Value = null;
+            if (sideIndex >= 0)
+            {
+                foreach (DataRow row in PreviewData.Rows)
+                {
+                    var sideStr = row[sideIndex].ToString().Trim().ToLowerInvariant();
+                    if (string.IsNullOrEmpty(sideStr)) continue;
+
+                    if (side1Value == null)
+                    {
+                        side1Value = sideStr;
+                    }
+                    else if (side2Value == null && sideStr != side1Value)
+                    {
+                        side2Value = sideStr;
+                        break; // Found both sides
+                    }
+                }
+            }
 
             foreach (DataRow row in PreviewData.Rows)
             {
@@ -565,18 +585,23 @@ namespace PCBPlotter.ViewModels
                     placement.Rotation = rot;
                 }
 
-                // Parse side
+                // Smart side detection: first unique value = Top, second = Bottom
                 if (sideIndex >= 0)
                 {
-                    var sideStr = row[sideIndex].ToString().ToLower();
-                    placement.Side = (sideStr.Contains("bot") || sideStr == "b" || sideStr == "bottom")
-                        ? Core.Models.BoardSide.Bottom : Core.Models.BoardSide.Top;
+                    var sideStr = row[sideIndex].ToString().Trim().ToLowerInvariant();
+                    if (sideStr == side2Value)
+                    {
+                        placement.Side = Core.Models.BoardSide.Bottom;
+                    }
+                    else
+                    {
+                        placement.Side = Core.Models.BoardSide.Top;
+                    }
                 }
                 else
                 {
-                    placement.Side = this.BoardSide == "Bottom"
-                        ? Core.Models.BoardSide.Bottom
-                        : Core.Models.BoardSide.Top;
+                    // No side column - default to Top
+                    placement.Side = Core.Models.BoardSide.Top;
                 }
 
                 // Note: PartNumber and PackageName are stored in Component/Package objects

@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Services;
 using PCBPlotter.ViewModels;
@@ -15,6 +17,12 @@ namespace PCBPlotter.Views
         // Keep a strong reference to prevent garbage collection
         private readonly Action<ShowDialogEvent> _showDialogHandler;
 
+        // DWM API for dark title bar (Windows 10 1809+)
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -28,6 +36,30 @@ namespace PCBPlotter.Views
 
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
+            SourceInitialized += MainWindow_SourceInitialized;
+        }
+
+        private void MainWindow_SourceInitialized(object sender, EventArgs e)
+        {
+            // Apply dark mode to title bar
+            ApplyDarkTitleBar();
+        }
+
+        private void ApplyDarkTitleBar()
+        {
+            try
+            {
+                var hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd != IntPtr.Zero)
+                {
+                    int darkMode = 1; // Enable dark mode
+                    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkMode, sizeof(int));
+                }
+            }
+            catch
+            {
+                // Ignore errors on older Windows versions
+            }
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -108,11 +140,16 @@ namespace PCBPlotter.Views
                         mainVm.CurrentProject.Placements.Add(placement);
                     }
 
+                    // Refresh view and zoom to fit
                     EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+                    EventAggregator.Instance.Publish(new ZoomFitRequestEvent());
                     EventAggregator.Instance.Publish(new StatusMessageEvent
                     {
                         Message = string.Format("Imported {0} placements", placements.Count)
                     });
+
+                    // Switch to Design tab to show placements
+                    mainVm.SelectedTabIndex = 0;
                 }
                 else if (importType == "BomImport")
                 {

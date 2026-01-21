@@ -153,6 +153,11 @@ namespace PCBPlotter.Core.Events
         public bool FullRefresh { get; set; }
     }
 
+    public class ZoomFitRequestEvent
+    {
+        public bool AnimateZoom { get; set; }
+    }
+
     #endregion
 
     #region Import/Export Events
