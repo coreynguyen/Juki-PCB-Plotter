@@ -65,6 +65,21 @@ namespace PCBPlotter.ViewModels
         private string _importWarnings;
         private bool _clearExistingOnImport = false;
 
+        // Source selection
+        private bool _useFileSource = true;
+        private bool _useClipboardSource = false;
+        private string _clipboardStatus = "";
+        private string _clipboardData = null;
+
+        // Parse mode selection
+        private bool _useDelimitedMode = true;
+        private bool _useFixedWidthMode = false;
+        private string _columnWidths = "";
+        private string _sampleLine = "";
+        private string _characterRuler = "";
+        private ObservableCollection<double> _columnBreakPositions;
+        private List<string> _rawLines = new List<string>();
+
         /// <summary>
         /// If true, clear existing BOM data before importing. Only applies to BOM import.
         /// </summary>
@@ -74,6 +89,120 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _clearExistingOnImport, value); }
         }
 
+        #region Source Selection Properties
+
+        public bool UseFileSource
+        {
+            get { return _useFileSource; }
+            set
+            {
+                if (SetProperty(ref _useFileSource, value))
+                {
+                    if (value)
+                    {
+                        _useClipboardSource = false;
+                        OnPropertyChanged(nameof(UseClipboardSource));
+                        ParseData();
+                    }
+                }
+            }
+        }
+
+        public bool UseClipboardSource
+        {
+            get { return _useClipboardSource; }
+            set
+            {
+                if (SetProperty(ref _useClipboardSource, value))
+                {
+                    if (value)
+                    {
+                        _useFileSource = false;
+                        OnPropertyChanged(nameof(UseFileSource));
+                        ParseData();
+                    }
+                }
+            }
+        }
+
+        public string ClipboardStatus
+        {
+            get { return _clipboardStatus; }
+            set { SetProperty(ref _clipboardStatus, value); }
+        }
+
+        #endregion
+
+        #region Parse Mode Properties
+
+        public bool UseDelimitedMode
+        {
+            get { return _useDelimitedMode; }
+            set
+            {
+                if (SetProperty(ref _useDelimitedMode, value))
+                {
+                    if (value)
+                    {
+                        _useFixedWidthMode = false;
+                        OnPropertyChanged(nameof(UseFixedWidthMode));
+                        ParseData();
+                    }
+                }
+            }
+        }
+
+        public bool UseFixedWidthMode
+        {
+            get { return _useFixedWidthMode; }
+            set
+            {
+                if (SetProperty(ref _useFixedWidthMode, value))
+                {
+                    if (value)
+                    {
+                        _useDelimitedMode = false;
+                        OnPropertyChanged(nameof(UseDelimitedMode));
+                        UpdateFixedWidthPreview();
+                        ParseData();
+                    }
+                }
+            }
+        }
+
+        public string ColumnWidths
+        {
+            get { return _columnWidths; }
+            set
+            {
+                if (SetProperty(ref _columnWidths, value))
+                {
+                    UpdateColumnBreaksFromWidths();
+                    ParseData();
+                }
+            }
+        }
+
+        public string SampleLine
+        {
+            get { return _sampleLine; }
+            set { SetProperty(ref _sampleLine, value); }
+        }
+
+        public string CharacterRuler
+        {
+            get { return _characterRuler; }
+            set { SetProperty(ref _characterRuler, value); }
+        }
+
+        public ObservableCollection<double> ColumnBreakPositions
+        {
+            get { return _columnBreakPositions; }
+            set { SetProperty(ref _columnBreakPositions, value); }
+        }
+
+        #endregion
+
         public string FilePath
         {
             get { return _filePath; }
@@ -81,7 +210,10 @@ namespace PCBPlotter.ViewModels
             {
                 if (SetProperty(ref _filePath, value))
                 {
-                    ParseFile();
+                    if (_useFileSource)
+                    {
+                        ParseData();
+                    }
                 }
             }
         }
@@ -93,7 +225,7 @@ namespace PCBPlotter.ViewModels
             {
                 if (SetProperty(ref _selectedDelimiter, value))
                 {
-                    ParseFile();
+                    ParseData();
                 }
             }
         }
@@ -105,7 +237,7 @@ namespace PCBPlotter.ViewModels
             {
                 if (SetProperty(ref _selectedEncoding, value))
                 {
-                    ParseFile();
+                    ParseData();
                 }
             }
         }
@@ -117,7 +249,7 @@ namespace PCBPlotter.ViewModels
             {
                 if (SetProperty(ref _skipRows, Math.Max(0, value)))
                 {
-                    ParseFile();
+                    ParseData();
                 }
             }
         }
@@ -129,7 +261,7 @@ namespace PCBPlotter.ViewModels
             {
                 if (SetProperty(ref _useFirstRowAsHeader, value))
                 {
-                    ParseFile();
+                    ParseData();
                 }
             }
         }
@@ -141,7 +273,7 @@ namespace PCBPlotter.ViewModels
             {
                 if (SetProperty(ref _mergeDelimiters, value))
                 {
-                    ParseFile();
+                    ParseData();
                 }
             }
         }
@@ -246,6 +378,8 @@ namespace PCBPlotter.ViewModels
         public ICommand ImportCommand { get; private set; }
         public ICommand SaveMappingCommand { get; private set; }
         public ICommand DeleteMappingCommand { get; private set; }
+        public ICommand PasteClipboardCommand { get; private set; }
+        public ICommand AutoDetectWidthsCommand { get; private set; }
 
         private string _selectedMappingName;
         public string SelectedMappingName
@@ -266,9 +400,11 @@ namespace PCBPlotter.ViewModels
         {
             ColumnMappings = new ObservableCollection<ColumnMapping>();
             AvailableFields = new ObservableCollection<ImportField>();
+            ColumnBreakPositions = new ObservableCollection<double>();
             UpdateAvailableFields();
             InitializeCommands();
             RefreshSavedMappingNames();
+            GenerateCharacterRuler(100);
         }
 
         private void InitializeCommands()
@@ -277,6 +413,8 @@ namespace PCBPlotter.ViewModels
             ImportCommand = new RelayCommand(ExecuteImport, () => PreviewData != null && PreviewData.Rows.Count > 0);
             SaveMappingCommand = new RelayCommand(ExecuteSaveMapping);
             DeleteMappingCommand = new RelayCommand(ExecuteDeleteMapping, () => !string.IsNullOrEmpty(SelectedMappingName));
+            PasteClipboardCommand = new RelayCommand(ExecutePasteClipboard);
+            AutoDetectWidthsCommand = new RelayCommand(ExecuteAutoDetectWidths, () => _rawLines.Count > 0);
         }
 
         private void RefreshSavedMappingNames()
@@ -361,23 +499,280 @@ namespace PCBPlotter.ViewModels
             }
         }
 
-        private void ParseFile()
+        private void ExecutePasteClipboard()
         {
-            if (string.IsNullOrEmpty(FilePath) || !File.Exists(FilePath))
+            try
+            {
+                if (Clipboard.ContainsText())
+                {
+                    _clipboardData = Clipboard.GetText();
+                    var lineCount = _clipboardData.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Length;
+                    ClipboardStatus = string.Format("Pasted {0} lines", lineCount);
+                    ParseData();
+                }
+                else
+                {
+                    ClipboardStatus = "Clipboard is empty or contains no text";
+                }
+            }
+            catch (Exception ex)
+            {
+                ClipboardStatus = "Error: " + ex.Message;
+            }
+        }
+
+        private void ExecuteAutoDetectWidths()
+        {
+            if (_rawLines.Count == 0) return;
+
+            try
+            {
+                // Analyze lines to detect column boundaries based on whitespace patterns
+                var widths = DetectColumnWidths(_rawLines);
+                if (widths.Count > 0)
+                {
+                    ColumnWidths = string.Join(",", widths);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not auto-detect column widths: " + ex.Message,
+                    "Auto-Detect", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private List<int> DetectColumnWidths(List<string> lines)
+        {
+            var widths = new List<int>();
+            if (lines.Count == 0) return widths;
+
+            // Find the longest line
+            int maxLen = lines.Max(l => l.Length);
+            if (maxLen == 0) return widths;
+
+            // Create a histogram of whitespace positions
+            var whitespaceCount = new int[maxLen];
+            int lineCount = Math.Min(lines.Count, 20); // Sample first 20 lines
+
+            for (int i = 0; i < lineCount; i++)
+            {
+                var line = lines[i];
+                for (int j = 0; j < line.Length; j++)
+                {
+                    if (char.IsWhiteSpace(line[j]) && j > 0 && !char.IsWhiteSpace(line[j - 1]))
+                    {
+                        // Transition from non-whitespace to whitespace
+                        whitespaceCount[j]++;
+                    }
+                }
+            }
+
+            // Find positions where most lines have whitespace transitions
+            int threshold = lineCount / 2;
+            int lastBreak = 0;
+
+            for (int i = 1; i < maxLen; i++)
+            {
+                if (whitespaceCount[i] >= threshold && i - lastBreak >= 3)
+                {
+                    widths.Add(i - lastBreak);
+                    lastBreak = i;
+                }
+            }
+
+            // Add final column width
+            if (lastBreak < maxLen)
+            {
+                widths.Add(maxLen - lastBreak);
+            }
+
+            return widths;
+        }
+
+        private void GenerateCharacterRuler(int length)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < length; i++)
+            {
+                if (i % 10 == 0)
+                    sb.Append((i / 10) % 10);
+                else if (i % 5 == 0)
+                    sb.Append('+');
+                else
+                    sb.Append('-');
+            }
+            CharacterRuler = sb.ToString();
+        }
+
+        private void UpdateFixedWidthPreview()
+        {
+            if (_rawLines.Count > 0)
+            {
+                // Use first non-skipped line as sample
+                int skipCount = Math.Min(SkipRows, _rawLines.Count - 1);
+                SampleLine = _rawLines.Count > skipCount ? _rawLines[skipCount] : "";
+                GenerateCharacterRuler(Math.Max(100, SampleLine.Length + 10));
+            }
+        }
+
+        private void UpdateColumnBreaksFromWidths()
+        {
+            ColumnBreakPositions.Clear();
+
+            if (string.IsNullOrWhiteSpace(_columnWidths)) return;
+
+            var widthStrings = _columnWidths.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            int position = 0;
+            const double charWidth = 7.0; // Approximate pixel width per character
+
+            foreach (var ws in widthStrings)
+            {
+                if (int.TryParse(ws.Trim(), out int width))
+                {
+                    position += width;
+                    ColumnBreakPositions.Add(position * charWidth);
+                }
+            }
+        }
+
+        public void ToggleColumnBreak(int charPosition)
+        {
+            const double charWidth = 7.0;
+            double pixelPosition = charPosition * charWidth;
+
+            // Check if there's already a break near this position
+            var existing = ColumnBreakPositions.FirstOrDefault(p => Math.Abs(p - pixelPosition) < charWidth * 2);
+            if (existing > 0)
+            {
+                ColumnBreakPositions.Remove(existing);
+            }
+            else
+            {
+                // Add new break
+                var sortedPositions = ColumnBreakPositions.ToList();
+                sortedPositions.Add(pixelPosition);
+                sortedPositions.Sort();
+                ColumnBreakPositions.Clear();
+                foreach (var p in sortedPositions)
+                {
+                    ColumnBreakPositions.Add(p);
+                }
+            }
+
+            // Update column widths string from breaks
+            UpdateWidthsFromBreaks();
+            ParseData();
+        }
+
+        private void UpdateWidthsFromBreaks()
+        {
+            const double charWidth = 7.0;
+            var widths = new List<int>();
+            int lastPos = 0;
+
+            foreach (var pos in ColumnBreakPositions.OrderBy(p => p))
+            {
+                int charPos = (int)(pos / charWidth);
+                if (charPos > lastPos)
+                {
+                    widths.Add(charPos - lastPos);
+                    lastPos = charPos;
+                }
+            }
+
+            // Don't add trailing column automatically - let it capture rest of line
+            _columnWidths = string.Join(",", widths);
+            OnPropertyChanged(nameof(ColumnWidths));
+        }
+
+        private List<int> GetColumnWidthsList()
+        {
+            var widths = new List<int>();
+            if (string.IsNullOrWhiteSpace(_columnWidths)) return widths;
+
+            var parts = _columnWidths.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var p in parts)
+            {
+                if (int.TryParse(p.Trim(), out int w) && w > 0)
+                {
+                    widths.Add(w);
+                }
+            }
+            return widths;
+        }
+
+        private void ParseData()
+        {
+            // Load raw lines from source
+            _rawLines.Clear();
+
+            if (_useFileSource)
+            {
+                if (string.IsNullOrEmpty(FilePath) || !File.Exists(FilePath))
+                {
+                    PreviewData = null;
+                    RecordCount = 0;
+                    return;
+                }
+
+                try
+                {
+                    _rawLines = File.ReadAllLines(FilePath, GetEncoding()).ToList();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Error reading file: " + ex.Message, "Read Error",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    PreviewData = null;
+                    RecordCount = 0;
+                    return;
+                }
+            }
+            else if (_useClipboardSource)
+            {
+                if (string.IsNullOrEmpty(_clipboardData))
+                {
+                    PreviewData = null;
+                    RecordCount = 0;
+                    return;
+                }
+
+                _rawLines = _clipboardData.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).ToList();
+            }
+
+            if (_rawLines.Count == 0)
             {
                 PreviewData = null;
                 RecordCount = 0;
                 return;
             }
 
+            // Update fixed-width preview if in that mode
+            if (_useFixedWidthMode)
+            {
+                UpdateFixedWidthPreview();
+            }
+
+            // Parse based on mode
+            if (_useDelimitedMode)
+            {
+                ParseDelimited();
+            }
+            else
+            {
+                ParseFixedWidth();
+            }
+        }
+
+        private void ParseDelimited()
+        {
             try
             {
-                var lines = File.ReadAllLines(FilePath, GetEncoding());
                 var delimiter = GetDelimiterChar();
                 var dataTable = new DataTable();
 
                 // Skip rows (for comments/headers at top of file)
-                var dataLines = lines.Skip(SkipRows).ToList();
+                var dataLines = _rawLines.Skip(SkipRows).ToList();
                 if (dataLines.Count == 0)
                 {
                     PreviewData = null;
@@ -439,11 +834,123 @@ namespace PCBPlotter.ViewModels
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error parsing file: " + ex.Message, "Parse Error",
+                MessageBox.Show("Error parsing data: " + ex.Message, "Parse Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
                 PreviewData = null;
                 RecordCount = 0;
             }
+        }
+
+        private void ParseFixedWidth()
+        {
+            try
+            {
+                var widths = GetColumnWidthsList();
+                if (widths.Count == 0)
+                {
+                    // No widths defined - show a single column with all data
+                    widths.Add(1000); // Large enough to capture entire line
+                }
+
+                var dataTable = new DataTable();
+
+                // Skip rows (for comments/headers at top of file)
+                var dataLines = _rawLines.Skip(SkipRows).ToList();
+                if (dataLines.Count == 0)
+                {
+                    PreviewData = null;
+                    RecordCount = 0;
+                    return;
+                }
+
+                // Parse first data line to get column headers (if using first row as header)
+                var firstLine = dataLines[0];
+                var firstFields = SplitByWidths(firstLine, widths);
+                var columnCount = firstFields.Length;
+
+                // Create columns
+                ColumnMappings.Clear();
+                for (int i = 0; i < columnCount; i++)
+                {
+                    var displayName = UseFirstRowAsHeader ? firstFields[i].Trim() : "";
+                    if (string.IsNullOrWhiteSpace(displayName))
+                        displayName = string.Format("Column {0}", i + 1);
+
+                    dataTable.Columns.Add(string.Format("Column{0}", i));
+
+                    var mapping = new ColumnMapping
+                    {
+                        ColumnIndex = i,
+                        HeaderText = displayName,
+                        SelectedField = AvailableFields[0]
+                    };
+
+                    mapping.SelectedField = DetectField(displayName);
+                    ColumnMappings.Add(mapping);
+                }
+
+                // Parse data rows
+                int startRow = UseFirstRowAsHeader ? 1 : 0;
+                int maxPreviewRows = 100;
+                int rowCount = 0;
+
+                for (int i = startRow; i < dataLines.Count && rowCount < maxPreviewRows; i++)
+                {
+                    var fields = SplitByWidths(dataLines[i], widths);
+                    if (fields.Length == 0 || (fields.Length == 1 && string.IsNullOrWhiteSpace(fields[0])))
+                        continue;
+
+                    var row = dataTable.NewRow();
+                    for (int j = 0; j < Math.Min(fields.Length, columnCount); j++)
+                    {
+                        row[j] = fields[j].Trim();
+                    }
+                    dataTable.Rows.Add(row);
+                    rowCount++;
+                }
+
+                PreviewData = dataTable;
+                RecordCount = UseFirstRowAsHeader ? dataLines.Count - 1 : dataLines.Count;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error parsing fixed-width data: " + ex.Message, "Parse Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                PreviewData = null;
+                RecordCount = 0;
+            }
+        }
+
+        private string[] SplitByWidths(string line, List<int> widths)
+        {
+            var fields = new List<string>();
+            int position = 0;
+
+            for (int i = 0; i < widths.Count; i++)
+            {
+                int width = widths[i];
+                if (position >= line.Length)
+                {
+                    fields.Add("");
+                }
+                else if (position + width > line.Length)
+                {
+                    fields.Add(line.Substring(position));
+                }
+                else
+                {
+                    fields.Add(line.Substring(position, width));
+                }
+                position += width;
+            }
+
+            // If there's remaining text after the last defined width, capture it
+            if (position < line.Length)
+            {
+                fields.Add(line.Substring(position));
+            }
+
+            return fields.ToArray();
         }
 
         private string[] ParseLine(string line, char delimiter)
@@ -617,12 +1124,77 @@ namespace PCBPlotter.ViewModels
         }
 
         /// <summary>
+        /// Gets all data rows (not just preview), parsed according to current settings
+        /// </summary>
+        private DataTable GetFullDataTable()
+        {
+            if (_rawLines.Count == 0) return null;
+
+            var dataTable = new DataTable();
+            var dataLines = _rawLines.Skip(SkipRows).ToList();
+            if (dataLines.Count == 0) return null;
+
+            // Get column count from mappings
+            int columnCount = ColumnMappings.Count;
+            if (columnCount == 0) return null;
+
+            for (int i = 0; i < columnCount; i++)
+            {
+                dataTable.Columns.Add(string.Format("Column{0}", i));
+            }
+
+            int startRow = UseFirstRowAsHeader ? 1 : 0;
+
+            if (_useDelimitedMode)
+            {
+                var delimiter = GetDelimiterChar();
+                for (int i = startRow; i < dataLines.Count; i++)
+                {
+                    var fields = ParseLine(dataLines[i], delimiter);
+                    if (fields.Length == 0 || (fields.Length == 1 && string.IsNullOrWhiteSpace(fields[0])))
+                        continue;
+
+                    var row = dataTable.NewRow();
+                    for (int j = 0; j < Math.Min(fields.Length, columnCount); j++)
+                    {
+                        row[j] = fields[j];
+                    }
+                    dataTable.Rows.Add(row);
+                }
+            }
+            else
+            {
+                var widths = GetColumnWidthsList();
+                if (widths.Count == 0) widths.Add(1000);
+
+                for (int i = startRow; i < dataLines.Count; i++)
+                {
+                    var fields = SplitByWidths(dataLines[i], widths);
+                    if (fields.Length == 0 || (fields.Length == 1 && string.IsNullOrWhiteSpace(fields[0])))
+                        continue;
+
+                    var row = dataTable.NewRow();
+                    for (int j = 0; j < Math.Min(fields.Length, columnCount); j++)
+                    {
+                        row[j] = fields[j].Trim();
+                    }
+                    dataTable.Rows.Add(row);
+                }
+            }
+
+            return dataTable;
+        }
+
+        /// <summary>
         /// Gets placements from the imported data with unit conversion
         /// </summary>
         public List<Placement> GetPlacements()
         {
             var placements = new List<Placement>();
-            if (PreviewData == null) return placements;
+
+            // Get full data, not just preview
+            var fullData = GetFullDataTable();
+            if (fullData == null || fullData.Rows.Count == 0) return placements;
 
             var refIndex = GetMappedColumnIndex("Reference");
             var xIndex = GetMappedColumnIndex("X");
@@ -639,7 +1211,7 @@ namespace PCBPlotter.ViewModels
             string side2Value = null;
             if (sideIndex >= 0)
             {
-                foreach (DataRow row in PreviewData.Rows)
+                foreach (DataRow row in fullData.Rows)
                 {
                     var sideStr = row[sideIndex].ToString().Trim().ToLowerInvariant();
                     if (string.IsNullOrEmpty(sideStr)) continue;
@@ -656,7 +1228,7 @@ namespace PCBPlotter.ViewModels
                 }
             }
 
-            foreach (DataRow row in PreviewData.Rows)
+            foreach (DataRow row in fullData.Rows)
             {
                 var placement = new Placement();
 
@@ -728,7 +1300,10 @@ namespace PCBPlotter.ViewModels
         public BomImportResult GetBomData()
         {
             var result = new BomImportResult();
-            if (PreviewData == null) return result;
+
+            // Get full data, not just preview
+            var fullData = GetFullDataTable();
+            if (fullData == null || fullData.Rows.Count == 0) return result;
 
             var partIndex = GetMappedColumnIndex("PartNumber");
             var refsIndex = GetMappedColumnIndex("References");
@@ -739,7 +1314,7 @@ namespace PCBPlotter.ViewModels
             var descIndex = GetMappedColumnIndex("Description");
             var qtyIndex = GetMappedColumnIndex("Quantity");
 
-            foreach (DataRow row in PreviewData.Rows)
+            foreach (DataRow row in fullData.Rows)
             {
                 var bomLine = new BomLine();
 

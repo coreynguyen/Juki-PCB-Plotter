@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using PCBPlotter.ViewModels;
 
 namespace PCBPlotter.Views
@@ -19,6 +20,21 @@ namespace PCBPlotter.Views
             {
                 vm.FilePath = filePath;
             }
+        }
+
+        private void ColumnBreakCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            var vm = DataContext as TextImportViewModel;
+            if (vm == null) return;
+
+            // Get click position in character units (assuming ~7px per character for Consolas 10pt)
+            var canvas = sender as Canvas;
+            if (canvas == null) return;
+
+            var position = e.GetPosition(canvas);
+            int charPosition = (int)(position.X / 7.0); // Approximate character width
+
+            vm.ToggleColumnBreak(charPosition);
         }
 
         private void PreviewDataGrid_AutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)

@@ -4,7 +4,7 @@
         xmlns:vm="clr-namespace:PCBPlotter.ViewModels"
         xmlns:converters="clr-namespace:PCBPlotter.Converters"
         xmlns:behaviors="clr-namespace:PCBPlotter.Behaviors"
-        Title="Import Text Data" Height="650" Width="900"
+        Title="Import Text Data" Height="700" Width="950"
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource BackgroundMediumBrush}">
 
@@ -21,54 +21,173 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- File Selection -->
-        <GroupBox Grid.Row="0" Header="Source File" Margin="0,0,0,8">
+        <!-- Data Source Selection -->
+        <GroupBox Grid.Row="0" Header="Data Source" Margin="0,0,0,8">
             <Grid Margin="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBox Text="{Binding FilePath, UpdateSourceTrigger=PropertyChanged}"
-                         VerticalAlignment="Center"/>
-                <Button Grid.Column="1" Content="Browse..." Command="{Binding BrowseCommand}"
-                        Margin="8,0,0,0" Padding="12,4"/>
+
+                <RadioButton Grid.Row="0" Grid.Column="0" Content="File:"
+                             IsChecked="{Binding UseFileSource}"
+                             VerticalAlignment="Center" Margin="0,0,8,4"/>
+                <TextBox Grid.Row="0" Grid.Column="1"
+                         Text="{Binding FilePath, UpdateSourceTrigger=PropertyChanged}"
+                         IsEnabled="{Binding UseFileSource}"
+                         VerticalAlignment="Center" Margin="0,0,0,4"/>
+                <Button Grid.Row="0" Grid.Column="2" Content="Browse..."
+                        Command="{Binding BrowseCommand}"
+                        IsEnabled="{Binding UseFileSource}"
+                        Margin="8,0,0,4" Padding="12,4"/>
+
+                <RadioButton Grid.Row="1" Grid.Column="0" Content="Clipboard:"
+                             IsChecked="{Binding UseClipboardSource}"
+                             VerticalAlignment="Center" Margin="0,4,8,0"/>
+                <Button Grid.Row="1" Grid.Column="1" Content="Paste from Clipboard"
+                        Command="{Binding PasteClipboardCommand}"
+                        IsEnabled="{Binding UseClipboardSource}"
+                        HorizontalAlignment="Left"
+                        Margin="0,4,0,0" Padding="12,4"/>
+                <TextBlock Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2"
+                           Text="{Binding ClipboardStatus}"
+                           VerticalAlignment="Center"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           Margin="8,4,0,0"/>
             </Grid>
         </GroupBox>
 
         <!-- Parsing Options -->
         <GroupBox Grid.Row="1" Header="Parse Options" Margin="0,0,0,8">
-            <WrapPanel Margin="8">
-                <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
-                    <TextBlock Text="Delimiter:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ComboBox Width="100" SelectedItem="{Binding SelectedDelimiter}"
-                              ItemsSource="{Binding Delimiters}"/>
+            <Grid Margin="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Parse Mode Selection -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock Text="Parse Mode:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <RadioButton Content="Delimited" IsChecked="{Binding UseDelimitedMode}"
+                                 VerticalAlignment="Center" Margin="0,0,16,0"/>
+                    <RadioButton Content="Fixed Width" IsChecked="{Binding UseFixedWidthMode}"
+                                 VerticalAlignment="Center" Margin="0,0,16,0"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
-                    <TextBlock Text="Encoding:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ComboBox Width="100" SelectedItem="{Binding SelectedEncoding}"
-                              ItemsSource="{Binding Encodings}"/>
-                </StackPanel>
+                <!-- Delimited Mode Options -->
+                <WrapPanel Grid.Row="1" Visibility="{Binding UseDelimitedMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
+                        <TextBlock Text="Delimiter:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox Width="100" SelectedItem="{Binding SelectedDelimiter}"
+                                  ItemsSource="{Binding Delimiters}"/>
+                    </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
-                    <TextBlock Text="Skip Rows:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox Text="{Binding SkipRows, UpdateSourceTrigger=PropertyChanged}"
-                             Width="50"/>
-                </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
+                        <TextBlock Text="Encoding:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox Width="100" SelectedItem="{Binding SelectedEncoding}"
+                                  ItemsSource="{Binding Encodings}"/>
+                    </StackPanel>
 
-                <CheckBox Content="Treat Consecutive Delimiters as One"
-                          IsChecked="{Binding MergeDelimiters}"
-                          VerticalAlignment="Center" Margin="0,0,16,4"/>
-            </WrapPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
+                        <TextBlock Text="Skip Rows:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding SkipRows, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="50"/>
+                    </StackPanel>
+
+                    <CheckBox Content="Treat Consecutive Delimiters as One"
+                              IsChecked="{Binding MergeDelimiters}"
+                              VerticalAlignment="Center" Margin="0,0,16,4"/>
+                </WrapPanel>
+
+                <!-- Fixed Width Mode Options -->
+                <StackPanel Grid.Row="1" Orientation="Vertical"
+                            Visibility="{Binding UseFixedWidthMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <WrapPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
+                            <TextBlock Text="Encoding:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox Width="100" SelectedItem="{Binding SelectedEncoding}"
+                                      ItemsSource="{Binding Encodings}"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,24,4">
+                            <TextBlock Text="Skip Rows:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Text="{Binding SkipRows, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="50"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                            <TextBlock Text="Column Widths:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Text="{Binding ColumnWidths, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="200" ToolTip="Comma-separated column widths (e.g., 10,15,8,20)"/>
+                        </StackPanel>
+
+                        <Button Content="Auto-Detect" Command="{Binding AutoDetectWidthsCommand}"
+                                Padding="8,4" Margin="0,0,8,4"
+                                ToolTip="Attempt to auto-detect column widths from data"/>
+                    </WrapPanel>
+                </StackPanel>
+            </Grid>
+        </GroupBox>
+
+        <!-- Fixed Width Preview (shows character ruler) -->
+        <GroupBox Grid.Row="2" Header="Column Width Preview (click to add/remove breaks)"
+                  Margin="0,0,0,8" MaxHeight="120"
+                  Visibility="{Binding UseFixedWidthMode, Converter={StaticResource BoolToVisibilityConverter}}">
+            <Grid Margin="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Character ruler -->
+                <TextBlock Grid.Row="0" FontFamily="Consolas" FontSize="10"
+                           Text="{Binding CharacterRuler}"
+                           Foreground="{StaticResource TextSecondaryBrush}"/>
+
+                <!-- Column break indicators -->
+                <Canvas Grid.Row="1" Height="12" Background="Transparent"
+                        x:Name="ColumnBreakCanvas" MouseLeftButtonDown="ColumnBreakCanvas_MouseLeftButtonDown">
+                    <ItemsControl ItemsSource="{Binding ColumnBreakPositions}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <Canvas/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Rectangle Width="2" Height="12" Fill="{StaticResource AccentPrimaryBrush}"
+                                           Canvas.Left="{Binding}"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Canvas>
+
+                <!-- Sample line with fixed-width font -->
+                <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled">
+                    <TextBlock FontFamily="Consolas" FontSize="12"
+                               Text="{Binding SampleLine}"
+                               Background="{StaticResource BackgroundLightBrush}"
+                               Padding="2"/>
+                </ScrollViewer>
+            </Grid>
         </GroupBox>
 
         <!-- Data Preview with Column Mapping in Headers -->
-        <GroupBox Grid.Row="2" Header="Data Preview and Column Mapping (drag header borders to resize)">
+        <GroupBox Grid.Row="3" Header="Data Preview and Column Mapping (drag header borders to resize)">
             <DataGrid x:Name="PreviewDataGrid"
                       ItemsSource="{Binding PreviewData}"
                       AutoGenerateColumns="True"
@@ -103,7 +222,7 @@
         </GroupBox>
 
         <!-- Import Options (only shown for placement imports) -->
-        <GroupBox Grid.Row="3" Header="Import Options" Margin="0,8,0,8"
+        <GroupBox Grid.Row="4" Header="Import Options" Margin="0,8,0,8"
                   Visibility="{Binding ShowPlacementOptions, Converter={StaticResource BoolToVisibilityConverter}}">
             <WrapPanel Margin="8">
                 <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
@@ -121,7 +240,7 @@
         </GroupBox>
 
         <!-- BOM Import Options (only shown for BOM imports) -->
-        <GroupBox Grid.Row="3" Header="BOM Import Options" Margin="0,8,0,8"
+        <GroupBox Grid.Row="4" Header="BOM Import Options" Margin="0,8,0,8"
                   Visibility="{Binding ShowPlacementOptions, Converter={StaticResource InverseBoolToVisibilityConverter}}">
             <WrapPanel Margin="8">
                 <RadioButton Content="Merge with existing BOM"
@@ -136,7 +255,7 @@
         </GroupBox>
 
         <!-- Buttons -->
-        <Grid Grid.Row="4">
+        <Grid Grid.Row="5">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
