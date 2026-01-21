@@ -1,98 +1,195 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
+using System.Linq;
 using System.Text;
+using Microsoft.Win32;
 
 namespace PCBPlotter.Services
 {
     /// <summary>
-    /// Application settings that persist between sessions
+    /// Application settings that persist between sessions using simple INI-style storage
     /// </summary>
-    [DataContract]
     public class AppSettings
     {
         private static readonly string SettingsFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "PCBPlotter");
 
-        private static readonly string SettingsFile = Path.Combine(SettingsFolder, "settings.json");
-        private static readonly string MappingsFile = Path.Combine(SettingsFolder, "columnmappings.json");
+        private static readonly string SettingsFile = Path.Combine(SettingsFolder, "settings.ini");
+        private static readonly string MappingsFile = Path.Combine(SettingsFolder, "mappings.ini");
 
         private static AppSettings _instance;
         public static AppSettings Instance => _instance ?? (_instance = Load());
 
         // General settings
-        [DataMember] public bool StartOnStartScreen { get; set; } = true;
-        [DataMember] public bool RememberLastProject { get; set; } = true;
-        [DataMember] public bool CheckForUpdates { get; set; } = false;
-        [DataMember] public string LastProjectPath { get; set; }
-        [DataMember] public List<string> RecentProjects { get; set; } = new List<string>();
+        public bool StartOnStartScreen { get; set; } = true;
+        public bool RememberLastProject { get; set; } = true;
+        public bool CheckForUpdates { get; set; } = false;
+        public string LastProjectPath { get; set; } = "";
+        public List<string> RecentProjects { get; set; } = new List<string>();
 
         // Theme settings
-        [DataMember] public string Theme { get; set; } = "Dark"; // Dark, Light, System
+        public string Theme { get; set; } = "System"; // Dark, Light, System
 
         // Units settings
-        [DataMember] public string DefaultLengthUnit { get; set; } = "mm";
-        [DataMember] public string DefaultAngleUnit { get; set; } = "Degrees";
-        [DataMember] public int DecimalPlaces { get; set; } = 3;
+        public string DefaultLengthUnit { get; set; } = "mm";
+        public string DefaultAngleUnit { get; set; } = "Degrees";
+        public int DecimalPlaces { get; set; } = 3;
 
         // Export settings
-        [DataMember] public string DefaultExportFormat { get; set; } = "Juki JX-100";
-        [DataMember] public bool IncludeCsvHeaders { get; set; } = true;
-        [DataMember] public bool AutoOpenExportFolder { get; set; } = false;
-        [DataMember] public string DefaultExportPath { get; set; } = "";
+        public string DefaultExportFormat { get; set; } = "Juki JX-100";
+        public bool IncludeCsvHeaders { get; set; } = true;
+        public bool AutoOpenExportFolder { get; set; } = false;
+        public string DefaultExportPath { get; set; } = "";
 
         // Display settings
-        [DataMember] public bool ShowGridByDefault { get; set; } = true;
-        [DataMember] public bool ShowLabelsByDefault { get; set; } = true;
-        [DataMember] public double DefaultGridSpacing { get; set; } = 1.0;
+        public bool ShowGridByDefault { get; set; } = true;
+        public bool ShowLabelsByDefault { get; set; } = true;
+        public double DefaultGridSpacing { get; set; } = 1.0;
 
         // Column mappings for text import
-        [DataMember] public Dictionary<string, SavedColumnMapping> SavedMappings { get; set; }
-            = new Dictionary<string, SavedColumnMapping>();
+        public Dictionary<string, List<string>> SavedMappings { get; set; } = new Dictionary<string, List<string>>();
+
+        /// <summary>
+        /// Detects if Windows is using dark mode
+        /// </summary>
+        public static bool IsSystemDarkMode()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    if (key != null)
+                    {
+                        var value = key.GetValue("AppsUseLightTheme");
+                        if (value != null)
+                        {
+                            return (int)value == 0; // 0 = dark mode, 1 = light mode
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Default to dark if we can't read the registry
+            }
+            return true; // Default to dark mode
+        }
+
+        /// <summary>
+        /// Returns true if dark theme should be used based on settings
+        /// </summary>
+        public bool ShouldUseDarkTheme()
+        {
+            if (Theme == "Dark") return true;
+            if (Theme == "Light") return false;
+            // "System" - detect from Windows
+            return IsSystemDarkMode();
+        }
 
         public static AppSettings Load()
         {
+            var settings = new AppSettings();
             try
             {
                 if (File.Exists(SettingsFile))
                 {
-                    var serializer = new DataContractJsonSerializer(typeof(AppSettings));
-                    using (var stream = File.OpenRead(SettingsFile))
+                    var lines = File.ReadAllLines(SettingsFile);
+                    foreach (var line in lines)
                     {
-                        return (AppSettings)serializer.ReadObject(stream);
+                        var parts = line.Split(new[] { '=' }, 2);
+                        if (parts.Length != 2) continue;
+
+                        var key = parts[0].Trim();
+                        var value = parts[1].Trim();
+
+                        switch (key)
+                        {
+                            case "StartOnStartScreen": settings.StartOnStartScreen = value == "true"; break;
+                            case "RememberLastProject": settings.RememberLastProject = value == "true"; break;
+                            case "CheckForUpdates": settings.CheckForUpdates = value == "true"; break;
+                            case "LastProjectPath": settings.LastProjectPath = value; break;
+                            case "Theme": settings.Theme = value; break;
+                            case "DefaultLengthUnit": settings.DefaultLengthUnit = value; break;
+                            case "DefaultAngleUnit": settings.DefaultAngleUnit = value; break;
+                            case "DecimalPlaces": int.TryParse(value, out int dp); settings.DecimalPlaces = dp; break;
+                            case "DefaultExportFormat": settings.DefaultExportFormat = value; break;
+                            case "IncludeCsvHeaders": settings.IncludeCsvHeaders = value == "true"; break;
+                            case "AutoOpenExportFolder": settings.AutoOpenExportFolder = value == "true"; break;
+                            case "DefaultExportPath": settings.DefaultExportPath = value; break;
+                            case "ShowGridByDefault": settings.ShowGridByDefault = value == "true"; break;
+                            case "ShowLabelsByDefault": settings.ShowLabelsByDefault = value == "true"; break;
+                            case "DefaultGridSpacing": double.TryParse(value, out double gs); settings.DefaultGridSpacing = gs; break;
+                            case "RecentProjects": settings.RecentProjects = value.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries).ToList(); break;
+                        }
+                    }
+                }
+
+                // Load mappings
+                if (File.Exists(MappingsFile))
+                {
+                    var lines = File.ReadAllLines(MappingsFile);
+                    foreach (var line in lines)
+                    {
+                        var parts = line.Split(new[] { '=' }, 2);
+                        if (parts.Length == 2)
+                        {
+                            var name = parts[0].Trim();
+                            var fields = parts[1].Split(new[] { '|' }, StringSplitOptions.None).ToList();
+                            settings.SavedMappings[name] = fields;
+                        }
                     }
                 }
             }
-            catch (Exception)
+            catch
             {
-                // If loading fails, return default settings
+                // Return default settings on error
             }
 
-            return new AppSettings();
+            return settings;
         }
 
         public void Save()
         {
             try
             {
-                // Ensure directory exists
                 if (!Directory.Exists(SettingsFolder))
                 {
                     Directory.CreateDirectory(SettingsFolder);
                 }
 
-                var serializer = new DataContractJsonSerializer(typeof(AppSettings));
-                using (var stream = File.Create(SettingsFile))
+                var sb = new StringBuilder();
+                sb.AppendLine($"StartOnStartScreen={StartOnStartScreen.ToString().ToLower()}");
+                sb.AppendLine($"RememberLastProject={RememberLastProject.ToString().ToLower()}");
+                sb.AppendLine($"CheckForUpdates={CheckForUpdates.ToString().ToLower()}");
+                sb.AppendLine($"LastProjectPath={LastProjectPath}");
+                sb.AppendLine($"Theme={Theme}");
+                sb.AppendLine($"DefaultLengthUnit={DefaultLengthUnit}");
+                sb.AppendLine($"DefaultAngleUnit={DefaultAngleUnit}");
+                sb.AppendLine($"DecimalPlaces={DecimalPlaces}");
+                sb.AppendLine($"DefaultExportFormat={DefaultExportFormat}");
+                sb.AppendLine($"IncludeCsvHeaders={IncludeCsvHeaders.ToString().ToLower()}");
+                sb.AppendLine($"AutoOpenExportFolder={AutoOpenExportFolder.ToString().ToLower()}");
+                sb.AppendLine($"DefaultExportPath={DefaultExportPath}");
+                sb.AppendLine($"ShowGridByDefault={ShowGridByDefault.ToString().ToLower()}");
+                sb.AppendLine($"ShowLabelsByDefault={ShowLabelsByDefault.ToString().ToLower()}");
+                sb.AppendLine($"DefaultGridSpacing={DefaultGridSpacing}");
+                sb.AppendLine($"RecentProjects={string.Join("|", RecentProjects)}");
+
+                File.WriteAllText(SettingsFile, sb.ToString());
+
+                // Save mappings
+                var mappingSb = new StringBuilder();
+                foreach (var kvp in SavedMappings)
                 {
-                    serializer.WriteObject(stream, this);
+                    mappingSb.AppendLine($"{kvp.Key}={string.Join("|", kvp.Value)}");
                 }
+                File.WriteAllText(MappingsFile, mappingSb.ToString());
             }
-            catch (Exception)
+            catch
             {
-                // Silently fail if we can't save settings
+                // Silently fail
             }
         }
 
@@ -100,13 +197,9 @@ namespace PCBPlotter.Services
         {
             if (string.IsNullOrEmpty(path)) return;
 
-            // Remove if already exists
             RecentProjects.Remove(path);
-
-            // Add to front
             RecentProjects.Insert(0, path);
 
-            // Keep only last 10
             if (RecentProjects.Count > 10)
             {
                 RecentProjects.RemoveRange(10, RecentProjects.Count - 10);
@@ -118,12 +211,7 @@ namespace PCBPlotter.Services
 
         public void SaveColumnMapping(string name, List<string> fieldNames)
         {
-            SavedMappings[name] = new SavedColumnMapping
-            {
-                Name = name,
-                FieldNames = fieldNames,
-                SavedDate = DateTime.Now
-            };
+            SavedMappings[name] = fieldNames;
             Save();
         }
 
@@ -131,7 +219,7 @@ namespace PCBPlotter.Services
         {
             if (SavedMappings.TryGetValue(name, out var mapping))
             {
-                return mapping.FieldNames;
+                return mapping;
             }
             return null;
         }
@@ -143,13 +231,5 @@ namespace PCBPlotter.Services
                 Save();
             }
         }
-    }
-
-    [DataContract]
-    public class SavedColumnMapping
-    {
-        [DataMember] public string Name { get; set; }
-        [DataMember] public List<string> FieldNames { get; set; }
-        [DataMember] public DateTime SavedDate { get; set; }
     }
 }
