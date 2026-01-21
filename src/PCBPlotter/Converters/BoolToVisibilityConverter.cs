@@ -100,6 +100,44 @@ namespace PCBPlotter.Converters
     }
 
     /// <summary>
+    /// Inverts a boolean value
+    /// </summary>
+    public class InverseBoolConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value is bool boolValue)
+                return !boolValue;
+            return true;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value is bool boolValue)
+                return !boolValue;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Returns a default value if the input is null
+    /// </summary>
+    public class NullToDefaultConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value == null)
+                return parameter ?? string.Empty;
+            return value;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            return value;
+        }
+    }
+
+    /// <summary>
     /// Converts a Color to a SolidColorBrush
     /// </summary>
     public class ColorToBrushConverter : IValueConverter

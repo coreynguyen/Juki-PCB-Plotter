@@ -147,6 +147,7 @@
     <Compile Include="ViewModels\TextImportViewModel.cs" />
     <Compile Include="Controls\DesignCanvas.cs" />
     <Compile Include="Controls\CoordinateDisplay.cs" />
+    <Compile Include="Behaviors\DataGridZoomBehavior.cs" />
     <Compile Include="Converters\BoolToVisibilityConverter.cs" />
     <Compile Include="Converters\EnumToBoolConverter.cs" />
     <Compile Include="Converters\EnumToDescriptionConverter.cs" />
