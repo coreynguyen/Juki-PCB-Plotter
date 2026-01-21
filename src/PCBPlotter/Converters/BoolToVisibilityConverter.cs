@@ -100,22 +100,6 @@ namespace PCBPlotter.Converters
     }
 
     /// <summary>
-    /// Inverts a boolean value
-    /// </summary>
-    public class InverseBoolConverter : IValueConverter
-    {
-        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-        {
-            return value is bool && !(bool)value;
-        }
-
-        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
-        {
-            return value is bool && !(bool)value;
-        }
-    }
-
-    /// <summary>
     /// Inverts boolean and converts to Visibility
     /// </summary>
     public class InverseBoolToVisibilityConverter : IValueConverter
