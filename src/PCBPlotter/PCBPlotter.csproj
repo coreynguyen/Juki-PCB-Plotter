@@ -124,6 +124,7 @@
     <Compile Include="Controls\DesignCanvas.cs" />
     <Compile Include="Controls\CoordinateDisplay.cs" />
     <Compile Include="Converters\BoolToVisibilityConverter.cs" />
+    <Compile Include="Converters\EnumToBoolConverter.cs" />
     <Compile Include="Converters\EnumToDescriptionConverter.cs" />
     <Compile Include="Services\WindowService.cs" />
     <Compile Include="Services\WpfDrawingRenderer.cs" />
