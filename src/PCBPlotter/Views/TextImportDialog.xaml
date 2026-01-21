@@ -77,7 +77,13 @@
                       VerticalScrollBarVisibility="Auto"
                       MinColumnWidth="80"
                       ColumnWidth="120"
+                      Validation.ErrorTemplate="{x:Null}"
                       behaviors:DataGridZoomBehavior.EnableZoom="True">
+                <DataGrid.RowStyle>
+                    <Style TargetType="DataGridRow">
+                        <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
+                    </Style>
+                </DataGrid.RowStyle>
                 <DataGrid.ColumnHeaderStyle>
                     <Style TargetType="DataGridColumnHeader">
                         <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
@@ -112,22 +118,33 @@
         <Grid Grid.Row="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <Button Grid.Column="0" Content="Save Mapping..." Command="{Binding SaveMappingCommand}"
-                    Padding="12,6"/>
+            <TextBlock Grid.Column="0" Text="Mapping:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <ComboBox Grid.Column="1" Width="180"
+                      ItemsSource="{Binding SavedMappingNames}"
+                      SelectedItem="{Binding SelectedMappingName, Mode=TwoWay}"
+                      IsEditable="False"
+                      ToolTip="Select a saved mapping to apply"/>
+            <Button Grid.Column="2" Content="Save" Command="{Binding SaveMappingCommand}"
+                    Padding="12,6" Margin="8,0,0,0" ToolTip="Save current mappings"/>
+            <Button Grid.Column="3" Content="Delete" Command="{Binding DeleteMappingCommand}"
+                    Padding="12,6" Margin="4,0,0,0" ToolTip="Delete selected mapping"/>
 
-            <StackPanel Grid.Column="2" Orientation="Horizontal">
+            <StackPanel Grid.Column="5" Orientation="Horizontal">
                 <TextBlock VerticalAlignment="Center" Margin="0,0,16,0">
                     <Run Text="Records: "/>
                     <Run Text="{Binding RecordCount, Mode=OneWay}" FontWeight="SemiBold"/>
                 </TextBlock>
             </StackPanel>
 
-            <StackPanel Grid.Column="3" Orientation="Horizontal">
+            <StackPanel Grid.Column="6" Orientation="Horizontal">
                 <Button Content="Import" Command="{Binding ImportCommand}"
                         IsDefault="True" Padding="20,6" Margin="0,0,8,0"/>
                 <Button Content="Cancel" IsCancel="True" Padding="20,6"/>

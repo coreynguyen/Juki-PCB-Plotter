@@ -31,32 +31,53 @@ namespace PCBPlotter.Views
             string columnName = e.PropertyName;
             if (columnName.StartsWith("Column") && int.TryParse(columnName.Substring(6), out columnIndex))
             {
-                // Ensure we have a mapping for this column
-                while (vm.ColumnMappings.Count <= columnIndex)
+                // Check if we have a mapping for this column
+                if (columnIndex >= vm.ColumnMappings.Count)
+                    return;
+
+                var mapping = vm.ColumnMappings[columnIndex];
+
+                // Create a StackPanel with column name and ComboBox
+                var stackPanel = new StackPanel
                 {
-                    vm.ColumnMappings.Add(new ColumnMapping());
+                    Orientation = Orientation.Vertical,
+                    Margin = new Thickness(2)
+                };
+
+                // Add original header text if available
+                if (!string.IsNullOrEmpty(mapping.HeaderText) && !mapping.HeaderText.StartsWith("Column "))
+                {
+                    stackPanel.Children.Add(new TextBlock
+                    {
+                        Text = mapping.HeaderText,
+                        FontWeight = FontWeights.SemiBold,
+                        FontSize = 10,
+                        Margin = new Thickness(0, 0, 0, 2)
+                    });
                 }
 
-                // Create a ComboBox for the header
+                // Create a ComboBox for field selection
                 var comboBox = new ComboBox
                 {
                     ItemsSource = vm.AvailableFields,
                     DisplayMemberPath = "DisplayName",
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0)
+                    MinWidth = 80
                 };
 
                 // Bind the selected item to the column mapping
                 var binding = new Binding("SelectedField")
                 {
-                    Source = vm.ColumnMappings[columnIndex],
+                    Source = mapping,
                     Mode = BindingMode.TwoWay
                 };
                 comboBox.SetBinding(ComboBox.SelectedItemProperty, binding);
 
-                // Set the header to the ComboBox
-                e.Column.Header = comboBox;
-                e.Column.MinWidth = 80;
+                stackPanel.Children.Add(comboBox);
+
+                // Set the header to the StackPanel
+                e.Column.Header = stackPanel;
+                e.Column.MinWidth = 90;
             }
         }
     }

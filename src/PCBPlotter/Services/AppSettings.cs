@@ -48,8 +48,9 @@ namespace PCBPlotter.Services
         public bool ShowLabelsByDefault { get; set; } = true;
         public double DefaultGridSpacing { get; set; } = 1.0;
 
-        // Column mappings for text import
-        public Dictionary<string, List<string>> SavedMappings { get; set; } = new Dictionary<string, List<string>>();
+        // Column mappings for text import (separated by type)
+        public Dictionary<string, List<string>> PlacementMappings { get; set; } = new Dictionary<string, List<string>>();
+        public Dictionary<string, List<string>> BomMappings { get; set; } = new Dictionary<string, List<string>>();
 
         /// <summary>
         /// Detects if Windows is using dark mode
@@ -126,7 +127,7 @@ namespace PCBPlotter.Services
                     }
                 }
 
-                // Load mappings
+                // Load mappings (format: TYPE:NAME=field1|field2|...)
                 if (File.Exists(MappingsFile))
                 {
                     var lines = File.ReadAllLines(MappingsFile);
@@ -135,9 +136,22 @@ namespace PCBPlotter.Services
                         var parts = line.Split(new[] { '=' }, 2);
                         if (parts.Length == 2)
                         {
-                            var name = parts[0].Trim();
+                            var key = parts[0].Trim();
                             var fields = parts[1].Split(new[] { '|' }, StringSplitOptions.None).ToList();
-                            settings.SavedMappings[name] = fields;
+
+                            if (key.StartsWith("PNP:"))
+                            {
+                                settings.PlacementMappings[key.Substring(4)] = fields;
+                            }
+                            else if (key.StartsWith("BOM:"))
+                            {
+                                settings.BomMappings[key.Substring(4)] = fields;
+                            }
+                            else
+                            {
+                                // Legacy format - assume placement
+                                settings.PlacementMappings[key] = fields;
+                            }
                         }
                     }
                 }
@@ -179,11 +193,15 @@ namespace PCBPlotter.Services
 
                 File.WriteAllText(SettingsFile, sb.ToString());
 
-                // Save mappings
+                // Save mappings with type prefixes
                 var mappingSb = new StringBuilder();
-                foreach (var kvp in SavedMappings)
+                foreach (var kvp in PlacementMappings)
                 {
-                    mappingSb.AppendLine($"{kvp.Key}={string.Join("|", kvp.Value)}");
+                    mappingSb.AppendLine($"PNP:{kvp.Key}={string.Join("|", kvp.Value)}");
+                }
+                foreach (var kvp in BomMappings)
+                {
+                    mappingSb.AppendLine($"BOM:{kvp.Key}={string.Join("|", kvp.Value)}");
                 }
                 File.WriteAllText(MappingsFile, mappingSb.ToString());
             }
@@ -209,27 +227,36 @@ namespace PCBPlotter.Services
             Save();
         }
 
-        public void SaveColumnMapping(string name, List<string> fieldNames)
+        public void SaveColumnMapping(string name, List<string> fieldNames, bool isBom)
         {
-            SavedMappings[name] = fieldNames;
+            var mappings = isBom ? BomMappings : PlacementMappings;
+            mappings[name] = fieldNames;
             Save();
         }
 
-        public List<string> LoadColumnMapping(string name)
+        public List<string> LoadColumnMapping(string name, bool isBom)
         {
-            if (SavedMappings.TryGetValue(name, out var mapping))
+            var mappings = isBom ? BomMappings : PlacementMappings;
+            if (mappings.TryGetValue(name, out var mapping))
             {
                 return mapping;
             }
             return null;
         }
 
-        public void DeleteColumnMapping(string name)
+        public void DeleteColumnMapping(string name, bool isBom)
         {
-            if (SavedMappings.Remove(name))
+            var mappings = isBom ? BomMappings : PlacementMappings;
+            if (mappings.Remove(name))
             {
                 Save();
             }
+        }
+
+        public IEnumerable<string> GetSavedMappingNames(bool isBom)
+        {
+            var mappings = isBom ? BomMappings : PlacementMappings;
+            return mappings.Keys;
         }
     }
 }

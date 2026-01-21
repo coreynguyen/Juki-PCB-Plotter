@@ -17,6 +17,17 @@ namespace PCBPlotter.Views
             DesignCanvas.CursorPositionChanged += OnCursorPositionChanged;
             DesignCanvas.SelectionRectCompleted += OnSelectionRectCompleted;
             DesignCanvas.PointClicked += OnPointClicked;
+            DesignCanvas.SizeChanged += OnCanvasSizeChanged;
+        }
+
+        private void OnCanvasSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            var vm = DataContext as OutputPlotViewModel;
+            if (vm != null)
+            {
+                vm.ViewportWidth = e.NewSize.Width;
+                vm.ViewportHeight = e.NewSize.Height;
+            }
         }
 
         private void OnCursorPositionChanged(object sender, Point worldPos)

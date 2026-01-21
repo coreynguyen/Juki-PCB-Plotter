@@ -145,6 +145,9 @@ namespace PCBPlotter.ViewModels
                 {
                     UpdateAvailableFields();
                     ShowPlacementOptions = (value == "Placements (PNP)");
+                    RefreshSavedMappingNames();
+                    _selectedMappingName = null;
+                    OnPropertyChanged(nameof(SelectedMappingName));
                 }
             }
         }
@@ -232,6 +235,22 @@ namespace PCBPlotter.ViewModels
         public ICommand BrowseCommand { get; private set; }
         public ICommand ImportCommand { get; private set; }
         public ICommand SaveMappingCommand { get; private set; }
+        public ICommand DeleteMappingCommand { get; private set; }
+
+        private string _selectedMappingName;
+        public string SelectedMappingName
+        {
+            get { return _selectedMappingName; }
+            set
+            {
+                if (SetProperty(ref _selectedMappingName, value) && !string.IsNullOrEmpty(value))
+                {
+                    LoadMapping(value);
+                }
+            }
+        }
+
+        public ObservableCollection<string> SavedMappingNames { get; } = new ObservableCollection<string>();
 
         public TextImportViewModel()
         {
@@ -239,6 +258,7 @@ namespace PCBPlotter.ViewModels
             AvailableFields = new ObservableCollection<ImportField>();
             UpdateAvailableFields();
             InitializeCommands();
+            RefreshSavedMappingNames();
         }
 
         private void InitializeCommands()
@@ -246,6 +266,17 @@ namespace PCBPlotter.ViewModels
             BrowseCommand = new RelayCommand(ExecuteBrowse);
             ImportCommand = new RelayCommand(ExecuteImport, () => PreviewData != null && PreviewData.Rows.Count > 0);
             SaveMappingCommand = new RelayCommand(ExecuteSaveMapping);
+            DeleteMappingCommand = new RelayCommand(ExecuteDeleteMapping, () => !string.IsNullOrEmpty(SelectedMappingName));
+        }
+
+        private void RefreshSavedMappingNames()
+        {
+            SavedMappingNames.Clear();
+            bool isBom = (ImportType == "BOM");
+            foreach (var name in Services.AppSettings.Instance.GetSavedMappingNames(isBom))
+            {
+                SavedMappingNames.Add(name);
+            }
         }
 
         private void UpdateAvailableFields()
@@ -349,25 +380,27 @@ namespace PCBPlotter.ViewModels
                 var firstFields = ParseLine(firstLine, delimiter);
                 var columnCount = firstFields.Length;
 
-                // Create columns
+                // Create columns - use consistent 0-indexed naming for DataGrid binding
                 ColumnMappings.Clear();
                 for (int i = 0; i < columnCount; i++)
                 {
-                    var columnName = UseFirstRowAsHeader ? firstFields[i] : string.Format("Column {0}", i + 1);
-                    if (string.IsNullOrWhiteSpace(columnName))
-                        columnName = string.Format("Column {0}", i + 1);
+                    var displayName = UseFirstRowAsHeader ? firstFields[i] : "";
+                    if (string.IsNullOrWhiteSpace(displayName))
+                        displayName = string.Format("Column {0}", i + 1);
 
-                    dataTable.Columns.Add(columnName);
+                    // Always use Column0, Column1, etc. for DataTable column names (for consistent binding)
+                    // The display name will be shown in tooltips
+                    dataTable.Columns.Add(string.Format("Column{0}", i));
 
                     var mapping = new ColumnMapping
                     {
                         ColumnIndex = i,
-                        HeaderText = columnName,
+                        HeaderText = displayName,
                         SelectedField = AvailableFields[0]
                     };
 
-                    // Auto-detect field based on column name
-                    mapping.SelectedField = DetectField(columnName);
+                    // Auto-detect field based on header name
+                    mapping.SelectedField = DetectField(displayName);
                     ColumnMappings.Add(mapping);
                 }
 
@@ -511,24 +544,55 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteSaveMapping()
         {
-            // Generate a default name based on file name
-            string defaultName = Path.GetFileNameWithoutExtension(FilePath ?? "Mapping") + "_" + DateTime.Now.ToString("yyyyMMdd");
+            bool isBom = (ImportType == "BOM");
+
+            // Use a dialog to get the name or default if none provided
+            string defaultName = SelectedMappingName;
+            if (string.IsNullOrWhiteSpace(defaultName))
+            {
+                defaultName = Path.GetFileNameWithoutExtension(FilePath ?? "Mapping");
+            }
+
+            // Prompt for name
+            var inputDialog = new Views.InputDialog("Save Mapping", "Enter a name for this mapping:", defaultName);
+            if (inputDialog.ShowDialog() != true)
+                return;
+
+            var mappingName = inputDialog.Value;
+            if (string.IsNullOrWhiteSpace(mappingName))
+                return;
 
             // Collect the field names from current mappings
             var fieldNames = ColumnMappings
                 .Select(m => m.SelectedField?.FieldName ?? "")
                 .ToList();
 
-            // Save to settings using default name
-            Services.AppSettings.Instance.SaveColumnMapping(defaultName, fieldNames);
+            // Save to settings
+            Services.AppSettings.Instance.SaveColumnMapping(mappingName, fieldNames, isBom);
 
-            MessageBox.Show($"Mapping saved as '{defaultName}'.\n\nSettings are stored in:\n{Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)}\\PCBPlotter",
-                "Mapping Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+            // Refresh dropdown and select the saved mapping
+            RefreshSavedMappingNames();
+            _selectedMappingName = mappingName;
+            OnPropertyChanged(nameof(SelectedMappingName));
+        }
+
+        private void ExecuteDeleteMapping()
+        {
+            if (string.IsNullOrEmpty(SelectedMappingName))
+                return;
+
+            bool isBom = (ImportType == "BOM");
+            Services.AppSettings.Instance.DeleteColumnMapping(SelectedMappingName, isBom);
+
+            RefreshSavedMappingNames();
+            _selectedMappingName = null;
+            OnPropertyChanged(nameof(SelectedMappingName));
         }
 
         public void LoadMapping(string name)
         {
-            var fieldNames = Services.AppSettings.Instance.LoadColumnMapping(name);
+            bool isBom = (ImportType == "BOM");
+            var fieldNames = Services.AppSettings.Instance.LoadColumnMapping(name, isBom);
             if (fieldNames == null) return;
 
             for (int i = 0; i < Math.Min(fieldNames.Count, ColumnMappings.Count); i++)
@@ -539,11 +603,6 @@ namespace PCBPlotter.ViewModels
                     ColumnMappings[i].SelectedField = field;
                 }
             }
-        }
-
-        public IEnumerable<string> GetSavedMappingNames()
-        {
-            return Services.AppSettings.Instance.SavedMappings.Keys;
         }
 
         /// <summary>

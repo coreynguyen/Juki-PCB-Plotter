@@ -290,13 +290,17 @@ namespace PCBPlotter.ViewModels
 
         #region Command Implementations
 
+        // Viewport dimensions (set by the view)
+        public double ViewportWidth { get; set; } = 800;
+        public double ViewportHeight { get; set; } = 600;
+
         private void ExecuteZoomFit()
         {
             if (Project == null || !Project.Placements.Any())
             {
                 Zoom = 1.0;
-                PanX = 0;
-                PanY = 0;
+                PanX = ViewportWidth / 2;
+                PanY = ViewportHeight / 2;
                 return;
             }
 
@@ -321,6 +325,15 @@ namespace PCBPlotter.ViewModels
                 if (fiducial.Y > maxY) maxY = fiducial.Y;
             }
 
+            // Handle edge cases
+            if (minX == double.MaxValue)
+            {
+                Zoom = 1.0;
+                PanX = ViewportWidth / 2;
+                PanY = ViewportHeight / 2;
+                return;
+            }
+
             // Add margin (10%)
             double margin = Math.Max(maxX - minX, maxY - minY) * 0.1;
             if (margin < 5) margin = 5;
@@ -335,19 +348,27 @@ namespace PCBPlotter.ViewModels
             if (boundsWidth <= 0) boundsWidth = 100;
             if (boundsHeight <= 0) boundsHeight = 100;
 
-            // Calculate zoom to fit (assuming 800x600 viewport for now - will be updated by view)
-            double viewportWidth = 800;
-            double viewportHeight = 600;
+            // Calculate zoom to fit
+            double zoomX = ViewportWidth / boundsWidth;
+            double zoomY = ViewportHeight / boundsHeight;
+            Zoom = Math.Min(zoomX, zoomY) * 0.85; // 85% to leave visual margin
 
-            double zoomX = viewportWidth / boundsWidth;
-            double zoomY = viewportHeight / boundsHeight;
-            Zoom = Math.Min(zoomX, zoomY) * 0.9; // 90% to leave margin
-
-            // Calculate pan to center
+            // Calculate world center
             double centerX = (minX + maxX) / 2;
             double centerY = (minY + maxY) / 2;
-            PanX = viewportWidth / 2 - centerX * Zoom;
-            PanY = viewportHeight / 2 - centerY * Zoom;
+
+            // Calculate pan to center content
+            // WorldToScreen: screenX = world.X * Zoom + PanX
+            // We want: screenCenter = centerX * Zoom + PanX
+            // So: PanX = screenCenter - centerX * Zoom
+            PanX = (ViewportWidth / 2) - (centerX * Zoom);
+
+            // WorldToScreen: screenY = ViewportHeight - (world.Y * Zoom + PanY)
+            // We want: screenCenter = ViewportHeight - (centerY * Zoom + PanY)
+            // ViewportHeight/2 = ViewportHeight - (centerY * Zoom + PanY)
+            // centerY * Zoom + PanY = ViewportHeight / 2
+            // PanY = ViewportHeight/2 - centerY * Zoom
+            PanY = (ViewportHeight / 2) - (centerY * Zoom);
 
             Publish(new RequestRefreshEvent { FullRefresh = true });
         }

@@ -49,7 +49,20 @@
                   CanUserAddRows="False"
                   GridLinesVisibility="Horizontal"
                   HeadersVisibility="Column"
+                  Validation.ErrorTemplate="{x:Null}"
                   behaviors:DataGridZoomBehavior.EnableZoom="True">
+
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
+                </Style>
+            </DataGrid.RowStyle>
+
+            <DataGrid.CellStyle>
+                <Style TargetType="DataGridCell">
+                    <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
+                </Style>
+            </DataGrid.CellStyle>
 
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Part Number" Binding="{Binding PartNumber}" Width="150"/>

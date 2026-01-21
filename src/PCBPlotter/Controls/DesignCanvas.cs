@@ -578,8 +578,8 @@ namespace PCBPlotter.Controls
                     double deltaX = mousePos.X - _lastMousePosition.X;
                     double deltaY = mousePos.Y - _lastMousePosition.Y;
 
-                    // Inverted: drag right moves view right (camera pan behavior)
-                    PanX -= deltaX;
+                    // Drag to pan: drag right = view moves right
+                    PanX += deltaX;
                     PanY -= deltaY;
 
                     InvalidateVisual();

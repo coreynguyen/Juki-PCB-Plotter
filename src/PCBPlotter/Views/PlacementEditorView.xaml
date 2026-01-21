@@ -59,7 +59,20 @@
                   GridLinesVisibility="Horizontal"
                   HeadersVisibility="Column"
                   IsReadOnly="False"
+                  Validation.ErrorTemplate="{x:Null}"
                   behaviors:DataGridZoomBehavior.EnableZoom="True">
+
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
+                </Style>
+            </DataGrid.RowStyle>
+
+            <DataGrid.CellStyle>
+                <Style TargetType="DataGridCell">
+                    <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
+                </Style>
+            </DataGrid.CellStyle>
 
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Reference" Binding="{Binding Reference}" Width="80"/>
@@ -82,7 +95,8 @@
                                       DisplayMemberPath="PartNumber"
                                       IsEditable="True"
                                       IsTextSearchEnabled="True"
-                                      TextSearch.TextPath="PartNumber"/>
+                                      TextSearch.TextPath="PartNumber"
+                                      LostFocus="PartNumberComboBox_LostFocus"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellEditingTemplate>
                 </DataGridTemplateColumn>
