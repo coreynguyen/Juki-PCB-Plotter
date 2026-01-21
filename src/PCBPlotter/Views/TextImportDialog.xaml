@@ -61,51 +61,33 @@
             </WrapPanel>
         </GroupBox>
 
-        <!-- Data Preview with Column Mapping -->
-        <GroupBox Grid.Row="2" Header="Data Preview and Column Mapping">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-
-                <!-- Column Mapping Header -->
-                <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
-                        BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1,1,1,0">
-                    <ItemsControl ItemsSource="{Binding ColumnMappings}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Width="120" BorderBrush="{StaticResource BorderDarkBrush}"
-                                        BorderThickness="0,0,1,0">
-                                    <ComboBox Margin="2" ItemsSource="{Binding DataContext.AvailableFields,
-                                              RelativeSource={RelativeSource AncestorType=Window}}"
-                                              SelectedItem="{Binding SelectedField}"
-                                              DisplayMemberPath="DisplayName"/>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </Border>
-
-                <!-- Data Grid (Ctrl+Scroll to zoom) -->
-                <DataGrid Grid.Row="1" ItemsSource="{Binding PreviewData}"
-                          AutoGenerateColumns="True"
-                          IsReadOnly="True"
-                          CanUserAddRows="False"
-                          CanUserDeleteRows="False"
-                          CanUserReorderColumns="False"
-                          HeadersVisibility="None"
-                          HorizontalScrollBarVisibility="Auto"
-                          VerticalScrollBarVisibility="Auto"
-                          MinColumnWidth="60"
-                          ColumnWidth="120"
-                          behaviors:DataGridZoomBehavior.EnableZoom="True"/>
-            </Grid>
+        <!-- Data Preview with Column Mapping in Headers -->
+        <GroupBox Grid.Row="2" Header="Data Preview and Column Mapping (drag header borders to resize)">
+            <DataGrid x:Name="PreviewDataGrid"
+                      ItemsSource="{Binding PreviewData}"
+                      AutoGenerateColumns="True"
+                      AutoGeneratingColumn="PreviewDataGrid_AutoGeneratingColumn"
+                      IsReadOnly="True"
+                      CanUserAddRows="False"
+                      CanUserDeleteRows="False"
+                      CanUserReorderColumns="False"
+                      CanUserResizeColumns="True"
+                      HeadersVisibility="Column"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      MinColumnWidth="80"
+                      ColumnWidth="120"
+                      behaviors:DataGridZoomBehavior.EnableZoom="True">
+                <DataGrid.ColumnHeaderStyle>
+                    <Style TargetType="DataGridColumnHeader">
+                        <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
+                        <Setter Property="BorderBrush" Value="{StaticResource BorderDarkBrush}"/>
+                        <Setter Property="BorderThickness" Value="0,0,1,1"/>
+                        <Setter Property="Padding" Value="2"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    </Style>
+                </DataGrid.ColumnHeaderStyle>
+            </DataGrid>
         </GroupBox>
 
         <!-- Import Options (only shown for placement imports) -->
