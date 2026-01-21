@@ -43,11 +43,33 @@
                 </StackPanel>
 
                 <!-- Selection Tools -->
-                <StackPanel Orientation="Horizontal">
+                <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
                     <Button Content="Select All" Command="{Binding SelectAllCommand}" Padding="8,4" Margin="0,0,2,0"/>
                     <Button Content="Select None" Command="{Binding SelectNoneCommand}" Padding="8,4" Margin="0,0,2,0"/>
                     <Button Content="Same Part" Command="{Binding SelectSamePartCommand}" Padding="8,4" Margin="0,0,2,0"/>
                     <Button Content="Same Package" Command="{Binding SelectSamePackageCommand}" Padding="8,4"/>
+                </StackPanel>
+
+                <!-- Selection Sets (3ds Max style) -->
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Set:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <ComboBox x:Name="SelectionSetComboBox" Width="150"
+                              ItemsSource="{Binding SelectionSetNames}"
+                              Text="{Binding CurrentSelectionSetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              IsEditable="True"
+                              IsTextSearchEnabled="False"
+                              StaysOpenOnEdit="True"
+                              VerticalAlignment="Center"
+                              KeyDown="SelectionSetComboBox_KeyDown"
+                              SelectionChanged="SelectionSetComboBox_SelectionChanged"
+                              ToolTip="Type name and press Enter to save selection, or select existing set"/>
+                    <Button Content="X" Width="22" Height="22"
+                            Command="{Binding DeleteSelectionSetCommand}"
+                            ToolTip="Delete selected set"
+                            Margin="2,0,0,0" Padding="0"/>
+                    <Button Content="Translate" Command="{Binding TranslateSelectedCommand}"
+                            Padding="8,4" Margin="8,0,0,0"
+                            ToolTip="Move selected placements by X/Y offset"/>
                 </StackPanel>
             </WrapPanel>
         </Border>
@@ -62,7 +84,8 @@
                                ShowLabels="{Binding ShowLabels}"
                                ViewSide="{Binding ViewSide}"
                                Placements="{Binding Project.Placements}"
-                               Fiducials="{Binding Project.Fiducials}">
+                               Fiducials="{Binding Project.Fiducials}"
+                               Board="{Binding Project.Board}">
             <controls:DesignCanvas.ContextMenu>
                 <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                     <MenuItem Header="Add PCB Area..." Command="{Binding AddPcbAreaCommand}"/>

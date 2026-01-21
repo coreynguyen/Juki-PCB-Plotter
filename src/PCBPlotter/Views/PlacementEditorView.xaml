@@ -26,9 +26,6 @@
                     <ColumnDefinition Width="200"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="180"/>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
@@ -46,22 +43,7 @@
                     <ComboBoxItem Content="Bottom" Tag="Bottom"/>
                 </ComboBox>
 
-                <!-- Selection Sets (3ds Max style) -->
-                <TextBlock Grid.Column="4" Text="Selection:" VerticalAlignment="Center" Margin="16,0,8,0"/>
-                <ComboBox x:Name="SelectionSetComboBox" Grid.Column="5"
-                          ItemsSource="{Binding SelectionSetNames}"
-                          Text="{Binding CurrentSelectionSetName, UpdateSourceTrigger=LostFocus}"
-                          IsEditable="True"
-                          VerticalAlignment="Center"
-                          KeyDown="SelectionSetComboBox_KeyDown"
-                          SelectionChanged="SelectionSetComboBox_SelectionChanged"
-                          ToolTip="Type name and press Enter to create new set, or select existing"/>
-                <Button Grid.Column="6" Content="X" Width="24"
-                        Command="{Binding DeleteSelectionSetCommand}"
-                        ToolTip="Delete selected set"
-                        Margin="4,0,0,0" Padding="0"/>
-
-                <Button Grid.Column="8" Content="Clear Filter" Command="{Binding ClearFilterCommand}"
+                <Button Grid.Column="5" Content="Clear Filter" Command="{Binding ClearFilterCommand}"
                         Padding="8,4"/>
             </Grid>
         </Border>

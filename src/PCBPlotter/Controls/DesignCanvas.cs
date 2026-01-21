@@ -83,6 +83,10 @@ namespace PCBPlotter.Controls
             DependencyProperty.Register("ViewSide", typeof(BoardSide), typeof(DesignCanvas),
                 new FrameworkPropertyMetadata(BoardSide.Top, FrameworkPropertyMetadataOptions.AffectsRender));
 
+        public static readonly DependencyProperty BoardProperty =
+            DependencyProperty.Register("Board", typeof(BoardDefinition), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
         public double Zoom
         {
             get { return (double)GetValue(ZoomProperty); }
@@ -143,6 +147,12 @@ namespace PCBPlotter.Controls
             set { SetValue(ViewSideProperty, value); }
         }
 
+        public BoardDefinition Board
+        {
+            get { return (BoardDefinition)GetValue(BoardProperty); }
+            set { SetValue(BoardProperty, value); }
+        }
+
         #endregion
 
         #region Events
@@ -150,6 +160,7 @@ namespace PCBPlotter.Controls
         public event EventHandler<Point> CursorPositionChanged;
         public event EventHandler<Rect> SelectionRectCompleted;
         public event EventHandler<Point> PointClicked;
+        public event EventHandler<List<Placement>> SelectionChanged;
 
         #endregion
 
@@ -262,6 +273,9 @@ namespace PCBPlotter.Controls
             // Draw origin crosshair
             RenderOrigin(dc);
 
+            // Draw board outline if defined
+            RenderBoardArea(dc);
+
             // Render placements and content
             RenderPlacementsDirect(dc);
 
@@ -343,6 +357,81 @@ namespace PCBPlotter.Controls
 
             // Origin marker
             dc.DrawEllipse(new SolidColorBrush(RenderColors.OriginMarker), null, screenOrigin, 4, 4);
+        }
+
+        private void RenderBoardArea(DrawingContext dc)
+        {
+            if (Board == null || Board.Width <= 0 || Board.Height <= 0)
+                return;
+
+            // Board outline pen
+            var boardPen = new Pen(new SolidColorBrush(Color.FromRgb(255, 200, 0)), 2);
+            boardPen.DashStyle = DashStyles.Dash;
+            boardPen.Freeze();
+
+            var boardFillBrush = new SolidColorBrush(Color.FromArgb(20, 255, 200, 0));
+            boardFillBrush.Freeze();
+
+            // Convert board corners to screen coordinates
+            double originX = Board.Origin.X;
+            double originY = Board.Origin.Y;
+
+            Point topLeft = WorldToScreen(new Point(originX, originY + Board.Height));
+            Point topRight = WorldToScreen(new Point(originX + Board.Width, originY + Board.Height));
+            Point bottomLeft = WorldToScreen(new Point(originX, originY));
+            Point bottomRight = WorldToScreen(new Point(originX + Board.Width, originY));
+
+            // Draw board rectangle
+            var boardRect = new Rect(
+                Math.Min(topLeft.X, bottomRight.X),
+                Math.Min(topLeft.Y, bottomRight.Y),
+                Math.Abs(topRight.X - topLeft.X),
+                Math.Abs(bottomLeft.Y - topLeft.Y)
+            );
+
+            dc.DrawRectangle(boardFillBrush, boardPen, boardRect);
+
+            // Draw dimension labels
+            var labelBrush = new SolidColorBrush(Color.FromRgb(255, 200, 0));
+            labelBrush.Freeze();
+
+            double fontSize = 10;
+            var typeface = new Typeface("Segoe UI");
+
+            // Width label (bottom)
+            var widthText = new FormattedText(
+                string.Format("{0:F1}mm", Board.Width),
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                typeface,
+                fontSize,
+                labelBrush,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip
+            );
+            dc.DrawText(widthText, new Point(
+                (bottomLeft.X + bottomRight.X) / 2 - widthText.Width / 2,
+                bottomLeft.Y + 4
+            ));
+
+            // Height label (right side)
+            var heightText = new FormattedText(
+                string.Format("{0:F1}mm", Board.Height),
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                typeface,
+                fontSize,
+                labelBrush,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip
+            );
+
+            // Draw vertically on right side
+            dc.PushTransform(new RotateTransform(-90, topRight.X + 4 + heightText.Height / 2,
+                (topRight.Y + bottomRight.Y) / 2));
+            dc.DrawText(heightText, new Point(
+                topRight.X + 4,
+                (topRight.Y + bottomRight.Y) / 2 - heightText.Width / 2
+            ));
+            dc.Pop();
         }
 
         private void RenderSelectionOverlayDirect(DrawingContext dc)
@@ -772,7 +861,7 @@ namespace PCBPlotter.Controls
 
         private void RaiseSelectionChanged()
         {
-            // Raise event for view model to handle
+            // Raise event for view/view model to handle
             if (Placements != null)
             {
                 var selected = new List<Placement>();
@@ -780,7 +869,7 @@ namespace PCBPlotter.Controls
                 {
                     if (p.IsSelected) selected.Add(p);
                 }
-                // Could add a SelectionChanged event here
+                SelectionChanged?.Invoke(this, selected);
             }
         }
 

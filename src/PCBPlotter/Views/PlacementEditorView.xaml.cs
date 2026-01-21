@@ -1,7 +1,6 @@
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using PCBPlotter.Core.Models;
 using PCBPlotter.ViewModels;
 using Component = PCBPlotter.Core.Models.Component;
@@ -13,77 +12,89 @@ namespace PCBPlotter.Views
     /// </summary>
     public partial class PlacementEditorView : UserControl
     {
-        private bool _isSelectingSet = false;
+        private bool _isSyncing = false;
+        private System.IDisposable _selectionSubscription;
 
         public PlacementEditorView()
         {
             InitializeComponent();
+            Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
         }
 
-        private void SelectionSetComboBox_KeyDown(object sender, KeyEventArgs e)
+        private void OnLoaded(object sender, RoutedEventArgs e)
         {
-            if (e.Key == Key.Enter)
-            {
-                var comboBox = sender as ComboBox;
-                var vm = DataContext as PlacementEditorViewModel;
-                if (comboBox == null || vm == null) return;
+            // Subscribe to selection changed events from other tabs
+            _selectionSubscription = PCBPlotter.Core.Events.EventAggregator.Instance
+                .GetEvent<PCBPlotter.Core.Events.SelectionChangedEvent>()
+                .Subscribe(OnExternalSelectionChanged);
+        }
 
-                string name = comboBox.Text?.Trim();
-                if (!string.IsNullOrEmpty(name))
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            _selectionSubscription?.Dispose();
+        }
+
+        private void OnExternalSelectionChanged(PCBPlotter.Core.Events.SelectionChangedEvent e)
+        {
+            var vm = DataContext as PlacementEditorViewModel;
+            if (vm == null || e.Source == vm) return;
+
+            // Update DataGrid selection to match external selection
+            _isSyncing = true;
+            try
+            {
+                PlacementsGrid.SelectedItems.Clear();
+                foreach (var p in e.SelectedPlacements)
                 {
-                    // Create or update selection set with current selection
-                    vm.CreateOrUpdateSelectionSet(name);
-                    e.Handled = true;
+                    PlacementsGrid.SelectedItems.Add(p);
                 }
             }
-        }
-
-        private void SelectionSetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_isSelectingSet) return;
-
-            var comboBox = sender as ComboBox;
-            var vm = DataContext as PlacementEditorViewModel;
-            if (comboBox == null || vm == null) return;
-
-            string selectedName = comboBox.SelectedItem as string;
-            if (!string.IsNullOrEmpty(selectedName))
+            finally
             {
-                _isSelectingSet = true;
-                try
-                {
-                    // Recall the selection set
-                    var placements = vm.RecallSelectionSet(selectedName);
-                    if (placements != null && placements.Count > 0)
-                    {
-                        PlacementsGrid.SelectedItems.Clear();
-                        foreach (var p in placements)
-                        {
-                            PlacementsGrid.SelectedItems.Add(p);
-                        }
-                    }
-                }
-                finally
-                {
-                    _isSelectingSet = false;
-                }
+                _isSyncing = false;
             }
         }
 
         private void PlacementsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isSyncing) return;
+
             var vm = DataContext as PlacementEditorViewModel;
             if (vm == null) return;
 
             // Sync the DataGrid's selected items with the ViewModel's SelectedPlacements
             vm.SelectedPlacements.Clear();
+            var selectedList = new System.Collections.Generic.List<Placement>();
             foreach (Placement item in PlacementsGrid.SelectedItems)
             {
                 if (item != null)
                 {
                     vm.SelectedPlacements.Add(item);
+                    item.IsSelected = true;
+                    selectedList.Add(item);
                 }
             }
+
+            // Update unselected items
+            if (vm.Project?.Placements != null)
+            {
+                foreach (var p in vm.Project.Placements)
+                {
+                    if (!selectedList.Contains(p))
+                    {
+                        p.IsSelected = false;
+                    }
+                }
+            }
+
+            // Publish selection changed event for other tabs to sync
+            PCBPlotter.Core.Events.EventAggregator.Instance.Publish(
+                new PCBPlotter.Core.Events.SelectionChangedEvent
+                {
+                    SelectedPlacements = selectedList,
+                    Source = vm
+                });
         }
 
         private void PartNumberComboBox_LostFocus(object sender, RoutedEventArgs e)
