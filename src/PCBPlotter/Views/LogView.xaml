@@ -52,7 +52,7 @@
             </ListView.View>
             <ListView.ItemContainerStyle>
                 <Style TargetType="ListViewItem">
-                    <Setter Property="Foreground" Value="{StaticResource ForegroundPrimaryBrush}"/>
+                    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding Type}" Value="Error">
                             <Setter Property="Foreground" Value="{StaticResource ErrorBrush}"/>
