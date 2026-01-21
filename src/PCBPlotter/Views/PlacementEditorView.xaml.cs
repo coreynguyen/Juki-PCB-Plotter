@@ -13,7 +13,7 @@ namespace PCBPlotter.Views
     public partial class PlacementEditorView : UserControl
     {
         private bool _isSyncing = false;
-        private System.IDisposable _selectionSubscription;
+        private System.Action<PCBPlotter.Core.Events.SelectionChangedEvent> _selectionHandler;
 
         public PlacementEditorView()
         {
@@ -25,14 +25,18 @@ namespace PCBPlotter.Views
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
             // Subscribe to selection changed events from other tabs
-            _selectionSubscription = PCBPlotter.Core.Events.EventAggregator.Instance
-                .GetEvent<PCBPlotter.Core.Events.SelectionChangedEvent>()
-                .Subscribe(OnExternalSelectionChanged);
+            _selectionHandler = OnExternalSelectionChanged;
+            PCBPlotter.Core.Events.EventAggregator.Instance
+                .Subscribe(_selectionHandler);
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
-            _selectionSubscription?.Dispose();
+            if (_selectionHandler != null)
+            {
+                PCBPlotter.Core.Events.EventAggregator.Instance
+                    .Unsubscribe(_selectionHandler);
+            }
         }
 
         private void OnExternalSelectionChanged(PCBPlotter.Core.Events.SelectionChangedEvent e)

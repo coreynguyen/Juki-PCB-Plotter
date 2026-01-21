@@ -11,6 +11,8 @@ namespace PCBPlotter.Views
     public partial class OutputPlotView : UserControl
     {
         private bool _isRecallingSet = false;
+        private bool _isSyncing = false;
+        private System.Action<PCBPlotter.Core.Events.SelectionChangedEvent> _selectionHandler;
 
         public OutputPlotView()
         {
@@ -22,10 +24,65 @@ namespace PCBPlotter.Views
             DesignCanvas.PointClicked += OnPointClicked;
             DesignCanvas.SizeChanged += OnCanvasSizeChanged;
             DesignCanvas.SelectionChanged += OnCanvasSelectionChanged;
+
+            Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
+        }
+
+        private void OnLoaded(object sender, RoutedEventArgs e)
+        {
+            // Subscribe to selection changed events from other tabs
+            _selectionHandler = OnExternalSelectionChanged;
+            PCBPlotter.Core.Events.EventAggregator.Instance.Subscribe(_selectionHandler);
+        }
+
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            if (_selectionHandler != null)
+            {
+                PCBPlotter.Core.Events.EventAggregator.Instance.Unsubscribe(_selectionHandler);
+            }
+        }
+
+        private void OnExternalSelectionChanged(PCBPlotter.Core.Events.SelectionChangedEvent evt)
+        {
+            var vm = DataContext as OutputPlotViewModel;
+            if (vm == null || evt.Source == vm) return;
+
+            // Update canvas selection to match external selection
+            _isSyncing = true;
+            try
+            {
+                // Clear current selection
+                if (vm.Project?.Placements != null)
+                {
+                    foreach (var p in vm.Project.Placements)
+                    {
+                        p.IsSelected = false;
+                    }
+                }
+
+                // Apply new selection
+                vm.SelectedPlacements.Clear();
+                foreach (var p in evt.SelectedPlacements)
+                {
+                    p.IsSelected = true;
+                    vm.SelectedPlacements.Add(p);
+                }
+
+                // Redraw canvas
+                DesignCanvas.InvalidateVisual();
+            }
+            finally
+            {
+                _isSyncing = false;
+            }
         }
 
         private void OnCanvasSelectionChanged(object sender, System.Collections.Generic.List<PCBPlotter.Core.Models.Placement> selected)
         {
+            if (_isSyncing) return;
+
             var vm = DataContext as OutputPlotViewModel;
             if (vm == null) return;
 
