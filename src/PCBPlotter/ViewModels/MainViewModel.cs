@@ -470,7 +470,9 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteImportPnpText()
         {
+            System.Diagnostics.Debug.WriteLine("ExecuteImportPnpText: publishing ShowDialogEvent PnpImport");
             Publish(new ShowDialogEvent { DialogType = "PnpImport" });
+            System.Diagnostics.Debug.WriteLine("ExecuteImportPnpText: event published");
         }
 
         private void ExecuteImportCad()
@@ -539,8 +541,11 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteQuickImportPnp()
         {
+            System.Diagnostics.Debug.WriteLine("ExecuteQuickImportPnp called");
             ExecuteNewProject();
+            System.Diagnostics.Debug.WriteLine("ExecuteQuickImportPnp: project created, now calling import");
             ExecuteImportPnpText();
+            System.Diagnostics.Debug.WriteLine("ExecuteQuickImportPnp: import event published");
         }
 
         private void ExecuteQuickImportCad()

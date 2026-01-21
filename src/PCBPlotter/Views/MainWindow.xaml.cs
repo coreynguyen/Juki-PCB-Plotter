@@ -1,3 +1,4 @@
+using System;
 using System.Windows;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Services;
@@ -10,6 +11,9 @@ namespace PCBPlotter.Views
     /// </summary>
     public partial class MainWindow : Window
     {
+        // Keep a strong reference to prevent garbage collection
+        private readonly Action<ShowDialogEvent> _showDialogHandler;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -17,8 +21,9 @@ namespace PCBPlotter.Views
             // Register with window service
             WindowService.Instance.SetMainWindow(this);
 
-            // Subscribe to dialog events
-            EventAggregator.Instance.Subscribe<ShowDialogEvent>(OnShowDialog);
+            // Subscribe to dialog events - keep strong reference to handler
+            _showDialogHandler = OnShowDialog;
+            EventAggregator.Instance.Subscribe(_showDialogHandler);
 
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
@@ -32,7 +37,7 @@ namespace PCBPlotter.Views
         private void MainWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
             // TODO: Check for unsaved changes
-            EventAggregator.Instance.Unsubscribe<ShowDialogEvent>(OnShowDialog);
+            EventAggregator.Instance.Unsubscribe(_showDialogHandler);
             WindowService.Instance.CloseAllFloatingWindows();
         }
 
