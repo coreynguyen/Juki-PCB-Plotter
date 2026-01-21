@@ -284,13 +284,13 @@ namespace PCBPlotter.Controls
             // Don't render grid if spacing is too small
             if (spacing < 5) return;
 
-            // Calculate visible range
-            double startX = (-PanX % spacing) - spacing;
-            double startY = (-PanY % spacing) - spacing;
+            // Calculate visible range using proper modulo that handles negative values
+            double startX = ((PanX % spacing) + spacing) % spacing;
+            double startY = ((PanY % spacing) + spacing) % spacing;
 
             int majorInterval = 10;
             int lineIndexX = (int)Math.Floor(-PanX / spacing);
-            int lineIndexY = (int)Math.Floor(-PanY / spacing);
+            int lineIndexY = (int)Math.Floor((ActualHeight - PanY) / spacing);
 
             // Vertical lines
             for (double x = startX; x < ActualWidth + spacing; x += spacing)
@@ -300,12 +300,12 @@ namespace PCBPlotter.Controls
                 lineIndexX++;
             }
 
-            // Horizontal lines
+            // Horizontal lines (from bottom up due to inverted Y)
             for (double y = startY; y < ActualHeight + spacing; y += spacing)
             {
                 var pen = (lineIndexY % majorInterval == 0) ? majorGridPen : gridPen;
                 dc.DrawLine(pen, new Point(0, y), new Point(ActualWidth, y));
-                lineIndexY++;
+                lineIndexY--;
             }
         }
 
@@ -350,8 +350,9 @@ namespace PCBPlotter.Controls
             if (Placements == null || Placements.Count == 0)
                 return;
 
-            // Constants for placement rendering
-            double placementSize = 2.0; // Base size in mm
+            // Fixed screen size for placement icons (in pixels)
+            double iconSize = 12.0;
+            double halfSize = iconSize / 2;
 
             foreach (var placement in Placements)
             {
@@ -361,10 +362,6 @@ namespace PCBPlotter.Controls
 
                 // Convert world position to screen
                 Point screenPos = WorldToScreen(placement.Position);
-
-                // Calculate size based on zoom
-                double size = placementSize * Zoom;
-                double halfSize = size / 2;
 
                 // Choose brush/pen based on state
                 SolidColorBrush fillBrush = _placementFillBrush;
@@ -380,17 +377,17 @@ namespace PCBPlotter.Controls
                     fillBrush = _placementErrorBrush;
                 }
 
-                // Draw placement marker (rounded rectangle for modern look)
+                // Draw placement marker (rounded rectangle - fixed screen size)
                 var placementRect = new Rect(
                     screenPos.X - halfSize,
                     screenPos.Y - halfSize,
-                    size,
-                    size
+                    iconSize,
+                    iconSize
                 );
                 dc.DrawRoundedRectangle(fillBrush, outlinePen, placementRect, 2, 2);
 
                 // Draw pin 1 indicator (small circle at top-left)
-                double pin1Size = Math.Max(2, size * 0.2);
+                double pin1Size = 2;
                 double pin1Offset = halfSize * 0.6;
                 Point pin1Pos = new Point(
                     screenPos.X - pin1Offset,
@@ -399,7 +396,7 @@ namespace PCBPlotter.Controls
                 dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(255, 100, 100)), null, pin1Pos, pin1Size, pin1Size);
 
                 // Draw center crosshair
-                double crossSize = Math.Max(2, size * 0.3);
+                double crossSize = 3;
                 var crossPen = new Pen(new SolidColorBrush(Colors.White), 1);
                 crossPen.Freeze();
                 dc.DrawLine(crossPen,
@@ -412,7 +409,7 @@ namespace PCBPlotter.Controls
                 // Draw reference label if enabled
                 if (ShowLabels && !string.IsNullOrEmpty(placement.Reference))
                 {
-                    double fontSize = Math.Max(8, Math.Min(14, 10 * Zoom));
+                    double fontSize = 10; // Fixed font size
                     var formattedText = new FormattedText(
                         placement.Reference,
                         CultureInfo.CurrentCulture,
@@ -447,13 +444,14 @@ namespace PCBPlotter.Controls
             // Render fiducials
             if (Fiducials != null)
             {
+                double fidSize = 8; // Fixed screen size
+
                 foreach (var fiducial in Fiducials)
                 {
                     if (fiducial.Side != ViewSide)
                         continue;
 
                     Point screenPos = WorldToScreen(new Point(fiducial.X, fiducial.Y));
-                    double fidSize = 3.0 * Zoom;
 
                     // Draw fiducial as a diamond shape
                     var fidBrush = new SolidColorBrush(Color.FromRgb(255, 0, 255));
@@ -479,7 +477,7 @@ namespace PCBPlotter.Controls
                     // Draw label if enabled
                     if (ShowLabels && !string.IsNullOrEmpty(fiducial.Name))
                     {
-                        double fontSize = Math.Max(8, Math.Min(12, 9 * Zoom));
+                        double fontSize = 9; // Fixed font size
                         var formattedText = new FormattedText(
                             fiducial.Name,
                             CultureInfo.CurrentCulture,
@@ -550,23 +548,29 @@ namespace PCBPlotter.Controls
 
             CursorPositionChanged?.Invoke(this, worldPos);
 
-            // Check if right button is pressed but panning hasn't started yet
-            if (e.RightButton == MouseButtonState.Pressed && !_isPanning)
+            // Middle mouse button for panning
+            if (e.MiddleButton == MouseButtonState.Pressed)
             {
-                StartPanningIfNeeded(mousePos);
+                if (!_isPanning)
+                {
+                    _isPanning = true;
+                    _panStart = mousePos;
+                    _lastMousePosition = mousePos;
+                    CaptureMouse();
+                    Cursor = Cursors.Hand;
+                }
+                else
+                {
+                    double deltaX = mousePos.X - _lastMousePosition.X;
+                    double deltaY = mousePos.Y - _lastMousePosition.Y;
+
+                    PanX += deltaX;
+                    PanY += deltaY; // Fixed: was inverted
+
+                    InvalidateVisual();
+                }
             }
-
-            if (_isPanning)
-            {
-                double deltaX = mousePos.X - _lastMousePosition.X;
-                double deltaY = mousePos.Y - _lastMousePosition.Y;
-
-                PanX += deltaX;
-                PanY -= deltaY; // Invert because screen Y is inverted
-
-                InvalidateVisual();
-            }
-            else if (_isSelecting)
+            else if (_isSelecting && e.LeftButton == MouseButtonState.Pressed)
             {
                 _selectionRect = new Rect(
                     Math.Min(_selectionStart.X, mousePos.X),
@@ -575,6 +579,17 @@ namespace PCBPlotter.Controls
                     Math.Abs(mousePos.Y - _selectionStart.Y)
                 );
                 InvalidateVisual();
+            }
+            else if (e.LeftButton == MouseButtonState.Pressed && !_isSelecting)
+            {
+                // Start rectangle selection after small movement
+                double dist = Math.Sqrt(Math.Pow(mousePos.X - _selectionStart.X, 2) +
+                                       Math.Pow(mousePos.Y - _selectionStart.Y, 2));
+                if (dist > 3)
+                {
+                    _isSelecting = true;
+                    CaptureMouse();
+                }
             }
 
             _lastMousePosition = mousePos;
@@ -586,19 +601,40 @@ namespace PCBPlotter.Controls
             Focus();
 
             Point mousePos = e.GetPosition(this);
+            _selectionStart = mousePos;
+            _lastMousePosition = mousePos;
 
-            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            // Try to hit test a placement
+            Placement hitPlacement = HitTestPlacement(mousePos);
+
+            if (hitPlacement != null)
             {
-                // Start selection rectangle
-                _isSelecting = true;
-                _selectionStart = mousePos;
-                _selectionRect = new Rect(mousePos, new Size(0, 0));
-                CaptureMouse();
+                bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+
+                if (isCtrlPressed)
+                {
+                    // Toggle selection
+                    hitPlacement.IsSelected = !hitPlacement.IsSelected;
+                }
+                else
+                {
+                    // Clear other selections and select this one
+                    ClearSelection();
+                    hitPlacement.IsSelected = true;
+                }
+
+                InvalidateVisual();
+                RaiseSelectionChanged();
             }
             else
             {
-                // Point click
-                PointClicked?.Invoke(this, ScreenToWorld(mousePos));
+                // No placement hit - will start rectangle select on drag
+                if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+                {
+                    ClearSelection();
+                    InvalidateVisual();
+                    RaiseSelectionChanged();
+                }
             }
         }
 
@@ -613,18 +649,16 @@ namespace PCBPlotter.Controls
 
                 if (_selectionRect.Width > 5 && _selectionRect.Height > 5)
                 {
-                    // Convert selection rect to world coordinates
-                    Point topLeft = ScreenToWorld(new Point(_selectionRect.Left, _selectionRect.Top));
-                    Point bottomRight = ScreenToWorld(new Point(_selectionRect.Right, _selectionRect.Bottom));
+                    // Select all placements in the rectangle
+                    bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
 
-                    Rect worldRect = new Rect(
-                        Math.Min(topLeft.X, bottomRight.X),
-                        Math.Min(topLeft.Y, bottomRight.Y),
-                        Math.Abs(bottomRight.X - topLeft.X),
-                        Math.Abs(bottomRight.Y - topLeft.Y)
-                    );
+                    if (!isCtrlPressed)
+                    {
+                        ClearSelection();
+                    }
 
-                    SelectionRectCompleted?.Invoke(this, worldRect);
+                    SelectPlacementsInRect(_selectionRect);
+                    RaiseSelectionChanged();
                 }
 
                 _selectionRect = Rect.Empty;
@@ -632,42 +666,97 @@ namespace PCBPlotter.Controls
             }
         }
 
-        protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
+        protected override void OnMouseMiddleButtonDown(MouseButtonEventArgs e)
         {
-            base.OnMouseRightButtonDown(e);
+            base.OnMouseMiddleButtonDown(e);
             Focus();
-
-            // Store start position for potential panning, but don't capture mouse yet
             _panStart = e.GetPosition(this);
             _lastMousePosition = _panStart;
-            _isPanning = false;
-            // Don't capture mouse - this allows context menu to show
         }
 
-        protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+        protected override void OnMouseMiddleButtonUp(MouseButtonEventArgs e)
         {
-            base.OnMouseRightButtonUp(e);
-
+            base.OnMouseMiddleButtonUp(e);
             if (_isPanning)
             {
                 _isPanning = false;
                 ReleaseMouseCapture();
                 Cursor = Cursors.Arrow;
-                e.Handled = true; // Prevent context menu after panning
             }
-            // If not panning, don't handle - let context menu show
         }
 
-        private void StartPanningIfNeeded(Point currentPos)
+        protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
         {
-            // Start panning after 3 pixels of movement
-            double dist = Math.Sqrt(Math.Pow(currentPos.X - _panStart.X, 2) +
-                                   Math.Pow(currentPos.Y - _panStart.Y, 2));
-            if (dist > 3 && !_isPanning)
+            base.OnMouseRightButtonDown(e);
+            Focus();
+            // Right-click only for context menu - no panning
+        }
+
+        protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+        {
+            base.OnMouseRightButtonUp(e);
+            // Let context menu show
+        }
+
+        private Placement HitTestPlacement(Point screenPos)
+        {
+            if (Placements == null) return null;
+
+            double hitRadius = 8; // Fixed screen pixels for hit testing
+
+            foreach (var placement in Placements)
             {
-                _isPanning = true;
-                CaptureMouse(); // Only capture when actually panning
-                Cursor = Cursors.Hand;
+                if (placement.Side != ViewSide)
+                    continue;
+
+                Point placementScreen = WorldToScreen(placement.Position);
+                double dist = Math.Sqrt(Math.Pow(screenPos.X - placementScreen.X, 2) +
+                                       Math.Pow(screenPos.Y - placementScreen.Y, 2));
+
+                if (dist <= hitRadius)
+                    return placement;
+            }
+
+            return null;
+        }
+
+        private void ClearSelection()
+        {
+            if (Placements == null) return;
+            foreach (var p in Placements)
+            {
+                p.IsSelected = false;
+            }
+        }
+
+        private void SelectPlacementsInRect(Rect screenRect)
+        {
+            if (Placements == null) return;
+
+            foreach (var placement in Placements)
+            {
+                if (placement.Side != ViewSide)
+                    continue;
+
+                Point placementScreen = WorldToScreen(placement.Position);
+                if (screenRect.Contains(placementScreen))
+                {
+                    placement.IsSelected = true;
+                }
+            }
+        }
+
+        private void RaiseSelectionChanged()
+        {
+            // Raise event for view model to handle
+            if (Placements != null)
+            {
+                var selected = new List<Placement>();
+                foreach (var p in Placements)
+                {
+                    if (p.IsSelected) selected.Add(p);
+                }
+                // Could add a SelectionChanged event here
             }
         }
 
