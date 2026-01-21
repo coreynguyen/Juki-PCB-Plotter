@@ -98,6 +98,14 @@ namespace PCBPlotter.ViewModels
             get { return SelectedPlacements?.Count ?? 0; }
         }
 
+        /// <summary>
+        /// Available components for assignment dropdown
+        /// </summary>
+        public ObservableCollection<Component> AvailableComponents
+        {
+            get { return Project?.Components; }
+        }
+
         // Commands
         public ICommand ClearFilterCommand { get; private set; }
         public ICommand SelectAllVisibleCommand { get; private set; }
@@ -161,6 +169,7 @@ namespace PCBPlotter.ViewModels
 
             OnPropertyChanged("TotalCount");
             OnPropertyChanged("FilteredCount");
+            OnPropertyChanged("AvailableComponents");
         }
 
         private bool FilterPlacement(object obj)

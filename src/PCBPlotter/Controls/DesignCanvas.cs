@@ -49,11 +49,11 @@ namespace PCBPlotter.Controls
 
         public static readonly DependencyProperty PanXProperty =
             DependencyProperty.Register("PanX", typeof(double), typeof(DesignCanvas),
-                new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+                new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender, OnPanChanged));
 
         public static readonly DependencyProperty PanYProperty =
             DependencyProperty.Register("PanY", typeof(double), typeof(DesignCanvas),
-                new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+                new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender, OnPanChanged));
 
         public static readonly DependencyProperty ShowGridProperty =
             DependencyProperty.Register("ShowGrid", typeof(bool), typeof(DesignCanvas),
@@ -566,6 +566,12 @@ namespace PCBPlotter.Controls
 
             CursorPositionChanged?.Invoke(this, worldPos);
 
+            // Check if right button is pressed but panning hasn't started yet
+            if (e.RightButton == MouseButtonState.Pressed && !_isPanning)
+            {
+                StartPanningIfNeeded(mousePos);
+            }
+
             if (_isPanning)
             {
                 double deltaX = mousePos.X - _lastMousePosition.X;
@@ -647,20 +653,40 @@ namespace PCBPlotter.Controls
             base.OnMouseRightButtonDown(e);
             Focus();
 
-            _isPanning = true;
+            // Don't start panning immediately - wait for mouse move
             _panStart = e.GetPosition(this);
             _lastMousePosition = _panStart;
+            _isPanning = false; // Will be set to true on first move
             CaptureMouse();
-            Cursor = Cursors.Hand;
         }
 
         protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseRightButtonUp(e);
 
+            bool wasPanning = _isPanning;
             _isPanning = false;
             ReleaseMouseCapture();
             Cursor = Cursors.Arrow;
+
+            // If we didn't actually pan (no movement), allow context menu
+            if (!wasPanning)
+            {
+                // Re-raise the event to allow context menu to show
+                e.Handled = false;
+            }
+        }
+
+        private void StartPanningIfNeeded(Point currentPos)
+        {
+            // Start panning after 3 pixels of movement
+            double dist = Math.Sqrt(Math.Pow(currentPos.X - _panStart.X, 2) +
+                                   Math.Pow(currentPos.Y - _panStart.Y, 2));
+            if (dist > 3)
+            {
+                _isPanning = true;
+                Cursor = Cursors.Hand;
+            }
         }
 
         protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -731,6 +757,12 @@ namespace PCBPlotter.Controls
         #endregion
 
         private static void OnZoomChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            var canvas = d as DesignCanvas;
+            canvas?.InvalidateVisual();
+        }
+
+        private static void OnPanChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
             var canvas = d as DesignCanvas;
             canvas?.InvalidateVisual();
