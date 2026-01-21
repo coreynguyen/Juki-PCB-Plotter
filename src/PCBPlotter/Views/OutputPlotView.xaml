@@ -1,0 +1,96 @@
+<UserControl x:Class="PCBPlotter.Views.OutputPlotView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:PCBPlotter.Controls"
+             Background="{StaticResource BackgroundMediumBrush}">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
+                BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
+                Padding="4">
+            <WrapPanel>
+                <!-- View Controls -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                    <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ToggleButton Content="Top" IsChecked="True" Padding="8,4" Margin="0,0,2,0"
+                                  x:Name="TopViewButton"/>
+                    <ToggleButton Content="Bottom" Padding="8,4"
+                                  IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"/>
+                </StackPanel>
+
+                <!-- Zoom Controls -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                    <Button Content="-" Command="{Binding ZoomOutCommand}" Width="24" Height="24" Padding="0"/>
+                    <TextBlock Text="{Binding Zoom, StringFormat={}{0:P0}}"
+                               VerticalAlignment="Center" Width="50" TextAlignment="Center"/>
+                    <Button Content="+" Command="{Binding ZoomInCommand}" Width="24" Height="24" Padding="0"/>
+                    <Button Content="Fit" Command="{Binding ZoomFitCommand}" Margin="4,0,0,0" Padding="8,4"/>
+                </StackPanel>
+
+                <!-- Display Options -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                    <CheckBox Content="Grid" IsChecked="{Binding ShowGrid}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <CheckBox Content="Labels" IsChecked="{Binding ShowLabels}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <CheckBox Content="Polarity" IsChecked="{Binding ShowPolarity}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <CheckBox Content="Instances" IsChecked="{Binding ShowCircuitInstances}" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Selection Tools -->
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="Select All" Command="{Binding SelectAllCommand}" Padding="8,4" Margin="0,0,2,0"/>
+                    <Button Content="Select None" Command="{Binding SelectNoneCommand}" Padding="8,4" Margin="0,0,2,0"/>
+                    <Button Content="Same Part" Command="{Binding SelectSamePartCommand}" Padding="8,4" Margin="0,0,2,0"/>
+                    <Button Content="Same Package" Command="{Binding SelectSamePackageCommand}" Padding="8,4"/>
+                </StackPanel>
+            </WrapPanel>
+        </Border>
+
+        <!-- Canvas -->
+        <controls:DesignCanvas x:Name="DesignCanvas" Grid.Row="1"
+                               Zoom="{Binding Zoom, Mode=TwoWay}"
+                               PanX="{Binding PanX, Mode=TwoWay}"
+                               PanY="{Binding PanY, Mode=TwoWay}"
+                               ShowGrid="{Binding ShowGrid}"
+                               GridSpacing="{Binding GridSpacing}"/>
+
+        <!-- Bottom Status/Coordinate Bar -->
+        <Border Grid.Row="2" Background="{StaticResource BackgroundLightBrush}"
+                BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,1,0,0"
+                Padding="8,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Coordinates -->
+                <TextBlock Grid.Column="0" Text="{Binding CoordinateDisplay}"
+                           FontFamily="Consolas" VerticalAlignment="Center"/>
+
+                <!-- Selection Info -->
+                <TextBlock Grid.Column="2" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <Run Text="Selected: "/>
+                    <Run Text="{Binding SelectedPlacements.Count, Mode=OneWay}" FontWeight="SemiBold"/>
+                </TextBlock>
+
+                <!-- Quick Actions -->
+                <StackPanel Grid.Column="3" Orientation="Horizontal">
+                    <Button Content="Rotate 90" Command="{Binding RotateSelectionCommand}"
+                            CommandParameter="90" Padding="8,2" Margin="0,0,4,0"/>
+                    <Button Content="Enable Export" Command="{Binding EnableForExportCommand}"
+                            Padding="8,2" Margin="0,0,4,0"/>
+                    <Button Content="Focus" Command="{Binding FocusSelectionCommand}" Padding="8,2"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

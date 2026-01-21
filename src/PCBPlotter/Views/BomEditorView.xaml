@@ -1,0 +1,101 @@
+<UserControl x:Class="PCBPlotter.Views.BomEditorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BackgroundMediumBrush}">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
+                BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
+                Padding="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="Filter:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox Grid.Column="1" Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"/>
+
+                <CheckBox Grid.Column="2" Content="Show Unused Only" IsChecked="{Binding ShowUnusedOnly}"
+                          VerticalAlignment="Center" Margin="16,0,0,0"/>
+
+                <StackPanel Grid.Column="4" Orientation="Horizontal">
+                    <Button Content="Import BOM" Command="{Binding ImportBomCommand}"
+                            Padding="8,4" Margin="0,0,4,0"/>
+                    <Button Content="Export BOM" Command="{Binding ExportBomCommand}"
+                            Padding="8,4" Margin="0,0,4,0"/>
+                    <Button Content="Validate" Command="{Binding ValidateBomCommand}"
+                            Padding="8,4"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Component Grid -->
+        <DataGrid Grid.Row="1"
+                  ItemsSource="{Binding ComponentsView}"
+                  SelectedItem="{Binding SelectedComponent}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  GridLinesVisibility="Horizontal"
+                  HeadersVisibility="Column">
+
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Part Number" Binding="{Binding PartNumber}" Width="150"/>
+                <DataGridTextColumn Header="Description" Binding="{Binding Description}" Width="200"/>
+                <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="100"/>
+                <DataGridTextColumn Header="Manufacturer" Binding="{Binding Manufacturer}" Width="120"/>
+                <DataGridTextColumn Header="MFR P/N" Binding="{Binding ManufacturerPartNumber}" Width="150"/>
+                <DataGridTextColumn Header="Default Package" Binding="{Binding DefaultPackage.Name}" Width="100" IsReadOnly="True"/>
+                <DataGridTextColumn Header="References" Binding="{Binding ReferenceDesignators, Converter={StaticResource ListToStringConverter}}"
+                                    Width="200" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Count" Binding="{Binding PlacementCount}" Width="60" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100" IsReadOnly="True"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Bottom Action Bar -->
+        <Border Grid.Row="2" Background="{StaticResource BackgroundLightBrush}"
+                BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,1,0,0"
+                Padding="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Stats -->
+                <TextBlock Grid.Column="0" VerticalAlignment="Center">
+                    <Run Text="Total Components: "/>
+                    <Run Text="{Binding TotalComponents, Mode=OneWay}" FontWeight="SemiBold"/>
+                    <Run Text="  |  Unused: "/>
+                    <Run Text="{Binding UnusedComponents, Mode=OneWay}" FontWeight="SemiBold"
+                         Foreground="{StaticResource WarningBrush}"/>
+                </TextBlock>
+
+                <!-- Actions -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="New Component" Command="{Binding NewComponentCommand}"
+                            Padding="8,4" Margin="0,0,4,0"/>
+                    <Button Content="Assign to Placements" Command="{Binding AssignToPlacementsCommand}"
+                            Padding="8,4" Margin="0,0,4,0"/>
+                    <Button Content="Assign Package" Command="{Binding AssignPackageCommand}"
+                            Padding="8,4" Margin="0,0,4,0"/>
+                    <Button Content="Select Placements" Command="{Binding SelectPlacementsCommand}"
+                            Padding="8,4" Margin="0,0,4,0"/>
+                    <Button Content="Delete" Command="{Binding DeleteComponentCommand}"
+                            Padding="8,4" Background="{StaticResource ErrorBrush}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

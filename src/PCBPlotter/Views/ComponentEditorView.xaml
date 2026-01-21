@@ -1,0 +1,151 @@
+<UserControl x:Class="PCBPlotter.Views.ComponentEditorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:PCBPlotter.Controls"
+             Background="{StaticResource BackgroundMediumBrush}">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="250"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Package List -->
+        <Grid Grid.Column="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Text="Packages" FontWeight="SemiBold" Margin="8"/>
+
+            <!-- Filter -->
+            <TextBox Grid.Row="1" Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                     Margin="8,0,8,8"/>
+
+            <!-- Package List -->
+            <ListBox Grid.Row="2"
+                     ItemsSource="{Binding PackagesView}"
+                     SelectedItem="{Binding SelectedPackage}"
+                     DisplayMemberPath="Name"
+                     Margin="8,0"/>
+
+            <!-- List Actions -->
+            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="8">
+                <Button Content="New" Command="{Binding NewPackageCommand}" Padding="8,4" Margin="0,0,4,0"/>
+                <Button Content="Duplicate" Command="{Binding DuplicatePackageCommand}" Padding="8,4" Margin="0,0,4,0"/>
+                <Button Content="Delete" Command="{Binding DeletePackageCommand}" Padding="8,4"/>
+            </StackPanel>
+        </Grid>
+
+        <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                      Background="{StaticResource BorderDarkBrush}"/>
+
+        <!-- Package Editor -->
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Properties Panel -->
+            <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
+                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
+                    Padding="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="80"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="80"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="80"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="Name:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBox Grid.Column="1" Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Grid.Column="2" Text="Width:" VerticalAlignment="Center" Margin="16,0,8,0"/>
+                    <TextBox Grid.Column="3" Text="{Binding EditWidth, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Grid.Column="4" Text="Length:" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                    <TextBox Grid.Column="5" Text="{Binding EditLength, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Grid.Column="6" Text="Height:" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                    <TextBox Grid.Column="7" Text="{Binding EditHeight, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <CheckBox Grid.Column="8" Content="Has Polarity" IsChecked="{Binding EditHasPolarity}"
+                              VerticalAlignment="Center" Margin="16,0,0,0"/>
+                </Grid>
+            </Border>
+
+            <!-- Graphics Canvas -->
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Canvas for editing package graphics -->
+                <controls:DesignCanvas Grid.Column="0" x:Name="PackageCanvas"
+                                       GridSpacing="0.1"
+                                       ShowGrid="True"/>
+
+                <!-- Drawing Tools -->
+                <Border Grid.Column="1" Background="{StaticResource BackgroundLightBrush}"
+                        BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1,0,0,0"
+                        Width="120" Padding="8">
+                    <StackPanel>
+                        <TextBlock Text="Tools" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <Button Content="Rectangle" Command="{Binding AddRectangleCommand}" Margin="0,0,0,4"/>
+                        <Button Content="Circle" Command="{Binding AddCircleCommand}" Margin="0,0,0,4"/>
+                        <Button Content="Line" Command="{Binding AddLineCommand}" Margin="0,0,0,4"/>
+                        <Button Content="Polygon" Command="{Binding AddPolygonCommand}" Margin="0,0,0,4"/>
+                        <Button Content="Text" Command="{Binding AddTextCommand}" Margin="0,0,0,4"/>
+                        <Separator Margin="0,8"/>
+                        <Button Content="Add Pin" Command="{Binding AddPinCommand}" Margin="0,0,0,4"/>
+                        <Separator Margin="0,8"/>
+                        <Button Content="Center Origin" Command="{Binding CenterOriginCommand}" Margin="0,0,0,4"/>
+                        <Button Content="Auto Size" Command="{Binding AutoSizeCommand}" Margin="0,0,0,4"/>
+                        <Separator Margin="0,8"/>
+                        <Button Content="Delete" Command="{Binding DeleteGraphicCommand}"
+                                Background="{StaticResource ErrorBrush}"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Bottom Action Bar -->
+            <Border Grid.Row="2" Background="{StaticResource BackgroundLightBrush}"
+                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,1,0,0"
+                    Padding="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <Button Content="Import from Library" Command="{Binding ImportFromLibraryCommand}"
+                                Padding="8,4" Margin="0,0,4,0"/>
+                        <Button Content="Export to Library" Command="{Binding ExportToLibraryCommand}"
+                                Padding="8,4"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Content="Cancel" Command="{Binding CancelEditCommand}"
+                                Padding="12,4" Margin="0,0,4,0"/>
+                        <Button Content="Save Package" Command="{Binding SavePackageCommand}"
+                                Padding="12,4" Background="{StaticResource AccentPrimaryBrush}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
