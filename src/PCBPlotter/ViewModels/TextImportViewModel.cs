@@ -511,8 +511,39 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteSaveMapping()
         {
-            MessageBox.Show("Save mapping functionality coming soon.", "Save Mapping",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            // Generate a default name based on file name
+            string defaultName = Path.GetFileNameWithoutExtension(FilePath ?? "Mapping") + "_" + DateTime.Now.ToString("yyyyMMdd");
+
+            // Collect the field names from current mappings
+            var fieldNames = ColumnMappings
+                .Select(m => m.SelectedField?.FieldName ?? "")
+                .ToList();
+
+            // Save to settings using default name
+            Services.AppSettings.Instance.SaveColumnMapping(defaultName, fieldNames);
+
+            MessageBox.Show($"Mapping saved as '{defaultName}'.\n\nSettings are stored in:\n{Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)}\\PCBPlotter",
+                "Mapping Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        public void LoadMapping(string name)
+        {
+            var fieldNames = Services.AppSettings.Instance.LoadColumnMapping(name);
+            if (fieldNames == null) return;
+
+            for (int i = 0; i < Math.Min(fieldNames.Count, ColumnMappings.Count); i++)
+            {
+                var field = AvailableFields.FirstOrDefault(f => f.FieldName == fieldNames[i]);
+                if (field != null)
+                {
+                    ColumnMappings[i].SelectedField = field;
+                }
+            }
+        }
+
+        public IEnumerable<string> GetSavedMappingNames()
+        {
+            return Services.AppSettings.Instance.SavedMappings.Keys;
         }
 
         /// <summary>

@@ -279,33 +279,47 @@ namespace PCBPlotter.Controls
             var majorGridPen = new Pen(new SolidColorBrush(RenderColors.GridMajor), 1);
             majorGridPen.Freeze();
 
-            double spacing = GridSpacing * Zoom;
+            double screenSpacing = GridSpacing * Zoom;
 
             // Don't render grid if spacing is too small
-            if (spacing < 5) return;
-
-            // Calculate visible range using proper modulo that handles negative values
-            double startX = ((PanX % spacing) + spacing) % spacing;
-            double startY = ((PanY % spacing) + spacing) % spacing;
+            if (screenSpacing < 5) return;
 
             int majorInterval = 10;
-            int lineIndexX = (int)Math.Floor(-PanX / spacing);
-            int lineIndexY = (int)Math.Floor((ActualHeight - PanY) / spacing);
 
-            // Vertical lines
-            for (double x = startX; x < ActualWidth + spacing; x += spacing)
+            // Find the world coordinate range visible on screen
+            Point worldTopLeft = ScreenToWorld(new Point(0, 0));
+            Point worldBottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+
+            // Calculate first grid line in world coordinates
+            double worldMinX = Math.Min(worldTopLeft.X, worldBottomRight.X);
+            double worldMaxX = Math.Max(worldTopLeft.X, worldBottomRight.X);
+            double worldMinY = Math.Min(worldTopLeft.Y, worldBottomRight.Y);
+            double worldMaxY = Math.Max(worldTopLeft.Y, worldBottomRight.Y);
+
+            int startIndexX = (int)Math.Floor(worldMinX / GridSpacing);
+            int endIndexX = (int)Math.Ceiling(worldMaxX / GridSpacing);
+            int startIndexY = (int)Math.Floor(worldMinY / GridSpacing);
+            int endIndexY = (int)Math.Ceiling(worldMaxY / GridSpacing);
+
+            // Draw vertical lines (constant X in world space)
+            for (int i = startIndexX; i <= endIndexX; i++)
             {
-                var pen = (lineIndexX % majorInterval == 0) ? majorGridPen : gridPen;
-                dc.DrawLine(pen, new Point(x, 0), new Point(x, ActualHeight));
-                lineIndexX++;
+                double worldX = i * GridSpacing;
+                Point screenTop = WorldToScreen(new Point(worldX, worldMaxY));
+                Point screenBottom = WorldToScreen(new Point(worldX, worldMinY));
+
+                var pen = (i % majorInterval == 0) ? majorGridPen : gridPen;
+                dc.DrawLine(pen, new Point(screenTop.X, 0), new Point(screenTop.X, ActualHeight));
             }
 
-            // Horizontal lines (from bottom up due to inverted Y)
-            for (double y = startY; y < ActualHeight + spacing; y += spacing)
+            // Draw horizontal lines (constant Y in world space)
+            for (int i = startIndexY; i <= endIndexY; i++)
             {
-                var pen = (lineIndexY % majorInterval == 0) ? majorGridPen : gridPen;
-                dc.DrawLine(pen, new Point(0, y), new Point(ActualWidth, y));
-                lineIndexY--;
+                double worldY = i * GridSpacing;
+                Point screenLeft = WorldToScreen(new Point(worldMinX, worldY));
+
+                var pen = (i % majorInterval == 0) ? majorGridPen : gridPen;
+                dc.DrawLine(pen, new Point(0, screenLeft.Y), new Point(ActualWidth, screenLeft.Y));
             }
         }
 
@@ -564,8 +578,9 @@ namespace PCBPlotter.Controls
                     double deltaX = mousePos.X - _lastMousePosition.X;
                     double deltaY = mousePos.Y - _lastMousePosition.Y;
 
-                    PanX += deltaX;
-                    PanY += deltaY; // Fixed: was inverted
+                    // Inverted: drag right moves view right (camera pan behavior)
+                    PanX -= deltaX;
+                    PanY -= deltaY;
 
                     InvalidateVisual();
                 }
@@ -804,22 +819,22 @@ namespace PCBPlotter.Controls
             switch (e.Key)
             {
                 case Key.Left:
-                    PanX += panAmount * Zoom;
-                    InvalidateVisual();
-                    e.Handled = true;
-                    break;
-                case Key.Right:
                     PanX -= panAmount * Zoom;
                     InvalidateVisual();
                     e.Handled = true;
                     break;
+                case Key.Right:
+                    PanX += panAmount * Zoom;
+                    InvalidateVisual();
+                    e.Handled = true;
+                    break;
                 case Key.Up:
-                    PanY -= panAmount * Zoom;
+                    PanY += panAmount * Zoom;
                     InvalidateVisual();
                     e.Handled = true;
                     break;
                 case Key.Down:
-                    PanY += panAmount * Zoom;
+                    PanY -= panAmount * Zoom;
                     InvalidateVisual();
                     e.Handled = true;
                     break;
