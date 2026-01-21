@@ -570,18 +570,17 @@ namespace PCBPlotter.ViewModels
                 {
                     var sideStr = row[sideIndex].ToString().ToLower();
                     placement.Side = (sideStr.Contains("bot") || sideStr == "b" || sideStr == "bottom")
-                        ? BoardSide.Bottom : BoardSide.Top;
+                        ? Core.Models.BoardSide.Bottom : Core.Models.BoardSide.Top;
                 }
                 else
                 {
                     placement.Side = this.BoardSide == "Bottom"
-                        ? BoardSide.Bottom
-                        : BoardSide.Top;
+                        ? Core.Models.BoardSide.Bottom
+                        : Core.Models.BoardSide.Top;
                 }
 
-                // Optional fields
-                if (partIndex >= 0) placement.PartNumber = row[partIndex].ToString().Trim();
-                if (pkgIndex >= 0) placement.PackageName = row[pkgIndex].ToString().Trim();
+                // Note: PartNumber and PackageName are stored in Component/Package objects
+                // These will be linked via BOM import or manually after placement import
 
                 placements.Add(placement);
             }
