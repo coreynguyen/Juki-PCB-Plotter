@@ -1,0 +1,139 @@
+<UserControl x:Class="PCBPlotter.Views.StartScreenView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BackgroundDarkBrush}">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="350"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Panel - Start Options -->
+        <Border Grid.Column="0" Background="{StaticResource BackgroundMediumBrush}"
+                BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,1,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="24">
+                    <!-- App Title -->
+                    <TextBlock Text="PCB Plotter" FontSize="28" FontWeight="Bold"
+                               Foreground="{StaticResource AccentPrimaryBrush}" Margin="0,0,0,8"/>
+                    <TextBlock Text="Pick and Place Data Preparation Tool"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,32"/>
+
+                    <!-- Start Section -->
+                    <TextBlock Text="START" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,12"/>
+
+                    <Button Content="New Project" Command="{Binding NewProjectCommand}"
+                            HorizontalAlignment="Stretch" Padding="12,10" Margin="0,0,0,8"
+                            HorizontalContentAlignment="Left"/>
+                    <Button Content="Open Project..." Command="{Binding OpenProjectCommand}"
+                            HorizontalAlignment="Stretch" Padding="12,10" Margin="0,0,0,24"
+                            HorizontalContentAlignment="Left"/>
+
+                    <!-- Import Section -->
+                    <TextBlock Text="QUICK IMPORT" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,12"/>
+
+                    <Button HorizontalAlignment="Stretch" Padding="12,10" Margin="0,0,0,8"
+                            HorizontalContentAlignment="Left" Command="{Binding QuickImportPnpCommand}">
+                        <StackPanel>
+                            <TextBlock Text="Import PNP Text File" FontWeight="SemiBold"/>
+                            <TextBlock Text="CSV, TXT with placement data"
+                                       Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button HorizontalAlignment="Stretch" Padding="12,10" Margin="0,0,0,8"
+                            HorizontalContentAlignment="Left" Command="{Binding QuickImportCadCommand}">
+                        <StackPanel>
+                            <TextBlock Text="Import CAD File" FontWeight="SemiBold"/>
+                            <TextBlock Text="ODB++, IPC-2581 formats"
+                                       Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button HorizontalAlignment="Stretch" Padding="12,10" Margin="0,0,0,8"
+                            HorizontalContentAlignment="Left" Command="{Binding QuickImportGerberCommand}">
+                        <StackPanel>
+                            <TextBlock Text="Manual Gerber Plotting" FontWeight="SemiBold"/>
+                            <TextBlock Text="Create placements from Gerber layers"
+                                       Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button HorizontalAlignment="Stretch" Padding="12,10" Margin="0,0,0,24"
+                            HorizontalContentAlignment="Left" Command="{Binding CreateBlankProjectCommand}">
+                        <StackPanel>
+                            <TextBlock Text="Blank Project" FontWeight="SemiBold"/>
+                            <TextBlock Text="Start with empty design canvas"
+                                       Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Right Panel - Recent Projects -->
+        <Grid Grid.Column="1" Margin="32">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Text="RECENT PROJECTS" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,16"/>
+
+            <!-- Recent Projects List -->
+            <ListBox Grid.Row="1"
+                     ItemsSource="{Binding RecentProjects}"
+                     SelectedItem="{Binding SelectedRecentProject}"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Border Padding="12" Margin="0,0,0,4" Background="{StaticResource BackgroundMediumBrush}"
+                                BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1" CornerRadius="4"
+                                Cursor="Hand">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14"/>
+                                    <TextBlock Text="{Binding FilePath}"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               FontSize="11" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding LastOpened, StringFormat='{}{0:d}'}"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           VerticalAlignment="Center" FontSize="11"/>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="Background" Value="Transparent"/>
+                        <EventSetter Event="MouseDoubleClick" Handler="RecentProject_DoubleClick"/>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
+
+            <!-- Empty State -->
+            <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding HasNoRecentProjects, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="No recent projects"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           FontSize="14" HorizontalAlignment="Center"/>
+                <TextBlock Text="Create a new project or open an existing one to get started"
+                           Foreground="{StaticResource TextDisabledBrush}"
+                           FontSize="12" HorizontalAlignment="Center" Margin="0,8,0,0"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -57,6 +57,7 @@
     <Compile Include="Services\ProjectService.cs" />
     <Compile Include="Services\UndoRedoService.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
+    <Compile Include="Utilities\UnicodeHelper.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

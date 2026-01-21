@@ -205,6 +205,9 @@ namespace PCBPlotter.ViewModels
         public ICommand FocusSelectionCommand { get; private set; }
         public ICommand EnableForExportCommand { get; private set; }
         public ICommand DisableForExportCommand { get; private set; }
+        public ICommand AddPcbAreaCommand { get; private set; }
+        public ICommand AddPlacementCommand { get; private set; }
+        public ICommand AddFiducialCommand { get; private set; }
 
         public OutputPlotViewModel()
         {
@@ -231,6 +234,9 @@ namespace PCBPlotter.ViewModels
             FocusSelectionCommand = new RelayCommand(ExecuteFocusSelection, () => SelectedPlacements.Count > 0);
             EnableForExportCommand = new RelayCommand(ExecuteEnableForExport, () => SelectedPlacements.Count > 0);
             DisableForExportCommand = new RelayCommand(ExecuteDisableForExport, () => SelectedPlacements.Count > 0);
+            AddPcbAreaCommand = new RelayCommand(ExecuteAddPcbArea, () => Project != null);
+            AddPlacementCommand = new RelayCommand(ExecuteAddPlacement, () => Project != null);
+            AddFiducialCommand = new RelayCommand(ExecuteAddFiducial, () => Project != null);
         }
 
         private void SubscribeToEvents()
@@ -433,6 +439,51 @@ namespace PCBPlotter.ViewModels
                     placement.IsExportEnabledBottom = false;
             }
             Publish(new RequestRefreshEvent { FullRefresh = false });
+        }
+
+        private void ExecuteAddPcbArea()
+        {
+            // TODO: Show dialog to define PCB area
+            Publish(new ShowDialogEvent { DialogType = "PcbArea" });
+            Publish(new StatusMessageEvent { Message = "Draw PCB area on canvas" });
+        }
+
+        private void ExecuteAddPlacement()
+        {
+            if (Project == null) return;
+
+            // Create a new placement at cursor position
+            var placement = new Placement
+            {
+                Reference = string.Format("U{0}", Project.Placements.Count + 1),
+                X = CursorPosition.X,
+                Y = CursorPosition.Y,
+                Rotation = 0,
+                Side = ViewSide
+            };
+
+            Project.Placements.Add(placement);
+            SelectPlacement(placement);
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+            Publish(new StatusMessageEvent { Message = string.Format("Added placement {0}", placement.Reference) });
+        }
+
+        private void ExecuteAddFiducial()
+        {
+            if (Project == null) return;
+
+            var fiducial = new Fiducial
+            {
+                Name = string.Format("FID{0}", Project.Fiducials.Count + 1),
+                X = CursorPosition.X,
+                Y = CursorPosition.Y,
+                Side = ViewSide,
+                IsGlobal = true
+            };
+
+            Project.Fiducials.Add(fiducial);
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+            Publish(new StatusMessageEvent { Message = string.Format("Added fiducial {0}", fiducial.Name) });
         }
 
         #endregion

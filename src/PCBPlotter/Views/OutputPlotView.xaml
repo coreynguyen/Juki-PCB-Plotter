@@ -58,7 +58,33 @@
                                PanX="{Binding PanX, Mode=TwoWay}"
                                PanY="{Binding PanY, Mode=TwoWay}"
                                ShowGrid="{Binding ShowGrid}"
-                               GridSpacing="{Binding GridSpacing}"/>
+                               GridSpacing="{Binding GridSpacing}">
+            <controls:DesignCanvas.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Add PCB Area..." Command="{Binding AddPcbAreaCommand}"/>
+                    <MenuItem Header="Add Placement..." Command="{Binding AddPlacementCommand}"/>
+                    <MenuItem Header="Add Fiducial..." Command="{Binding AddFiducialCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Set Origin Here" Command="{Binding SetOriginCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Select All" Command="{Binding SelectAllCommand}" InputGestureText="Ctrl+A"/>
+                    <MenuItem Header="Select None" Command="{Binding SelectNoneCommand}" InputGestureText="Esc"/>
+                    <Separator/>
+                    <MenuItem Header="Zoom">
+                        <MenuItem Header="Zoom In" Command="{Binding ZoomInCommand}"/>
+                        <MenuItem Header="Zoom Out" Command="{Binding ZoomOutCommand}"/>
+                        <MenuItem Header="Fit to Window" Command="{Binding ZoomFitCommand}"/>
+                        <MenuItem Header="100%" Command="{Binding ZoomResetCommand}"/>
+                    </MenuItem>
+                    <MenuItem Header="View">
+                        <MenuItem Header="Top Side" IsCheckable="True"
+                                  IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Top}"/>
+                        <MenuItem Header="Bottom Side" IsCheckable="True"
+                                  IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"/>
+                    </MenuItem>
+                </ContextMenu>
+            </controls:DesignCanvas.ContextMenu>
+        </controls:DesignCanvas>
 
         <!-- Bottom Status/Coordinate Bar -->
         <Border Grid.Row="2" Background="{StaticResource BackgroundLightBrush}"

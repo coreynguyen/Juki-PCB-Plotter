@@ -33,6 +33,7 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Xaml">
@@ -52,6 +53,14 @@
       <SubType>Designer</SubType>
     </Page>
     <Page Include="Themes\Colors.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Themes\LightColors.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Themes\LightTheme.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -87,6 +96,14 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Views\StartScreenView.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\TextImportDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="App.xaml.cs">
@@ -113,6 +130,12 @@
     <Compile Include="Views\FloatingWindow.xaml.cs">
       <DependentUpon>FloatingWindow.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Views\StartScreenView.xaml.cs">
+      <DependentUpon>StartScreenView.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\TextImportDialog.xaml.cs">
+      <DependentUpon>TextImportDialog.xaml</DependentUpon>
+    </Compile>
     <Compile Include="ViewModels\ViewModelBase.cs" />
     <Compile Include="ViewModels\RelayCommand.cs" />
     <Compile Include="ViewModels\MainViewModel.cs" />
@@ -121,12 +144,14 @@
     <Compile Include="ViewModels\ComponentEditorViewModel.cs" />
     <Compile Include="ViewModels\BomEditorViewModel.cs" />
     <Compile Include="ViewModels\GerberViewerViewModel.cs" />
+    <Compile Include="ViewModels\TextImportViewModel.cs" />
     <Compile Include="Controls\DesignCanvas.cs" />
     <Compile Include="Controls\CoordinateDisplay.cs" />
     <Compile Include="Converters\BoolToVisibilityConverter.cs" />
     <Compile Include="Converters\EnumToBoolConverter.cs" />
     <Compile Include="Converters\EnumToDescriptionConverter.cs" />
     <Compile Include="Services\WindowService.cs" />
+    <Compile Include="Services\ThemeService.cs" />
     <Compile Include="Services\WpfDrawingRenderer.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

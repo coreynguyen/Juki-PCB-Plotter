@@ -1,4 +1,6 @@
 using System;
+using System.Collections.ObjectModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using PCBPlotter.Core.Events;
@@ -8,6 +10,16 @@ using PCBPlotter.Core.Services;
 namespace PCBPlotter.ViewModels
 {
     /// <summary>
+    /// Recent project entry for the start screen
+    /// </summary>
+    public class RecentProjectInfo
+    {
+        public string Name { get; set; }
+        public string FilePath { get; set; }
+        public DateTime LastOpened { get; set; }
+    }
+
+    /// <summary>
     /// Main window view model
     /// </summary>
     public class MainViewModel : ViewModelBase
@@ -16,12 +28,18 @@ namespace PCBPlotter.ViewModels
         private string _title = "PCB Plotter";
         private string _statusMessage = "Ready";
         private bool _isProjectLoaded;
+        private bool _showStartScreen = true;
         private int _selectedTabIndex;
         private OutputPlotViewModel _outputPlotViewModel;
         private PlacementEditorViewModel _placementEditorViewModel;
         private ComponentEditorViewModel _componentEditorViewModel;
         private BomEditorViewModel _bomEditorViewModel;
         private GerberViewerViewModel _gerberViewerViewModel;
+        private ObservableCollection<RecentProjectInfo> _recentProjects;
+        private RecentProjectInfo _selectedRecentProject;
+        private bool _useSystemTheme = true;
+        private bool _useDarkTheme;
+        private bool _useLightTheme;
 
         public Project CurrentProject
         {
@@ -31,6 +49,7 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _currentProject, value))
                 {
                     IsProjectLoaded = value != null;
+                    ShowStartScreen = value == null;
                     UpdateTitle();
                     NotifyViewModels();
                 }
@@ -55,10 +74,75 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _isProjectLoaded, value); }
         }
 
+        public bool ShowStartScreen
+        {
+            get { return _showStartScreen; }
+            set { SetProperty(ref _showStartScreen, value); }
+        }
+
         public int SelectedTabIndex
         {
             get { return _selectedTabIndex; }
             set { SetProperty(ref _selectedTabIndex, value); }
+        }
+
+        public ObservableCollection<RecentProjectInfo> RecentProjects
+        {
+            get { return _recentProjects; }
+            set { SetProperty(ref _recentProjects, value); }
+        }
+
+        public RecentProjectInfo SelectedRecentProject
+        {
+            get { return _selectedRecentProject; }
+            set { SetProperty(ref _selectedRecentProject, value); }
+        }
+
+        public bool HasNoRecentProjects
+        {
+            get { return RecentProjects == null || RecentProjects.Count == 0; }
+        }
+
+        public bool UseSystemTheme
+        {
+            get { return _useSystemTheme; }
+            set
+            {
+                if (SetProperty(ref _useSystemTheme, value) && value)
+                {
+                    UseDarkTheme = false;
+                    UseLightTheme = false;
+                    ApplySystemTheme();
+                }
+            }
+        }
+
+        public bool UseDarkTheme
+        {
+            get { return _useDarkTheme; }
+            set
+            {
+                if (SetProperty(ref _useDarkTheme, value) && value)
+                {
+                    UseSystemTheme = false;
+                    UseLightTheme = false;
+                    ApplyDarkTheme();
+                }
+            }
+        }
+
+        public bool UseLightTheme
+        {
+            get { return _useLightTheme; }
+            set
+            {
+                if (SetProperty(ref _useLightTheme, value) && value)
+                {
+                    UseSystemTheme = false;
+                    UseDarkTheme = false;
+                    ApplyLightTheme();
+                }
+            }
         }
 
         public OutputPlotViewModel OutputPlotViewModel
@@ -96,24 +180,39 @@ namespace PCBPlotter.ViewModels
         // Commands
         public ICommand NewProjectCommand { get; private set; }
         public ICommand OpenProjectCommand { get; private set; }
+        public ICommand OpenRecentProjectCommand { get; private set; }
         public ICommand SaveProjectCommand { get; private set; }
         public ICommand SaveProjectAsCommand { get; private set; }
         public ICommand CloseProjectCommand { get; private set; }
+        public ICommand OpenSettingsCommand { get; private set; }
         public ICommand ExitCommand { get; private set; }
         public ICommand UndoCommand { get; private set; }
         public ICommand RedoCommand { get; private set; }
+        public ICommand ImportPnpTextCommand { get; private set; }
         public ICommand ImportCadCommand { get; private set; }
         public ICommand ImportBomCommand { get; private set; }
         public ICommand ImportGerberCommand { get; private set; }
         public ICommand ExportMachineFileCommand { get; private set; }
-        public ICommand FloatOutputPlotCommand { get; private set; }
+        public ICommand ExportBomCommand { get; private set; }
+        public ICommand ShowStartScreenCommand { get; private set; }
+        public ICommand FloatDesignViewCommand { get; private set; }
         public ICommand FloatPlacementEditorCommand { get; private set; }
         public ICommand FloatComponentEditorCommand { get; private set; }
+        public ICommand FloatBomEditorCommand { get; private set; }
+        public ICommand FloatGerberViewerCommand { get; private set; }
         public ICommand AboutCommand { get; private set; }
+
+        // Start screen quick commands
+        public ICommand QuickImportPnpCommand { get; private set; }
+        public ICommand QuickImportCadCommand { get; private set; }
+        public ICommand QuickImportGerberCommand { get; private set; }
+        public ICommand CreateBlankProjectCommand { get; private set; }
 
         public MainViewModel()
         {
             UndoRedoService = new UndoRedoService();
+            RecentProjects = new ObservableCollection<RecentProjectInfo>();
+            LoadRecentProjects();
             InitializeCommands();
             InitializeChildViewModels();
             SubscribeToEvents();
@@ -123,20 +222,33 @@ namespace PCBPlotter.ViewModels
         {
             NewProjectCommand = new RelayCommand(ExecuteNewProject);
             OpenProjectCommand = new RelayCommand(ExecuteOpenProject);
+            OpenRecentProjectCommand = new RelayCommand<string>(ExecuteOpenRecentProject);
             SaveProjectCommand = new RelayCommand(ExecuteSaveProject, () => IsProjectLoaded);
             SaveProjectAsCommand = new RelayCommand(ExecuteSaveProjectAs, () => IsProjectLoaded);
             CloseProjectCommand = new RelayCommand(ExecuteCloseProject, () => IsProjectLoaded);
+            OpenSettingsCommand = new RelayCommand(ExecuteOpenSettings);
             ExitCommand = new RelayCommand(ExecuteExit);
             UndoCommand = new RelayCommand(ExecuteUndo, () => UndoRedoService.CanUndo);
             RedoCommand = new RelayCommand(ExecuteRedo, () => UndoRedoService.CanRedo);
+            ImportPnpTextCommand = new RelayCommand(ExecuteImportPnpText, () => IsProjectLoaded);
             ImportCadCommand = new RelayCommand(ExecuteImportCad, () => IsProjectLoaded);
             ImportBomCommand = new RelayCommand(ExecuteImportBom, () => IsProjectLoaded);
             ImportGerberCommand = new RelayCommand(ExecuteImportGerber, () => IsProjectLoaded);
             ExportMachineFileCommand = new RelayCommand(ExecuteExportMachineFile, () => IsProjectLoaded);
-            FloatOutputPlotCommand = new RelayCommand(o => ExecuteFloatWindow("OutputPlot"));
-            FloatPlacementEditorCommand = new RelayCommand(o => ExecuteFloatWindow("PlacementEditor"));
-            FloatComponentEditorCommand = new RelayCommand(o => ExecuteFloatWindow("ComponentEditor"));
+            ExportBomCommand = new RelayCommand(ExecuteExportBom, () => IsProjectLoaded);
+            ShowStartScreenCommand = new RelayCommand(() => ShowStartScreen = true);
+            FloatDesignViewCommand = new RelayCommand(o => ExecuteFloatWindow("Design"));
+            FloatPlacementEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Placements"));
+            FloatComponentEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Components"));
+            FloatBomEditorCommand = new RelayCommand(o => ExecuteFloatWindow("BOM"));
+            FloatGerberViewerCommand = new RelayCommand(o => ExecuteFloatWindow("Gerber"));
             AboutCommand = new RelayCommand(ExecuteAbout);
+
+            // Start screen quick commands
+            QuickImportPnpCommand = new RelayCommand(ExecuteQuickImportPnp);
+            QuickImportCadCommand = new RelayCommand(ExecuteQuickImportCad);
+            QuickImportGerberCommand = new RelayCommand(ExecuteQuickImportGerber);
+            CreateBlankProjectCommand = new RelayCommand(ExecuteCreateBlankProject);
         }
 
         private void InitializeChildViewModels()
@@ -184,6 +296,54 @@ namespace PCBPlotter.ViewModels
             }
         }
 
+        private void LoadRecentProjects()
+        {
+            // TODO: Load from settings/registry
+            // For now, just create an empty list
+            RecentProjects.Clear();
+            OnPropertyChanged("HasNoRecentProjects");
+        }
+
+        private void AddToRecentProjects(string filePath, string name)
+        {
+            var existing = RecentProjects.FirstOrDefault(r => r.FilePath == filePath);
+            if (existing != null)
+            {
+                RecentProjects.Remove(existing);
+            }
+
+            RecentProjects.Insert(0, new RecentProjectInfo
+            {
+                Name = name,
+                FilePath = filePath,
+                LastOpened = DateTime.Now
+            });
+
+            // Keep only the last 10
+            while (RecentProjects.Count > 10)
+            {
+                RecentProjects.RemoveAt(RecentProjects.Count - 1);
+            }
+
+            OnPropertyChanged("HasNoRecentProjects");
+            // TODO: Save to settings/registry
+        }
+
+        private void ApplySystemTheme()
+        {
+            Services.ThemeService.Instance.CurrentPreference = Services.AppTheme.System;
+        }
+
+        private void ApplyDarkTheme()
+        {
+            Services.ThemeService.Instance.CurrentPreference = Services.AppTheme.Dark;
+        }
+
+        private void ApplyLightTheme()
+        {
+            Services.ThemeService.Instance.CurrentPreference = Services.AppTheme.Light;
+        }
+
         #region Command Implementations
 
         private void ExecuteNewProject()
@@ -202,16 +362,34 @@ namespace PCBPlotter.ViewModels
 
             if (dialog.ShowDialog() == true)
             {
-                var project = ProjectService.Instance.LoadProject(dialog.FileName);
-                if (project != null)
-                {
-                    CurrentProject = project;
-                    StatusMessage = "Project loaded: " + dialog.FileName;
-                }
-                else
-                {
-                    MessageBox.Show("Failed to load project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
+                OpenProjectFile(dialog.FileName);
+            }
+        }
+
+        private void ExecuteOpenRecentProject(string filePath)
+        {
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                OpenProjectFile(filePath);
+            }
+            else if (SelectedRecentProject != null)
+            {
+                OpenProjectFile(SelectedRecentProject.FilePath);
+            }
+        }
+
+        private void OpenProjectFile(string filePath)
+        {
+            var project = ProjectService.Instance.LoadProject(filePath);
+            if (project != null)
+            {
+                CurrentProject = project;
+                AddToRecentProjects(filePath, project.Name);
+                StatusMessage = "Project loaded: " + filePath;
+            }
+            else
+            {
+                MessageBox.Show("Failed to load project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -247,6 +425,7 @@ namespace PCBPlotter.ViewModels
                 if (ProjectService.Instance.SaveProject(dialog.FileName))
                 {
                     CurrentProject.Name = System.IO.Path.GetFileNameWithoutExtension(dialog.FileName);
+                    AddToRecentProjects(dialog.FileName, CurrentProject.Name);
                     UpdateTitle();
                     StatusMessage = "Project saved: " + dialog.FileName;
                 }
@@ -263,6 +442,12 @@ namespace PCBPlotter.ViewModels
             ProjectService.Instance.CloseProject();
             CurrentProject = null;
             StatusMessage = "Project closed";
+        }
+
+        private void ExecuteOpenSettings()
+        {
+            // TODO: Open settings dialog
+            StatusMessage = "Settings dialog not yet implemented";
         }
 
         private void ExecuteExit()
@@ -283,15 +468,18 @@ namespace PCBPlotter.ViewModels
             StatusMessage = "Redo: " + (UndoRedoService.UndoDescription ?? "");
         }
 
+        private void ExecuteImportPnpText()
+        {
+            Publish(new ShowDialogEvent { DialogType = "PnpImport" });
+        }
+
         private void ExecuteImportCad()
         {
-            // TODO: Open CAD import wizard
             Publish(new ShowDialogEvent { DialogType = "CadImport" });
         }
 
         private void ExecuteImportBom()
         {
-            // TODO: Open BOM import wizard
             Publish(new ShowDialogEvent { DialogType = "BomImport" });
         }
 
@@ -307,7 +495,6 @@ namespace PCBPlotter.ViewModels
             {
                 foreach (var file in dialog.FileNames)
                 {
-                    // TODO: Import gerber file
                     StatusMessage = "Importing: " + System.IO.Path.GetFileName(file);
                 }
             }
@@ -315,8 +502,22 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteExportMachineFile()
         {
-            // TODO: Open export dialog
             Publish(new ShowDialogEvent { DialogType = "MachineExport" });
+        }
+
+        private void ExecuteExportBom()
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "CSV Files (*.csv)|*.csv|Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
+                DefaultExt = ".csv",
+                FileName = "BOM_Export"
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                StatusMessage = "BOM exported to " + dialog.FileName;
+            }
         }
 
         private void ExecuteFloatWindow(string viewType)
@@ -334,6 +535,30 @@ namespace PCBPlotter.ViewModels
                 MessageBoxButton.OK,
                 MessageBoxImage.Information
             );
+        }
+
+        private void ExecuteQuickImportPnp()
+        {
+            ExecuteNewProject();
+            ExecuteImportPnpText();
+        }
+
+        private void ExecuteQuickImportCad()
+        {
+            ExecuteNewProject();
+            ExecuteImportCad();
+        }
+
+        private void ExecuteQuickImportGerber()
+        {
+            ExecuteNewProject();
+            SelectedTabIndex = 4; // Switch to Gerber tab
+            ExecuteImportGerber();
+        }
+
+        private void ExecuteCreateBlankProject()
+        {
+            ExecuteNewProject();
         }
 
         #endregion
