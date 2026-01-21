@@ -112,6 +112,10 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Views\LogView.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="App.xaml.cs">
@@ -159,6 +163,10 @@
     <Compile Include="ViewModels\BomEditorViewModel.cs" />
     <Compile Include="ViewModels\GerberViewerViewModel.cs" />
     <Compile Include="ViewModels\TextImportViewModel.cs" />
+    <Compile Include="ViewModels\LogViewModel.cs" />
+    <Compile Include="Views\LogView.xaml.cs">
+      <DependentUpon>LogView.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Controls\DesignCanvas.cs" />
     <Compile Include="Controls\CoordinateDisplay.cs" />
     <Compile Include="Behaviors\DataGridZoomBehavior.cs" />

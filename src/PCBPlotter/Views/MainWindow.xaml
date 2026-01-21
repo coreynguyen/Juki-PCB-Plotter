@@ -129,6 +129,11 @@
                     <local:GerberViewerView DataContext="{Binding GerberViewerViewModel}"/>
                 </TabItem>
 
+                <!-- Log Tab -->
+                <TabItem Header="Log">
+                    <local:LogView DataContext="{Binding LogViewModel}"/>
+                </TabItem>
+
             </TabControl>
         </Grid>
 

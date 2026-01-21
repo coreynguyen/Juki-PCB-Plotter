@@ -232,6 +232,13 @@ namespace PCBPlotter.Core.Events
         public bool Float { get; set; } // true = float, false = dock
     }
 
+    public class LogMessageEvent
+    {
+        public string Type { get; set; } // Info, Success, Warning, Error
+        public string Message { get; set; }
+        public string Details { get; set; }
+    }
+
     #endregion
 
     #region Gerber Events

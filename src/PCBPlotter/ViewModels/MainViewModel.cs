@@ -35,6 +35,7 @@ namespace PCBPlotter.ViewModels
         private ComponentEditorViewModel _componentEditorViewModel;
         private BomEditorViewModel _bomEditorViewModel;
         private GerberViewerViewModel _gerberViewerViewModel;
+        private LogViewModel _logViewModel;
         private ObservableCollection<RecentProjectInfo> _recentProjects;
         private RecentProjectInfo _selectedRecentProject;
         private bool _useSystemTheme = true;
@@ -175,6 +176,12 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _gerberViewerViewModel, value); }
         }
 
+        public LogViewModel LogViewModel
+        {
+            get { return _logViewModel; }
+            set { SetProperty(ref _logViewModel, value); }
+        }
+
         public UndoRedoService UndoRedoService { get; private set; }
 
         // Commands
@@ -258,6 +265,7 @@ namespace PCBPlotter.ViewModels
             ComponentEditorViewModel = new ComponentEditorViewModel();
             BomEditorViewModel = new BomEditorViewModel();
             GerberViewerViewModel = new GerberViewerViewModel();
+            LogViewModel = new LogViewModel();
         }
 
         private void SubscribeToEvents()
@@ -617,6 +625,7 @@ namespace PCBPlotter.ViewModels
                 ComponentEditorViewModel?.Dispose();
                 BomEditorViewModel?.Dispose();
                 GerberViewerViewModel?.Dispose();
+                LogViewModel?.Dispose();
             }
             base.Dispose(disposing);
         }
