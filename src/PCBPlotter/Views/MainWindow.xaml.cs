@@ -38,6 +38,15 @@ namespace PCBPlotter.Views
 
         private void OnShowDialog(ShowDialogEvent e)
         {
+            // Ensure we're on the UI thread
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.Invoke(() => OnShowDialog(e));
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine("OnShowDialog called with type: " + e.DialogType);
+
             switch (e.DialogType)
             {
                 case "PnpImport":
@@ -60,13 +69,15 @@ namespace PCBPlotter.Views
                     break;
 
                 default:
-                    // Unknown dialog type
+                    System.Diagnostics.Debug.WriteLine("Unknown dialog type: " + e.DialogType);
                     break;
             }
         }
 
         private void ShowTextImportDialog(string importType)
         {
+            System.Diagnostics.Debug.WriteLine("ShowTextImportDialog called with type: " + importType);
+
             var dialog = new TextImportDialog();
             dialog.Owner = this;
 

@@ -60,7 +60,7 @@
                                ShowGrid="{Binding ShowGrid}"
                                GridSpacing="{Binding GridSpacing}">
             <controls:DesignCanvas.ContextMenu>
-                <ContextMenu>
+                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                     <MenuItem Header="Add PCB Area..." Command="{Binding AddPcbAreaCommand}"/>
                     <MenuItem Header="Add Placement..." Command="{Binding AddPlacementCommand}"/>
                     <MenuItem Header="Add Fiducial..." Command="{Binding AddFiducialCommand}"/>
