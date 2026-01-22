@@ -1,5 +1,9 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using PCBPlotter.Core.Models;
 using PCBPlotter.ViewModels;
 
 namespace PCBPlotter.Views
@@ -9,12 +13,41 @@ namespace PCBPlotter.Views
     /// </summary>
     public partial class GerberViewerView : UserControl
     {
+        // Preset colors for quick layer color selection
+        private static readonly Color[] _presetColors = new[]
+        {
+            Color.FromRgb(255, 0, 0),      // Red
+            Color.FromRgb(0, 255, 0),      // Green
+            Color.FromRgb(0, 0, 255),      // Blue
+            Color.FromRgb(255, 255, 0),    // Yellow
+            Color.FromRgb(255, 0, 255),    // Magenta
+            Color.FromRgb(0, 255, 255),    // Cyan
+            Color.FromRgb(255, 128, 0),    // Orange
+            Color.FromRgb(128, 0, 255),    // Purple
+            Color.FromRgb(0, 128, 255),    // Sky blue
+            Color.FromRgb(128, 255, 0),    // Lime
+            Color.FromRgb(255, 128, 128),  // Light red
+            Color.FromRgb(128, 255, 128),  // Light green
+            Color.FromRgb(128, 128, 255),  // Light blue
+            Color.FromRgb(255, 255, 128),  // Light yellow
+            Color.FromRgb(255, 255, 255),  // White
+            Color.FromRgb(128, 128, 128),  // Gray
+        };
+
         public GerberViewerView()
         {
             InitializeComponent();
 
             GerberCanvas.CursorPositionChanged += OnCursorPositionChanged;
             GerberCanvas.SelectionRectCompleted += OnSelectionRectCompleted;
+            GerberCanvas.Loaded += (s, e) =>
+            {
+                var vm = DataContext as GerberViewerViewModel;
+                if (vm != null)
+                {
+                    vm.ZoomToFitWithViewport(GerberCanvas.ActualWidth, GerberCanvas.ActualHeight);
+                }
+            };
         }
 
         private void OnCursorPositionChanged(object sender, Point worldPos)
@@ -31,10 +64,62 @@ namespace PCBPlotter.Views
             var vm = DataContext as GerberViewerViewModel;
             if (vm != null)
             {
-                bool addToSelection = System.Windows.Input.Keyboard.Modifiers.HasFlag(
-                    System.Windows.Input.ModifierKeys.Shift);
+                bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
                 vm.SelectPrimitivesInRect(worldRect, addToSelection);
             }
+        }
+
+        private void ColorBorder_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            var border = sender as FrameworkElement;
+            if (border == null) return;
+
+            var layer = border.DataContext as GerberLayer;
+            if (layer == null) return;
+
+            // Create a popup menu with color presets
+            var contextMenu = new ContextMenu();
+
+            // Add preset colors as grid
+            var grid = new System.Windows.Controls.Primitives.UniformGrid
+            {
+                Columns = 4,
+                Width = 130,
+                Height = 130
+            };
+
+            foreach (var color in _presetColors)
+            {
+                var colorRect = new Border
+                {
+                    Width = 28,
+                    Height = 28,
+                    Margin = new Thickness(2),
+                    Background = new SolidColorBrush(color),
+                    BorderBrush = new SolidColorBrush(Colors.Gray),
+                    BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand
+                };
+
+                Color capturedColor = color;
+                colorRect.MouseLeftButtonDown += (s, args) =>
+                {
+                    layer.Color = capturedColor;
+                    contextMenu.IsOpen = false;
+                    GerberCanvas.InvalidateVisual();
+                };
+
+                grid.Children.Add(colorRect);
+            }
+
+            var menuItem = new MenuItem { Header = grid, StaysOpenOnClick = true };
+            contextMenu.Items.Add(menuItem);
+
+            contextMenu.PlacementTarget = border;
+            contextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            contextMenu.IsOpen = true;
+
+            e.Handled = true;
         }
     }
 }

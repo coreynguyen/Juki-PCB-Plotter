@@ -37,9 +37,14 @@
 
                             <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}"
                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <Rectangle Grid.Column="1" Width="16" Height="16" Margin="0,0,8,0"
-                                       Fill="{Binding Color, Converter={StaticResource ColorToBrushConverter}}"/>
-                            <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"/>
+                            <Border Grid.Column="1" Width="18" Height="18" Margin="0,0,8,0"
+                                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1"
+                                    Cursor="Hand" ToolTip="Click to change color"
+                                    MouseLeftButtonDown="ColorBorder_MouseLeftButtonDown">
+                                <Rectangle Fill="{Binding Color, Converter={StaticResource ColorToBrushConverter}}"/>
+                            </Border>
+                            <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"/>
                         </Grid>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -102,6 +107,8 @@
                                    Zoom="{Binding Zoom, Mode=TwoWay}"
                                    PanX="{Binding PanX, Mode=TwoWay}"
                                    PanY="{Binding PanY, Mode=TwoWay}"
+                                   GerberLayers="{Binding GerberLayersCollection}"
+                                   UseScreenBlend="True"
                                    ShowGrid="True"/>
 
             <!-- Status Bar -->

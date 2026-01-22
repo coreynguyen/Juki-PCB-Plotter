@@ -62,6 +62,7 @@
     <Compile Include="Services\Ipc356Parser.cs" />
     <Compile Include="Services\JukiFx3Exporter.cs" />
     <Compile Include="Services\OdbPlusPlusParser.cs" />
+    <Compile Include="Services\GerberParser.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
     <Compile Include="Utilities\UnicodeHelper.cs" />
     <Compile Include="Utilities\UnitConverter.cs" />

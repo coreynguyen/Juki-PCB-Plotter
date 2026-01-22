@@ -100,6 +100,14 @@ namespace PCBPlotter.Controls
             DependencyProperty.Register("Board", typeof(BoardDefinition), typeof(DesignCanvas),
                 new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
+        public static readonly DependencyProperty GerberLayersProperty =
+            DependencyProperty.Register("GerberLayers", typeof(ObservableCollection<GerberLayer>), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnGerberLayersChanged));
+
+        public static readonly DependencyProperty UseScreenBlendProperty =
+            DependencyProperty.Register("UseScreenBlend", typeof(bool), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
+
         public static readonly DependencyProperty SelectedPackageProperty =
             DependencyProperty.Register("SelectedPackage", typeof(Package), typeof(DesignCanvas),
                 new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnSelectedPackageChanged));
@@ -185,6 +193,18 @@ namespace PCBPlotter.Controls
         {
             get { return (BoardDefinition)GetValue(BoardProperty); }
             set { SetValue(BoardProperty, value); }
+        }
+
+        public ObservableCollection<GerberLayer> GerberLayers
+        {
+            get { return (ObservableCollection<GerberLayer>)GetValue(GerberLayersProperty); }
+            set { SetValue(GerberLayersProperty, value); }
+        }
+
+        public bool UseScreenBlend
+        {
+            get { return (bool)GetValue(UseScreenBlendProperty); }
+            set { SetValue(UseScreenBlendProperty, value); }
         }
 
         public Package SelectedPackage
@@ -474,6 +494,33 @@ namespace PCBPlotter.Controls
             InvalidateVisual();
         }
 
+        private static void OnGerberLayersChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            var canvas = d as DesignCanvas;
+            if (canvas == null) return;
+
+            // Unsubscribe from old collection
+            var oldCollection = e.OldValue as ObservableCollection<GerberLayer>;
+            if (oldCollection != null)
+            {
+                oldCollection.CollectionChanged -= canvas.OnGerberLayersCollectionChanged;
+            }
+
+            // Subscribe to new collection
+            var newCollection = e.NewValue as ObservableCollection<GerberLayer>;
+            if (newCollection != null)
+            {
+                newCollection.CollectionChanged += canvas.OnGerberLayersCollectionChanged;
+            }
+
+            canvas.InvalidateVisual();
+        }
+
+        private void OnGerberLayersCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            InvalidateVisual();
+        }
+
         #region Visual Tree
 
         protected override int VisualChildrenCount
@@ -509,6 +556,9 @@ namespace PCBPlotter.Controls
 
             // Draw board outline if defined
             RenderBoardArea(dc);
+
+            // Render Gerber layers
+            RenderGerberLayers(dc);
 
             // Render selected package in editor mode (for Component tab)
             if (SelectedPackage != null)
@@ -608,6 +658,223 @@ namespace PCBPlotter.Controls
 
             // Origin marker
             dc.DrawEllipse(new SolidColorBrush(RenderColors.OriginMarker), null, screenOrigin, 4, 4);
+        }
+
+        private void RenderGerberLayers(DrawingContext dc)
+        {
+            if (GerberLayers == null || GerberLayers.Count == 0)
+                return;
+
+            // Viewport bounds for culling
+            Rect viewport = new Rect(0, 0, ActualWidth, ActualHeight);
+
+            // Render each visible layer
+            foreach (var layer in GerberLayers)
+            {
+                if (!layer.IsVisible || layer.Primitives == null || layer.Primitives.Count == 0)
+                    continue;
+
+                // Create layer brush with alpha for opacity
+                byte alpha = (byte)(layer.Opacity * 255);
+                Color layerColor = Color.FromArgb(alpha, layer.Color.R, layer.Color.G, layer.Color.B);
+                var layerBrush = new SolidColorBrush(layerColor);
+                layerBrush.Freeze();
+                var layerPen = new Pen(layerBrush, 1);
+                layerPen.Freeze();
+
+                // Render primitives
+                foreach (var prim in layer.Primitives)
+                {
+                    RenderGerberPrimitive(dc, prim, layerBrush, layerPen, viewport);
+                }
+            }
+        }
+
+        private void RenderGerberPrimitive(DrawingContext dc, GerberPrimitive prim,
+            SolidColorBrush fillBrush, Pen strokePen, Rect viewport)
+        {
+            // Get screen coordinates for hit testing / culling
+            Point screenPos = WorldToScreen(prim.Position);
+
+            // Quick viewport culling based on position
+            double maxSize = Math.Max(prim.Width, prim.Height) * Zoom + 10;
+            Rect primScreenRect = new Rect(
+                screenPos.X - maxSize,
+                screenPos.Y - maxSize,
+                maxSize * 2,
+                maxSize * 2
+            );
+
+            if (!viewport.IntersectsWith(primScreenRect))
+                return;
+
+            // Create pen for this primitive's stroke width
+            Pen primPen = strokePen;
+            if (prim.Width > 0 && (prim.Type == GerberPrimitiveType.Line || prim.Type == GerberPrimitiveType.Arc))
+            {
+                primPen = new Pen(fillBrush, prim.Width * Zoom);
+                primPen.StartLineCap = PenLineCap.Round;
+                primPen.EndLineCap = PenLineCap.Round;
+                primPen.Freeze();
+            }
+
+            // Selection highlight
+            if (prim.IsSelected)
+            {
+                var selectedPen = new Pen(new SolidColorBrush(Color.FromRgb(0, 200, 255)), 2);
+                selectedPen.Freeze();
+                RenderGerberPrimitiveShape(dc, prim, null, selectedPen);
+            }
+
+            RenderGerberPrimitiveShape(dc, prim, fillBrush, primPen);
+        }
+
+        private void RenderGerberPrimitiveShape(DrawingContext dc, GerberPrimitive prim,
+            SolidColorBrush fillBrush, Pen strokePen)
+        {
+            Point screenCenter = WorldToScreen(prim.Position);
+            double screenWidth = prim.Width * Zoom;
+            double screenHeight = prim.Height * Zoom;
+
+            switch (prim.Type)
+            {
+                case GerberPrimitiveType.Circle:
+                case GerberPrimitiveType.Flash:
+                    dc.DrawEllipse(fillBrush, null, screenCenter, screenWidth / 2, screenHeight / 2);
+                    break;
+
+                case GerberPrimitiveType.Rectangle:
+                    {
+                        var rect = new Rect(
+                            screenCenter.X - screenWidth / 2,
+                            screenCenter.Y - screenHeight / 2,
+                            screenWidth,
+                            screenHeight
+                        );
+
+                        if (prim.Rotation != 0)
+                        {
+                            dc.PushTransform(new RotateTransform(-prim.Rotation, screenCenter.X, screenCenter.Y));
+                            dc.DrawRectangle(fillBrush, null, rect);
+                            dc.Pop();
+                        }
+                        else
+                        {
+                            dc.DrawRectangle(fillBrush, null, rect);
+                        }
+                    }
+                    break;
+
+                case GerberPrimitiveType.Obround:
+                    {
+                        double cornerRadius = Math.Min(screenWidth, screenHeight) / 2;
+                        var rect = new Rect(
+                            screenCenter.X - screenWidth / 2,
+                            screenCenter.Y - screenHeight / 2,
+                            screenWidth,
+                            screenHeight
+                        );
+
+                        if (prim.Rotation != 0)
+                        {
+                            dc.PushTransform(new RotateTransform(-prim.Rotation, screenCenter.X, screenCenter.Y));
+                            dc.DrawRoundedRectangle(fillBrush, null, rect, cornerRadius, cornerRadius);
+                            dc.Pop();
+                        }
+                        else
+                        {
+                            dc.DrawRoundedRectangle(fillBrush, null, rect, cornerRadius, cornerRadius);
+                        }
+                    }
+                    break;
+
+                case GerberPrimitiveType.Polygon:
+                    {
+                        // Draw regular polygon (assume stored in Width as diameter)
+                        int vertices = 6; // Default to hexagon if not specified
+                        double radius = screenWidth / 2;
+                        double startAngle = (prim.Rotation) * Math.PI / 180;
+
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            for (int i = 0; i <= vertices; i++)
+                            {
+                                double angle = startAngle + (2 * Math.PI * i / vertices);
+                                double px = screenCenter.X + radius * Math.Cos(angle);
+                                double py = screenCenter.Y - radius * Math.Sin(angle);
+
+                                if (i == 0)
+                                    ctx.BeginFigure(new Point(px, py), true, true);
+                                else
+                                    ctx.LineTo(new Point(px, py), true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(fillBrush, null, geometry);
+                    }
+                    break;
+
+                case GerberPrimitiveType.Line:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            Point firstScreen = WorldToScreen(prim.Points[0]);
+                            ctx.BeginFigure(firstScreen, false, false);
+
+                            for (int i = 1; i < prim.Points.Count; i++)
+                            {
+                                Point ptScreen = WorldToScreen(prim.Points[i]);
+                                ctx.LineTo(ptScreen, true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(null, strokePen, geometry);
+                    }
+                    break;
+
+                case GerberPrimitiveType.Arc:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            Point firstScreen = WorldToScreen(prim.Points[0]);
+                            ctx.BeginFigure(firstScreen, false, false);
+
+                            for (int i = 1; i < prim.Points.Count; i++)
+                            {
+                                Point ptScreen = WorldToScreen(prim.Points[i]);
+                                ctx.LineTo(ptScreen, true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(null, strokePen, geometry);
+                    }
+                    break;
+
+                case GerberPrimitiveType.Contour:
+                    if (prim.Points != null && prim.Points.Count >= 3)
+                    {
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            Point firstScreen = WorldToScreen(prim.Points[0]);
+                            ctx.BeginFigure(firstScreen, true, true);
+
+                            for (int i = 1; i < prim.Points.Count; i++)
+                            {
+                                Point ptScreen = WorldToScreen(prim.Points[i]);
+                                ctx.LineTo(ptScreen, true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(fillBrush, null, geometry);
+                    }
+                    break;
+            }
         }
 
         private void RenderBoardArea(DrawingContext dc)

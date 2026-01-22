@@ -7,6 +7,7 @@ using System.Windows.Input;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Core.Models;
 using PCBPlotter.Core.Rendering;
+using PCBPlotter.Core.Services;
 
 namespace PCBPlotter.ViewModels
 {
@@ -32,6 +33,7 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _project, value))
                 {
                     OnPropertyChanged("Layers");
+                    OnPropertyChanged("GerberLayersCollection");
                 }
             }
         }
@@ -87,6 +89,11 @@ namespace PCBPlotter.ViewModels
         public IEnumerable<GerberLayer> Layers
         {
             get { return Project?.GerberLayers ?? Enumerable.Empty<GerberLayer>(); }
+        }
+
+        public ObservableCollection<GerberLayer> GerberLayersCollection
+        {
+            get { return Project?.GerberLayers; }
         }
 
         // Commands
@@ -167,58 +174,56 @@ namespace PCBPlotter.ViewModels
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "Gerber Files (*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs)|" +
-                        "*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs|" +
+                Filter = "Gerber Files (*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1)|" +
+                        "*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1|" +
                         "All Files (*.*)|*.*",
-                Multiselect = true
+                Multiselect = true,
+                Title = "Import Gerber Files"
             };
 
             if (dialog.ShowDialog() == true)
             {
-                foreach (var filePath in dialog.FileNames)
+                ImportGerberFiles(dialog.FileNames);
+            }
+        }
+
+        public void ImportGerberFiles(IEnumerable<string> filePaths)
+        {
+            var parser = new GerberParser();
+            int importedCount = 0;
+
+            foreach (var filePath in filePaths)
+            {
+                try
                 {
-                    // TODO: Parse gerber file and add layer
-                    var layer = new GerberLayer(
-                        System.IO.Path.GetFileName(filePath),
-                        filePath
-                    );
+                    var layer = parser.Parse(filePath);
 
-                    // Detect layer type from filename
-                    string ext = System.IO.Path.GetExtension(filePath).ToLower();
-                    switch (ext)
+                    if (Project != null)
                     {
-                        case ".gtl":
-                            layer.LayerType = GerberLayerType.TopCopper;
-                            layer.Color = System.Windows.Media.Color.FromRgb(255, 0, 0);
-                            break;
-                        case ".gbl":
-                            layer.LayerType = GerberLayerType.BottomCopper;
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 0, 255);
-                            break;
-                        case ".gto":
-                            layer.LayerType = GerberLayerType.TopSilkscreen;
-                            layer.Color = System.Windows.Media.Color.FromRgb(255, 255, 0);
-                            break;
-                        case ".gbo":
-                            layer.LayerType = GerberLayerType.BottomSilkscreen;
-                            layer.Color = System.Windows.Media.Color.FromRgb(255, 255, 0);
-                            break;
-                        case ".gts":
-                            layer.LayerType = GerberLayerType.TopSoldermask;
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 255, 0);
-                            break;
-                        case ".gbs":
-                            layer.LayerType = GerberLayerType.BottomSoldermask;
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 255, 0);
-                            break;
-                        default:
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 255, 0);
-                            break;
+                        Project.GerberLayers.Add(layer);
+                        Publish(new GerberLayerAddedEvent { Layer = layer });
+                        importedCount++;
                     }
-
-                    Project?.GerberLayers.Add(layer);
-                    Publish(new GerberLayerAddedEvent { Layer = layer });
                 }
+                catch (Exception ex)
+                {
+                    Publish(new StatusMessageEvent
+                    {
+                        Message = $"Failed to import {System.IO.Path.GetFileName(filePath)}: {ex.Message}",
+                        IsError = true
+                    });
+                }
+            }
+
+            if (importedCount > 0)
+            {
+                Publish(new StatusMessageEvent
+                {
+                    Message = $"Imported {importedCount} Gerber layer(s) with {Layers.Sum(l => l.Primitives?.Count ?? 0)} primitives"
+                });
+
+                // Auto zoom-to-fit after import
+                ExecuteZoomFit();
             }
         }
 
@@ -254,18 +259,65 @@ namespace PCBPlotter.ViewModels
             Rect bounds = Rect.Empty;
             foreach (var layer in Project.GerberLayers.Where(l => l.IsVisible))
             {
-                if (bounds.IsEmpty)
-                    bounds = layer.Bounds;
-                else
-                    bounds.Union(layer.Bounds);
+                var layerBounds = layer.Bounds;
+                if (!layerBounds.IsEmpty)
+                {
+                    if (bounds.IsEmpty)
+                        bounds = layerBounds;
+                    else
+                        bounds.Union(layerBounds);
+                }
             }
 
-            if (!bounds.IsEmpty)
+            if (!bounds.IsEmpty && bounds.Width > 0 && bounds.Height > 0)
             {
-                // TODO: Calculate zoom to fit bounds
-                Zoom = 1.0;
-                PanX = -bounds.X * Zoom;
-                PanY = -bounds.Y * Zoom;
+                // Calculate zoom to fit bounds with margin
+                // Assume a reasonable viewport size if not available
+                double viewportWidth = 800;
+                double viewportHeight = 600;
+
+                double marginFactor = 0.9; // Use 90% of viewport
+                double zoomX = (viewportWidth * marginFactor) / bounds.Width;
+                double zoomY = (viewportHeight * marginFactor) / bounds.Height;
+                Zoom = Math.Min(zoomX, zoomY);
+
+                // Center the bounds
+                double centerX = bounds.X + bounds.Width / 2;
+                double centerY = bounds.Y + bounds.Height / 2;
+                PanX = viewportWidth / 2 - centerX * Zoom;
+                PanY = viewportHeight / 2 - centerY * Zoom;
+            }
+        }
+
+        public void ZoomToFitWithViewport(double viewportWidth, double viewportHeight)
+        {
+            if (Project == null || !Project.GerberLayers.Any()) return;
+
+            // Calculate bounds of all visible layers
+            Rect bounds = Rect.Empty;
+            foreach (var layer in Project.GerberLayers.Where(l => l.IsVisible))
+            {
+                var layerBounds = layer.Bounds;
+                if (!layerBounds.IsEmpty)
+                {
+                    if (bounds.IsEmpty)
+                        bounds = layerBounds;
+                    else
+                        bounds.Union(layerBounds);
+                }
+            }
+
+            if (!bounds.IsEmpty && bounds.Width > 0 && bounds.Height > 0)
+            {
+                double marginFactor = 0.9;
+                double zoomX = (viewportWidth * marginFactor) / bounds.Width;
+                double zoomY = (viewportHeight * marginFactor) / bounds.Height;
+                Zoom = Math.Min(zoomX, zoomY);
+
+                double centerX = bounds.X + bounds.Width / 2;
+                double centerY = bounds.Y + bounds.Height / 2;
+                PanX = viewportWidth / 2 - centerX * Zoom;
+                PanY = viewportHeight / 2 - centerY * Zoom;
             }
         }
 
@@ -529,6 +581,7 @@ namespace PCBPlotter.ViewModels
         private void OnLayerAdded(GerberLayerAddedEvent e)
         {
             OnPropertyChanged("Layers");
+            OnPropertyChanged("GerberLayersCollection");
             if (SelectedLayer == null)
             {
                 SelectedLayer = e.Layer;
@@ -538,6 +591,7 @@ namespace PCBPlotter.ViewModels
         private void OnLayerRemoved(GerberLayerRemovedEvent e)
         {
             OnPropertyChanged("Layers");
+            OnPropertyChanged("GerberLayersCollection");
         }
 
         #endregion
