@@ -1592,8 +1592,6 @@ namespace PCBPlotter.Controls
             InvalidateVisual();
         }
 
-        #endregion
-
         #region Keyboard Handling
 
         protected override void OnKeyDown(KeyEventArgs e)
