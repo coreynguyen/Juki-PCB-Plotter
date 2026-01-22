@@ -338,7 +338,7 @@ namespace PCBPlotter.ViewModels
         {
             if (Project == null || !Project.Placements.Any())
             {
-                Zoom = 1.0;
+                Zoom = 20.0; // Better default zoom for mm-based designs
                 PanX = ViewportWidth / 2;
                 PanY = ViewportHeight / 2;
                 return;
@@ -368,7 +368,7 @@ namespace PCBPlotter.ViewModels
             // Handle edge cases
             if (minX == double.MaxValue)
             {
-                Zoom = 1.0;
+                Zoom = 20.0; // Better default zoom for mm-based designs
                 PanX = ViewportWidth / 2;
                 PanY = ViewportHeight / 2;
                 return;

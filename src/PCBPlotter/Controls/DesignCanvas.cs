@@ -45,7 +45,7 @@ namespace PCBPlotter.Controls
 
         public static readonly DependencyProperty ZoomProperty =
             DependencyProperty.Register("Zoom", typeof(double), typeof(DesignCanvas),
-                new FrameworkPropertyMetadata(1.0, FrameworkPropertyMetadataOptions.AffectsRender, OnZoomChanged));
+                new FrameworkPropertyMetadata(20.0, FrameworkPropertyMetadataOptions.AffectsRender, OnZoomChanged));
 
         public static readonly DependencyProperty PanXProperty =
             DependencyProperty.Register("PanX", typeof(double), typeof(DesignCanvas),
@@ -93,7 +93,18 @@ namespace PCBPlotter.Controls
 
         public static readonly DependencyProperty SelectedPackageProperty =
             DependencyProperty.Register("SelectedPackage", typeof(Package), typeof(DesignCanvas),
-                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnSelectedPackageChanged));
+
+        private static void OnSelectedPackageChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            var canvas = d as DesignCanvas;
+            if (canvas != null && e.NewValue != null)
+            {
+                // Auto-fit to the new package after layout is updated
+                canvas.Dispatcher.BeginInvoke(new Action(() => canvas.ZoomToFitPackage()),
+                    System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+        }
 
         public double Zoom
         {
@@ -173,6 +184,42 @@ namespace PCBPlotter.Controls
             set { SetValue(SelectedPackageProperty, value); }
         }
 
+        // Package editing state
+        private int _selectedGraphicIndex = -1;
+        private int _selectedPinIndex = -1;
+        private bool _isDraggingGraphic;
+        private Point _dragStartWorld;
+
+        public int SelectedGraphicIndex
+        {
+            get { return _selectedGraphicIndex; }
+            set
+            {
+                if (_selectedGraphicIndex != value)
+                {
+                    _selectedGraphicIndex = value;
+                    _selectedPinIndex = -1; // Clear pin selection
+                    InvalidateVisual();
+                    GraphicSelectionChanged?.Invoke(this, value);
+                }
+            }
+        }
+
+        public int SelectedPinIndex
+        {
+            get { return _selectedPinIndex; }
+            set
+            {
+                if (_selectedPinIndex != value)
+                {
+                    _selectedPinIndex = value;
+                    _selectedGraphicIndex = -1; // Clear graphic selection
+                    InvalidateVisual();
+                    PinSelectionChanged?.Invoke(this, value);
+                }
+            }
+        }
+
         #endregion
 
         #region Events
@@ -181,6 +228,9 @@ namespace PCBPlotter.Controls
         public event EventHandler<Rect> SelectionRectCompleted;
         public event EventHandler<Point> PointClicked;
         public event EventHandler<List<Placement>> SelectionChanged;
+        public event EventHandler<int> GraphicSelectionChanged;
+        public event EventHandler<int> PinSelectionChanged;
+        public event EventHandler<Point> GraphicMoved;
 
         #endregion
 
@@ -203,6 +253,109 @@ namespace PCBPlotter.Controls
             InitializeBrushesAndPens();
 
             Loaded += (s, e) => InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Zoom and pan to fit all placements in the viewport
+        /// </summary>
+        public void ZoomToFitPlacements()
+        {
+            if (Placements == null || Placements.Count == 0)
+            {
+                // No placements, center on origin with default zoom
+                Zoom = 20.0;
+                PanX = ActualWidth / 2;
+                PanY = ActualHeight / 2;
+                return;
+            }
+
+            // Calculate bounding box of all placements
+            double minX = double.MaxValue, minY = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue;
+
+            foreach (var p in Placements)
+            {
+                double size = p.Package != null ? Math.Max(p.Package.Width, p.Package.Length) : 2;
+                minX = Math.Min(minX, p.X - size);
+                maxX = Math.Max(maxX, p.X + size);
+                minY = Math.Min(minY, p.Y - size);
+                maxY = Math.Max(maxY, p.Y + size);
+            }
+
+            ZoomToFit(new Rect(minX, minY, maxX - minX, maxY - minY));
+        }
+
+        /// <summary>
+        /// Zoom and pan to fit the selected package in the viewport
+        /// </summary>
+        public void ZoomToFitPackage()
+        {
+            var package = SelectedPackage;
+            if (package == null)
+            {
+                // No package, center on origin
+                Zoom = 50.0;
+                PanX = ActualWidth / 2;
+                PanY = ActualHeight / 2;
+                return;
+            }
+
+            // Calculate bounding box from package dimensions and graphics
+            double halfW = Math.Max(package.Width / 2, 1);
+            double halfH = Math.Max(package.Length / 2, 1);
+
+            // Expand bounds based on graphics and pins
+            foreach (var g in package.Graphics)
+            {
+                halfW = Math.Max(halfW, Math.Abs(g.X) + g.Width);
+                halfH = Math.Max(halfH, Math.Abs(g.Y) + g.Height);
+            }
+            foreach (var pin in package.Pins)
+            {
+                halfW = Math.Max(halfW, Math.Abs(pin.X) + pin.Width);
+                halfH = Math.Max(halfH, Math.Abs(pin.Y) + pin.Height);
+            }
+
+            // Add margin
+            halfW *= 1.2;
+            halfH *= 1.2;
+
+            ZoomToFit(new Rect(-halfW, -halfH, halfW * 2, halfH * 2));
+        }
+
+        /// <summary>
+        /// Zoom and pan to fit the specified bounds in the viewport
+        /// </summary>
+        public void ZoomToFit(Rect worldBounds)
+        {
+            if (ActualWidth <= 0 || ActualHeight <= 0)
+                return;
+
+            if (worldBounds.Width <= 0 || worldBounds.Height <= 0)
+            {
+                Zoom = 20.0;
+                PanX = ActualWidth / 2;
+                PanY = ActualHeight / 2;
+                return;
+            }
+
+            // Calculate zoom to fit bounds with margin
+            double margin = 40; // pixels
+            double availableWidth = ActualWidth - margin * 2;
+            double availableHeight = ActualHeight - margin * 2;
+
+            double zoomX = availableWidth / worldBounds.Width;
+            double zoomY = availableHeight / worldBounds.Height;
+            Zoom = Math.Min(zoomX, zoomY);
+
+            // Center the bounds
+            double centerX = worldBounds.X + worldBounds.Width / 2;
+            double centerY = worldBounds.Y + worldBounds.Height / 2;
+
+            PanX = ActualWidth / 2 - centerX * Zoom;
+            PanY = ActualHeight / 2 + centerY * Zoom; // Flip Y
+
+            InvalidateVisual();
         }
 
         private void InitializeBrushesAndPens()
@@ -482,10 +635,22 @@ namespace PCBPlotter.Controls
                 var bodyPen = new Pen(new SolidColorBrush(Color.FromRgb(100, 150, 200)), 0.05);
                 bodyPen.Freeze();
 
+                // Selected item pen (highlighted)
+                var selectedPen = new Pen(new SolidColorBrush(Color.FromRgb(0, 200, 255)), 0.08);
+                selectedPen.Freeze();
+
                 // Render package graphics
-                foreach (var graphic in package.Graphics)
+                for (int i = 0; i < package.Graphics.Count; i++)
                 {
-                    RenderGraphicShape(dc, graphic, bodyBrush, bodyPen);
+                    var graphic = package.Graphics[i];
+                    bool isSelected = (i == _selectedGraphicIndex);
+                    RenderGraphicShape(dc, graphic, bodyBrush, isSelected ? selectedPen : bodyPen);
+
+                    // Draw selection handles if selected
+                    if (isSelected)
+                    {
+                        DrawSelectionHandles(dc, graphic);
+                    }
                 }
 
                 // Render pins
@@ -493,11 +658,18 @@ namespace PCBPlotter.Controls
                 pinBrush.Freeze();
                 var pinPen = new Pen(new SolidColorBrush(Color.FromRgb(150, 130, 80)), 0.02);
                 pinPen.Freeze();
+                var selectedPinBrush = new SolidColorBrush(Color.FromRgb(100, 220, 255));
+                selectedPinBrush.Freeze();
                 var pin1Brush = new SolidColorBrush(Color.FromRgb(255, 100, 100));
                 pin1Brush.Freeze();
 
-                foreach (var pin in package.Pins)
+                for (int i = 0; i < package.Pins.Count; i++)
                 {
+                    var pin = package.Pins[i];
+                    bool isSelected = (i == _selectedPinIndex);
+                    var currentBrush = isSelected ? selectedPinBrush : pinBrush;
+                    var currentPen = isSelected ? selectedPen : pinPen;
+
                     double x = pin.X - pin.Width / 2;
                     double y = pin.Y - pin.Height / 2;
                     var pinRect = new Rect(x, y, pin.Width, pin.Height);
@@ -505,16 +677,16 @@ namespace PCBPlotter.Controls
                     switch (pin.Shape)
                     {
                         case PinShape.Circle:
-                            dc.DrawEllipse(pinBrush, pinPen, new Point(pin.X, pin.Y), pin.Width / 2, pin.Height / 2);
+                            dc.DrawEllipse(currentBrush, currentPen, new Point(pin.X, pin.Y), pin.Width / 2, pin.Height / 2);
                             break;
                         case PinShape.Oval:
-                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width / 2, pin.Height / 2);
+                            dc.DrawRoundedRectangle(currentBrush, currentPen, pinRect, pin.Width / 2, pin.Height / 2);
                             break;
                         case PinShape.RoundedRectangle:
-                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width * 0.2, pin.Height * 0.2);
+                            dc.DrawRoundedRectangle(currentBrush, currentPen, pinRect, pin.Width * 0.2, pin.Height * 0.2);
                             break;
                         default: // Rectangle
-                            dc.DrawRectangle(pinBrush, pinPen, pinRect);
+                            dc.DrawRectangle(currentBrush, currentPen, pinRect);
                             break;
                     }
 
@@ -529,12 +701,45 @@ namespace PCBPlotter.Controls
                 var originPen = new Pen(new SolidColorBrush(Colors.Cyan), 0.02);
                 originPen.Freeze();
                 double originSize = Math.Max(package.Width, package.Length) * 0.1;
+                if (originSize < 0.2) originSize = 0.5;
                 dc.DrawLine(originPen, new Point(-originSize, 0), new Point(originSize, 0));
                 dc.DrawLine(originPen, new Point(0, -originSize), new Point(0, originSize));
             }
             finally
             {
                 dc.Pop();
+            }
+        }
+
+        private void DrawSelectionHandles(DrawingContext dc, PackageGraphic g)
+        {
+            var handleBrush = new SolidColorBrush(Colors.White);
+            handleBrush.Freeze();
+            var handlePen = new Pen(new SolidColorBrush(Color.FromRgb(0, 150, 255)), 0.02);
+            handlePen.Freeze();
+
+            double handleSize = 0.08;
+
+            // Get corners based on shape type
+            switch (g.ShapeType)
+            {
+                case GraphicShapeType.Rectangle:
+                case GraphicShapeType.RoundedRectangle:
+                    // Draw handles at corners
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X - handleSize, g.Y - handleSize, handleSize * 2, handleSize * 2));
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X + g.Width - handleSize, g.Y - handleSize, handleSize * 2, handleSize * 2));
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X - handleSize, g.Y + g.Height - handleSize, handleSize * 2, handleSize * 2));
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X + g.Width - handleSize, g.Y + g.Height - handleSize, handleSize * 2, handleSize * 2));
+                    break;
+
+                case GraphicShapeType.Circle:
+                case GraphicShapeType.Ellipse:
+                    // Draw handles at cardinal points
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X - g.Width / 2 - handleSize, g.Y - handleSize, handleSize * 2, handleSize * 2));
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X + g.Width / 2 - handleSize, g.Y - handleSize, handleSize * 2, handleSize * 2));
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X - handleSize, g.Y - g.Height / 2 - handleSize, handleSize * 2, handleSize * 2));
+                    dc.DrawRectangle(handleBrush, handlePen, new Rect(g.X - handleSize, g.Y + g.Height / 2 - handleSize, handleSize * 2, handleSize * 2));
+                    break;
             }
         }
 
@@ -966,6 +1171,11 @@ namespace PCBPlotter.Controls
                     InvalidateVisual();
                 }
             }
+            else if (_isDraggingGraphic && e.LeftButton == MouseButtonState.Pressed && SelectedPackage != null)
+            {
+                // Package editor drag
+                HandlePackageEditorMouseMove(mousePos);
+            }
             else if (_isSelecting && e.LeftButton == MouseButtonState.Pressed)
             {
                 _selectionRect = new Rect(
@@ -976,9 +1186,9 @@ namespace PCBPlotter.Controls
                 );
                 InvalidateVisual();
             }
-            else if (e.LeftButton == MouseButtonState.Pressed && !_isSelecting)
+            else if (e.LeftButton == MouseButtonState.Pressed && !_isSelecting && SelectedPackage == null)
             {
-                // Start rectangle selection after small movement
+                // Start rectangle selection after small movement (only in placement mode)
                 double dist = Math.Sqrt(Math.Pow(mousePos.X - _selectionStart.X, 2) +
                                        Math.Pow(mousePos.Y - _selectionStart.Y, 2));
                 if (dist > 3)
@@ -999,6 +1209,13 @@ namespace PCBPlotter.Controls
             Point mousePos = e.GetPosition(this);
             _selectionStart = mousePos;
             _lastMousePosition = mousePos;
+
+            // Package editor mode
+            if (SelectedPackage != null)
+            {
+                HandlePackageEditorMouseDown(mousePos);
+                return;
+            }
 
             // Try to hit test a placement
             Placement hitPlacement = HitTestPlacement(mousePos);
@@ -1037,6 +1254,13 @@ namespace PCBPlotter.Controls
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonUp(e);
+
+            // Package editor mode
+            if (SelectedPackage != null && _isDraggingGraphic)
+            {
+                HandlePackageEditorMouseUp();
+                return;
+            }
 
             if (_isSelecting)
             {
@@ -1165,6 +1389,187 @@ namespace PCBPlotter.Controls
             }
         }
 
+        #endregion
+
+        #region Package Editor Mouse Handling
+
+        private void HandlePackageEditorMouseDown(Point mousePos)
+        {
+            var package = SelectedPackage;
+            if (package == null) return;
+
+            Point worldPos = ScreenToWorld(mousePos);
+            _dragStartWorld = worldPos;
+
+            // Hit test pins first (they're on top)
+            double hitRadius = 10 / Zoom; // Screen pixels converted to world
+            for (int i = 0; i < package.Pins.Count; i++)
+            {
+                var pin = package.Pins[i];
+                double dist = Math.Sqrt(Math.Pow(worldPos.X - pin.X, 2) + Math.Pow(worldPos.Y - pin.Y, 2));
+                if (dist <= Math.Max(pin.Width, pin.Height) / 2 + hitRadius)
+                {
+                    SelectedPinIndex = i;
+                    _isDraggingGraphic = true;
+                    CaptureMouse();
+                    return;
+                }
+            }
+
+            // Hit test graphics
+            for (int i = 0; i < package.Graphics.Count; i++)
+            {
+                var g = package.Graphics[i];
+                if (HitTestGraphic(g, worldPos, hitRadius))
+                {
+                    SelectedGraphicIndex = i;
+                    _isDraggingGraphic = true;
+                    CaptureMouse();
+                    return;
+                }
+            }
+
+            // Clicked on empty space - clear selection
+            SelectedGraphicIndex = -1;
+            SelectedPinIndex = -1;
+        }
+
+        private bool HitTestGraphic(PackageGraphic g, Point worldPos, double hitRadius)
+        {
+            switch (g.ShapeType)
+            {
+                case GraphicShapeType.Rectangle:
+                case GraphicShapeType.RoundedRectangle:
+                    // Check if point is near the rectangle edges
+                    var rect = new Rect(g.X, g.Y, g.Width, g.Height);
+                    rect.Inflate(hitRadius, hitRadius);
+                    if (rect.Contains(worldPos))
+                    {
+                        var innerRect = new Rect(g.X + hitRadius, g.Y + hitRadius,
+                            Math.Max(0, g.Width - hitRadius * 2), Math.Max(0, g.Height - hitRadius * 2));
+                        return !innerRect.Contains(worldPos) || g.IsFilled;
+                    }
+                    return false;
+
+                case GraphicShapeType.Circle:
+                case GraphicShapeType.Ellipse:
+                    double dist = Math.Sqrt(Math.Pow(worldPos.X - g.X, 2) + Math.Pow(worldPos.Y - g.Y, 2));
+                    double radius = Math.Max(g.Width, g.Height) / 2;
+                    return dist <= radius + hitRadius && (g.IsFilled || dist >= radius - hitRadius);
+
+                case GraphicShapeType.Line:
+                    if (g.Points != null && g.Points.Count >= 2)
+                    {
+                        for (int j = 0; j < g.Points.Count - 1; j++)
+                        {
+                            if (DistanceToLineSegment(worldPos, g.Points[j], g.Points[j + 1]) <= hitRadius)
+                                return true;
+                        }
+                    }
+                    return false;
+
+                case GraphicShapeType.Polygon:
+                    if (g.Points != null && g.Points.Count >= 3)
+                    {
+                        // Check edges
+                        for (int j = 0; j < g.Points.Count; j++)
+                        {
+                            var p1 = g.Points[j];
+                            var p2 = g.Points[(j + 1) % g.Points.Count];
+                            if (DistanceToLineSegment(worldPos, p1, p2) <= hitRadius)
+                                return true;
+                        }
+                    }
+                    return false;
+
+                default:
+                    return false;
+            }
+        }
+
+        private double DistanceToLineSegment(Point p, Point a, Point b)
+        {
+            double dx = b.X - a.X;
+            double dy = b.Y - a.Y;
+            double lengthSq = dx * dx + dy * dy;
+
+            if (lengthSq == 0) return Math.Sqrt(Math.Pow(p.X - a.X, 2) + Math.Pow(p.Y - a.Y, 2));
+
+            double t = Math.Max(0, Math.Min(1, ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / lengthSq));
+            double projX = a.X + t * dx;
+            double projY = a.Y + t * dy;
+
+            return Math.Sqrt(Math.Pow(p.X - projX, 2) + Math.Pow(p.Y - projY, 2));
+        }
+
+        private void HandlePackageEditorMouseMove(Point mousePos)
+        {
+            if (!_isDraggingGraphic) return;
+
+            var package = SelectedPackage;
+            if (package == null) return;
+
+            Point worldPos = ScreenToWorld(mousePos);
+            double dx = worldPos.X - _dragStartWorld.X;
+            double dy = worldPos.Y - _dragStartWorld.Y;
+
+            if (_selectedPinIndex >= 0 && _selectedPinIndex < package.Pins.Count)
+            {
+                var pin = package.Pins[_selectedPinIndex];
+                pin.X += dx;
+                pin.Y += dy;
+            }
+            else if (_selectedGraphicIndex >= 0 && _selectedGraphicIndex < package.Graphics.Count)
+            {
+                var g = package.Graphics[_selectedGraphicIndex];
+                g.X += dx;
+                g.Y += dy;
+                if (g.Points != null)
+                {
+                    for (int i = 0; i < g.Points.Count; i++)
+                    {
+                        g.Points[i] = new Point(g.Points[i].X + dx, g.Points[i].Y + dy);
+                    }
+                }
+            }
+
+            _dragStartWorld = worldPos;
+            GraphicMoved?.Invoke(this, worldPos);
+            InvalidateVisual();
+        }
+
+        private void HandlePackageEditorMouseUp()
+        {
+            if (_isDraggingGraphic)
+            {
+                _isDraggingGraphic = false;
+                ReleaseMouseCapture();
+            }
+        }
+
+        /// <summary>
+        /// Delete the currently selected graphic or pin from the package
+        /// </summary>
+        public void DeleteSelectedGraphic()
+        {
+            var package = SelectedPackage;
+            if (package == null) return;
+
+            if (_selectedPinIndex >= 0 && _selectedPinIndex < package.Pins.Count)
+            {
+                package.Pins.RemoveAt(_selectedPinIndex);
+                SelectedPinIndex = -1;
+            }
+            else if (_selectedGraphicIndex >= 0 && _selectedGraphicIndex < package.Graphics.Count)
+            {
+                package.Graphics.RemoveAt(_selectedGraphicIndex);
+                SelectedGraphicIndex = -1;
+            }
+            InvalidateVisual();
+        }
+
+        #endregion
+
         protected override void OnMouseWheel(MouseWheelEventArgs e)
         {
             base.OnMouseWheel(e);
@@ -1220,11 +1625,28 @@ namespace PCBPlotter.Controls
                     e.Handled = true;
                     break;
                 case Key.Home:
-                    // Reset view
-                    Zoom = 1.0;
-                    PanX = ActualWidth / 2;
-                    PanY = ActualHeight / 2;
-                    InvalidateVisual();
+                    // Reset view - fit content
+                    if (SelectedPackage != null)
+                        ZoomToFitPackage();
+                    else
+                        ZoomToFitPlacements();
+                    e.Handled = true;
+                    break;
+                case Key.Delete:
+                case Key.Back:
+                    // Delete selected graphic/pin in package editor mode
+                    if (SelectedPackage != null)
+                    {
+                        DeleteSelectedGraphic();
+                        e.Handled = true;
+                    }
+                    break;
+                case Key.F:
+                    // Fit to view
+                    if (SelectedPackage != null)
+                        ZoomToFitPackage();
+                    else
+                        ZoomToFitPlacements();
                     e.Handled = true;
                     break;
             }
