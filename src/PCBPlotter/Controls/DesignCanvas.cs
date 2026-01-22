@@ -2803,7 +2803,7 @@ namespace PCBPlotter.Controls
                 if (_isGhostDragMode)
                 {
                     _isGhostDragMode = false;
-                    _compositeDirty = true; // Force rebuild with proper screen blend
+                    _backgroundDirty = true; // Force rebuild with proper screen blend
                     InvalidateVisual();
                 }
 
