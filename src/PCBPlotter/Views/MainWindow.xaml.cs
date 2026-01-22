@@ -4,7 +4,6 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using PCBPlotter.Core.Events;
-using PCBPlotter.Dialogs;
 using PCBPlotter.Services;
 using PCBPlotter.ViewModels;
 

@@ -6,7 +6,7 @@ using Microsoft.Win32;
 using PCBPlotter.Core.Models;
 using PCBPlotter.Core.Services;
 
-namespace PCBPlotter.Dialogs
+namespace PCBPlotter.Views
 {
     /// <summary>
     /// Dialog for importing IPC-D-356 netlist/test point files
