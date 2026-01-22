@@ -127,7 +127,9 @@
                 <!-- Canvas for editing package graphics -->
                 <controls:DesignCanvas Grid.Column="0" x:Name="PackageCanvas"
                                        GridSpacing="0.1"
-                                       ShowGrid="True"/>
+                                       ShowGrid="True"
+                                       SelectedPackage="{Binding SelectedPackage}"
+                                       ShowPackageGraphics="True"/>
 
                 <!-- Drawing Tools -->
                 <Border Grid.Column="1" Background="{StaticResource BackgroundLightBrush}"

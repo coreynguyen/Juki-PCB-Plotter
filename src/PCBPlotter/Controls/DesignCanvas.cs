@@ -91,6 +91,10 @@ namespace PCBPlotter.Controls
             DependencyProperty.Register("Board", typeof(BoardDefinition), typeof(DesignCanvas),
                 new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
+        public static readonly DependencyProperty SelectedPackageProperty =
+            DependencyProperty.Register("SelectedPackage", typeof(Package), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
         public double Zoom
         {
             get { return (double)GetValue(ZoomProperty); }
@@ -161,6 +165,12 @@ namespace PCBPlotter.Controls
         {
             get { return (BoardDefinition)GetValue(BoardProperty); }
             set { SetValue(BoardProperty, value); }
+        }
+
+        public Package SelectedPackage
+        {
+            get { return (Package)GetValue(SelectedPackageProperty); }
+            set { SetValue(SelectedPackageProperty, value); }
         }
 
         #endregion
@@ -285,6 +295,12 @@ namespace PCBPlotter.Controls
 
             // Draw board outline if defined
             RenderBoardArea(dc);
+
+            // Render selected package in editor mode (for Component tab)
+            if (SelectedPackage != null)
+            {
+                RenderSelectedPackageDirect(dc);
+            }
 
             // Render placements and content
             RenderPlacementsDirect(dc);
@@ -444,6 +460,84 @@ namespace PCBPlotter.Controls
             dc.Pop();
         }
 
+        private void RenderSelectedPackageDirect(DrawingContext dc)
+        {
+            var package = SelectedPackage;
+            if (package == null) return;
+
+            Point screenPos = WorldToScreen(new Point(0, 0)); // Package is at origin
+
+            // Create transform to world coordinates
+            var transform = new TransformGroup();
+            transform.Children.Add(new ScaleTransform(Zoom, -Zoom)); // Flip Y for world coordinates
+            transform.Children.Add(new TranslateTransform(screenPos.X, screenPos.Y));
+
+            dc.PushTransform(transform);
+
+            try
+            {
+                // Body outline brush/pen
+                var bodyBrush = new SolidColorBrush(Color.FromArgb(40, 100, 150, 200));
+                bodyBrush.Freeze();
+                var bodyPen = new Pen(new SolidColorBrush(Color.FromRgb(100, 150, 200)), 0.05);
+                bodyPen.Freeze();
+
+                // Render package graphics
+                foreach (var graphic in package.Graphics)
+                {
+                    RenderGraphicShape(dc, graphic, bodyBrush, bodyPen);
+                }
+
+                // Render pins
+                var pinBrush = new SolidColorBrush(Color.FromRgb(200, 180, 100));
+                pinBrush.Freeze();
+                var pinPen = new Pen(new SolidColorBrush(Color.FromRgb(150, 130, 80)), 0.02);
+                pinPen.Freeze();
+                var pin1Brush = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+                pin1Brush.Freeze();
+
+                foreach (var pin in package.Pins)
+                {
+                    double x = pin.X - pin.Width / 2;
+                    double y = pin.Y - pin.Height / 2;
+                    var pinRect = new Rect(x, y, pin.Width, pin.Height);
+
+                    switch (pin.Shape)
+                    {
+                        case PinShape.Circle:
+                            dc.DrawEllipse(pinBrush, pinPen, new Point(pin.X, pin.Y), pin.Width / 2, pin.Height / 2);
+                            break;
+                        case PinShape.Oval:
+                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width / 2, pin.Height / 2);
+                            break;
+                        case PinShape.RoundedRectangle:
+                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width * 0.2, pin.Height * 0.2);
+                            break;
+                        default: // Rectangle
+                            dc.DrawRectangle(pinBrush, pinPen, pinRect);
+                            break;
+                    }
+
+                    // Pin 1 indicator
+                    if (pin.Number == 1)
+                    {
+                        dc.DrawEllipse(pin1Brush, null, new Point(pin.X, pin.Y), pin.Width * 0.15, pin.Height * 0.15);
+                    }
+                }
+
+                // Draw origin marker at package origin
+                var originPen = new Pen(new SolidColorBrush(Colors.Cyan), 0.02);
+                originPen.Freeze();
+                double originSize = Math.Max(package.Width, package.Length) * 0.1;
+                dc.DrawLine(originPen, new Point(-originSize, 0), new Point(originSize, 0));
+                dc.DrawLine(originPen, new Point(0, -originSize), new Point(0, originSize));
+            }
+            finally
+            {
+                dc.Pop();
+            }
+        }
+
         private void RenderSelectionOverlayDirect(DrawingContext dc)
         {
             if (_selectionRect.Width > 0 && _selectionRect.Height > 0)
@@ -467,6 +561,17 @@ namespace PCBPlotter.Controls
             double iconSize = 12.0;
             double halfSize = iconSize / 2;
 
+            // Viewport bounds for culling (with margin)
+            double margin = 50;
+            Rect viewport = new Rect(-margin, -margin, ActualWidth + margin * 2, ActualHeight + margin * 2);
+
+            // Only render package details at zoom levels where they're visible
+            bool renderPackageDetails = ShowPackageGraphics && Zoom > 0.5;
+
+            // Pre-cache pin1 brush
+            var pin1Brush = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+            pin1Brush.Freeze();
+
             foreach (var placement in Placements)
             {
                 // Skip placements on the wrong side
@@ -475,6 +580,10 @@ namespace PCBPlotter.Controls
 
                 // Convert world position to screen
                 Point screenPos = WorldToScreen(placement.Position);
+
+                // Viewport culling - skip if outside visible area
+                if (!viewport.Contains(screenPos))
+                    continue;
 
                 // Choose brush/pen based on state
                 SolidColorBrush fillBrush = _placementFillBrush;
@@ -490,15 +599,15 @@ namespace PCBPlotter.Controls
                     fillBrush = _placementErrorBrush;
                 }
 
-                // Draw package graphics if enabled and available
+                // Draw package graphics if enabled, zoom is sufficient, and package available
                 bool drewPackage = false;
-                if (ShowPackageGraphics && placement.Package != null &&
+                if (renderPackageDetails && placement.Package != null &&
                     (placement.Package.Graphics.Count > 0 || placement.Package.Pins.Count > 0))
                 {
                     drewPackage = RenderPackageGraphics(dc, placement, fillBrush, outlinePen);
                 }
 
-                // Fall back to simple marker if no package graphics
+                // Fall back to simple marker if no package graphics or zoom too low
                 if (!drewPackage)
                 {
                     // Draw placement marker (rounded rectangle - fixed screen size)
@@ -517,7 +626,7 @@ namespace PCBPlotter.Controls
                         screenPos.X - pin1Offset,
                         screenPos.Y - pin1Offset
                     );
-                    dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(255, 100, 100)), null, pin1Pos, pin1Size, pin1Size);
+                    dc.DrawEllipse(pin1Brush, null, pin1Pos, pin1Size, pin1Size);
                 }
 
                 // Draw center crosshair
@@ -1066,7 +1175,7 @@ namespace PCBPlotter.Controls
             // Zoom - allow up to 100000% (1000x)
             double zoomFactor = e.Delta > 0 ? 1.2 : 1.0 / 1.2;
             double newZoom = Zoom * zoomFactor;
-            newZoom = Math.Max(0.001, Math.Min(1000, newZoom));
+            newZoom = Math.Max(0.001, newZoom); // No upper limit on zoom
 
             Zoom = newZoom;
 
