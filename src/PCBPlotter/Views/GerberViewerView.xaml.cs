@@ -51,6 +51,73 @@ namespace PCBPlotter.Views
 
             // Subscribe to layer list selection changes
             LayerListBox.SelectionChanged += OnLayerListSelectionChanged;
+
+            // Subscribe to data context changes to hook up visibility changed event
+            DataContextChanged += OnDataContextChanged;
+
+            // Handle keyboard shortcuts
+            KeyDown += OnKeyDown;
+            Focusable = true;
+        }
+
+        private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            // Unsubscribe from old view model
+            var oldVm = e.OldValue as GerberViewerViewModel;
+            if (oldVm != null)
+            {
+                oldVm.LayerVisibilityChanged -= OnLayerVisibilityChanged;
+            }
+
+            // Subscribe to new view model
+            var newVm = e.NewValue as GerberViewerViewModel;
+            if (newVm != null)
+            {
+                newVm.LayerVisibilityChanged += OnLayerVisibilityChanged;
+            }
+        }
+
+        private void OnLayerVisibilityChanged()
+        {
+            // Refresh the canvas when layer visibility changes
+            GerberCanvas.InvalidateGerberCache();
+        }
+
+        private void OnKeyDown(object sender, KeyEventArgs e)
+        {
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm == null) return;
+
+            // Page Up / [ = Step layer up
+            if (e.Key == Key.PageUp || e.Key == Key.OemOpenBrackets)
+            {
+                vm.StepLayerUpCommand.Execute(null);
+                e.Handled = true;
+            }
+            // Page Down / ] = Step layer down
+            else if (e.Key == Key.PageDown || e.Key == Key.OemCloseBrackets)
+            {
+                vm.StepLayerDownCommand.Execute(null);
+                e.Handled = true;
+            }
+            // I = Invert layers
+            else if (e.Key == Key.I && Keyboard.Modifiers == ModifierKeys.None)
+            {
+                vm.InvertLayersCommand.Execute(null);
+                e.Handled = true;
+            }
+            // A = Show all layers
+            else if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Shift)
+            {
+                vm.ShowAllLayersCommand.Execute(null);
+                e.Handled = true;
+            }
+            // H = Hide all layers
+            else if (e.Key == Key.H && Keyboard.Modifiers == ModifierKeys.None)
+            {
+                vm.HideAllLayersCommand.Execute(null);
+                e.Handled = true;
+            }
         }
 
         private void OnLayerListSelectionChanged(object sender, SelectionChangedEventArgs e)

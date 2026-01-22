@@ -112,6 +112,16 @@ namespace PCBPlotter.ViewModels
         public ICommand SetCircuitOutlineCommand { get; private set; }
         public ICommand MeasureDistanceCommand { get; private set; }
 
+        // Layer stepping commands
+        public ICommand StepLayerUpCommand { get; private set; }
+        public ICommand StepLayerDownCommand { get; private set; }
+        public ICommand InvertLayersCommand { get; private set; }
+        public ICommand ShowAllLayersCommand { get; private set; }
+        public ICommand HideAllLayersCommand { get; private set; }
+
+        // Event to notify view of layer changes requiring refresh
+        public event Action LayerVisibilityChanged;
+
         public GerberViewerViewModel()
         {
             _selectedPrimitives = new ObservableCollection<GerberPrimitive>();
@@ -137,6 +147,13 @@ namespace PCBPlotter.ViewModels
             SetBoardOutlineCommand = new RelayCommand(ExecuteSetBoardOutline, () => SelectedPrimitives.Count > 0);
             SetCircuitOutlineCommand = new RelayCommand(ExecuteSetCircuitOutline, () => SelectedPrimitives.Count > 0);
             MeasureDistanceCommand = new RelayCommand(ExecuteMeasureDistance);
+
+            // Layer stepping commands
+            StepLayerUpCommand = new RelayCommand(ExecuteStepLayerUp, () => Project?.GerberLayers?.Count > 0);
+            StepLayerDownCommand = new RelayCommand(ExecuteStepLayerDown, () => Project?.GerberLayers?.Count > 0);
+            InvertLayersCommand = new RelayCommand(ExecuteInvertLayers, () => Project?.GerberLayers?.Count > 0);
+            ShowAllLayersCommand = new RelayCommand(ExecuteShowAllLayers, () => Project?.GerberLayers?.Count > 0);
+            HideAllLayersCommand = new RelayCommand(ExecuteHideAllLayers, () => Project?.GerberLayers?.Count > 0);
         }
 
         private void SubscribeToEvents()
@@ -242,8 +259,118 @@ namespace PCBPlotter.ViewModels
             if (layer != null)
             {
                 layer.IsVisible = !layer.IsVisible;
-                Publish(new RequestRefreshEvent { FullRefresh = false });
+                LayerVisibilityChanged?.Invoke();
+                Publish(new RequestRefreshEvent { FullRefresh = true });
             }
+        }
+
+        /// <summary>
+        /// Step to the next layer up in the stack (shows only that layer)
+        /// </summary>
+        private void ExecuteStepLayerUp()
+        {
+            if (Project?.GerberLayers == null || Project.GerberLayers.Count == 0)
+                return;
+
+            var layers = Project.GerberLayers.ToList();
+            int currentIndex = SelectedLayer != null ? layers.IndexOf(SelectedLayer) : -1;
+
+            // Find next index (wrap around)
+            int nextIndex = (currentIndex - 1 + layers.Count) % layers.Count;
+
+            // Hide all layers, show and select the next one
+            foreach (var layer in layers)
+            {
+                layer.IsVisible = false;
+                layer.IsActive = false;
+            }
+
+            layers[nextIndex].IsVisible = true;
+            layers[nextIndex].IsActive = true;
+            SelectedLayer = layers[nextIndex];
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Step to the next layer down in the stack (shows only that layer)
+        /// </summary>
+        private void ExecuteStepLayerDown()
+        {
+            if (Project?.GerberLayers == null || Project.GerberLayers.Count == 0)
+                return;
+
+            var layers = Project.GerberLayers.ToList();
+            int currentIndex = SelectedLayer != null ? layers.IndexOf(SelectedLayer) : -1;
+
+            // Find next index (wrap around)
+            int nextIndex = (currentIndex + 1) % layers.Count;
+
+            // Hide all layers, show and select the next one
+            foreach (var layer in layers)
+            {
+                layer.IsVisible = false;
+                layer.IsActive = false;
+            }
+
+            layers[nextIndex].IsVisible = true;
+            layers[nextIndex].IsActive = true;
+            SelectedLayer = layers[nextIndex];
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Invert visibility of all layers
+        /// </summary>
+        private void ExecuteInvertLayers()
+        {
+            if (Project?.GerberLayers == null)
+                return;
+
+            foreach (var layer in Project.GerberLayers)
+            {
+                layer.IsVisible = !layer.IsVisible;
+            }
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Show all layers
+        /// </summary>
+        private void ExecuteShowAllLayers()
+        {
+            if (Project?.GerberLayers == null)
+                return;
+
+            foreach (var layer in Project.GerberLayers)
+            {
+                layer.IsVisible = true;
+            }
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Hide all layers
+        /// </summary>
+        private void ExecuteHideAllLayers()
+        {
+            if (Project?.GerberLayers == null)
+                return;
+
+            foreach (var layer in Project.GerberLayers)
+            {
+                layer.IsVisible = false;
+            }
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
         }
 
         private void ExecuteSetLayerColor(GerberLayer layer)

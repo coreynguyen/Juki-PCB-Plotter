@@ -720,10 +720,11 @@ namespace PCBPlotter.Controls
         private RenderTargetBitmap _gerberCompositeBitmap;
 
         // Constants
-        private const int BUFFER_MULTIPLIER = 3; // 3x viewport for smooth panning
+        private const double BUFFER_MULTIPLIER = 2.0; // 2x viewport for smooth panning
+        private const double BUFFER_EDGE_THRESHOLD = 0.15; // Rebuild when within 15% of buffer edge
         private const int MAX_BITMAP_SIZE = 4096;
         private const int MIN_PRIMITIVE_PIXELS = 2;
-        private const double ZOOM_REBUILD_THRESHOLD = 0.1;
+        private const double ZOOM_REBUILD_THRESHOLD = 0.001;
 
         /// <summary>
         /// Frozen layer bitmap - stores 1-bit monochrome data for inactive layers
@@ -867,45 +868,113 @@ namespace PCBPlotter.Controls
             // Ensure we have an active layer set (default to first visible layer)
             EnsureActiveLayerSet();
 
-            // Ghost drag mode: during panning, just translate existing bitmap - zero re-rendering!
-            if (_isPanning && _isGhostDragMode && _ghostDragBitmap != null)
-            {
-                double offsetX = PanX - _cachedPanX;
-                double offsetY = -(PanY - _cachedPanY);
-                dc.PushTransform(new TranslateTransform(offsetX, offsetY));
-                dc.DrawImage(_ghostDragBitmap, new Rect(0, 0, ActualWidth, ActualHeight));
-                dc.Pop();
-                return;
-            }
+            // Calculate current viewport in world coordinates
+            Point worldTL = ScreenToWorld(new Point(0, 0));
+            Point worldBR = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+            Rect currentViewport = new Rect(
+                Math.Min(worldTL.X, worldBR.X),
+                Math.Min(worldTL.Y, worldBR.Y),
+                Math.Abs(worldBR.X - worldTL.X),
+                Math.Abs(worldBR.Y - worldTL.Y));
 
-            // Check if we need to rebuild
+            // Check if we need to rebuild the oversized buffer
             bool needsRebuild = _backgroundDirty ||
                                 _backgroundComposite == null ||
-                                Math.Abs(_cachedZoom - Zoom) > 0.001 ||
-                                Math.Abs(_cachedPanX - PanX) > 1 ||
-                                Math.Abs(_cachedPanY - PanY) > 1 ||
+                                Math.Abs(_cachedZoom - Zoom) > ZOOM_REBUILD_THRESHOLD ||
                                 _cachedWidth != (int)ActualWidth ||
-                                _cachedHeight != (int)ActualHeight;
+                                _cachedHeight != (int)ActualHeight ||
+                                !IsViewportSafeWithinBuffer(currentViewport);
 
             if (needsRebuild)
             {
                 RebuildBackgroundComposite();
             }
 
-            // 1. Draw background composite (all visible layers including active - screen blended)
+            // Draw the appropriate portion of the oversized buffer to screen
             if (_backgroundComposite != null)
             {
-                dc.DrawImage(_backgroundComposite, new Rect(0, 0, ActualWidth, ActualHeight));
+                DrawBufferToScreen(dc, currentViewport);
             }
 
-            // 2. Draw active layer highlight (subtle glow/border around active layer shapes)
+            // Draw active layer highlight (subtle glow/border around active layer shapes)
             if (_activeGerberLayer != null && _activeGerberLayer.IsVisible)
             {
                 RenderActiveLayerHighlight(dc);
             }
 
-            // 3. Draw selection highlights on top
+            // Draw selection highlights on top
             RenderGerberSelectionHighlights(dc);
+        }
+
+        /// <summary>
+        /// Check if current viewport is safely within the buffer (not approaching edges)
+        /// </summary>
+        private bool IsViewportSafeWithinBuffer(Rect viewport)
+        {
+            if (_backgroundWorldBounds.IsEmpty || _backgroundComposite == null)
+                return false;
+
+            // Calculate margins (threshold distance from buffer edge)
+            double marginX = _backgroundWorldBounds.Width * BUFFER_EDGE_THRESHOLD;
+            double marginY = _backgroundWorldBounds.Height * BUFFER_EDGE_THRESHOLD;
+
+            // Check if viewport is within the safe zone (buffer minus margins)
+            return viewport.Left >= _backgroundWorldBounds.Left + marginX &&
+                   viewport.Right <= _backgroundWorldBounds.Right - marginX &&
+                   viewport.Top >= _backgroundWorldBounds.Top + marginY &&
+                   viewport.Bottom <= _backgroundWorldBounds.Bottom - marginY;
+        }
+
+        /// <summary>
+        /// Draw the appropriate portion of the oversized buffer to the screen
+        /// </summary>
+        private void DrawBufferToScreen(DrawingContext dc, Rect currentViewport)
+        {
+            // Calculate where the current viewport maps to within the buffer
+            double bufferWidth = _backgroundComposite.PixelWidth;
+            double bufferHeight = _backgroundComposite.PixelHeight;
+
+            // Convert viewport bounds to buffer pixel coordinates
+            double srcLeft = (currentViewport.Left - _backgroundWorldBounds.Left) / _backgroundWorldBounds.Width * bufferWidth;
+            double srcTop = (_backgroundWorldBounds.Top + _backgroundWorldBounds.Height - currentViewport.Top - currentViewport.Height) / _backgroundWorldBounds.Height * bufferHeight;
+            double srcWidth = currentViewport.Width / _backgroundWorldBounds.Width * bufferWidth;
+            double srcHeight = currentViewport.Height / _backgroundWorldBounds.Height * bufferHeight;
+
+            // Clamp to buffer bounds
+            srcLeft = Math.Max(0, srcLeft);
+            srcTop = Math.Max(0, srcTop);
+            srcWidth = Math.Min(bufferWidth - srcLeft, srcWidth);
+            srcHeight = Math.Min(bufferHeight - srcTop, srcHeight);
+
+            if (srcWidth <= 0 || srcHeight <= 0)
+            {
+                // Fallback: draw entire buffer
+                dc.DrawImage(_backgroundComposite, new Rect(0, 0, ActualWidth, ActualHeight));
+                return;
+            }
+
+            // Create a CroppedBitmap for the visible portion
+            try
+            {
+                var cropRect = new Int32Rect((int)srcLeft, (int)srcTop,
+                    (int)Math.Min(srcWidth, bufferWidth - srcLeft),
+                    (int)Math.Min(srcHeight, bufferHeight - srcTop));
+
+                if (cropRect.Width > 0 && cropRect.Height > 0)
+                {
+                    var cropped = new CroppedBitmap(_backgroundComposite, cropRect);
+                    dc.DrawImage(cropped, new Rect(0, 0, ActualWidth, ActualHeight));
+                }
+                else
+                {
+                    dc.DrawImage(_backgroundComposite, new Rect(0, 0, ActualWidth, ActualHeight));
+                }
+            }
+            catch
+            {
+                // Fallback on any error
+                dc.DrawImage(_backgroundComposite, new Rect(0, 0, ActualWidth, ActualHeight));
+            }
         }
 
         /// <summary>
@@ -1237,47 +1306,38 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Check if current viewport is within the pre-rendered background composite
-        /// </summary>
-        private bool IsViewportWithinBackground()
-        {
-            if (_backgroundComposite == null || _backgroundWorldBounds.IsEmpty)
-                return false;
-
-            Point topLeft = ScreenToWorld(new Point(0, 0));
-            Point bottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
-
-            Rect viewport = new Rect(
-                Math.Min(topLeft.X, bottomRight.X),
-                Math.Min(topLeft.Y, bottomRight.Y),
-                Math.Abs(bottomRight.X - topLeft.X),
-                Math.Abs(bottomRight.Y - topLeft.Y));
-
-            return _backgroundWorldBounds.Contains(viewport);
-        }
-
-        /// <summary>
         /// Rebuild the background composite (all visible layers with screen blend)
+        /// Uses an oversized buffer for smooth panning
         /// </summary>
         private void RebuildBackgroundComposite()
         {
             if (ActualWidth < 1 || ActualHeight < 1)
                 return;
 
-            int bitmapWidth = (int)Math.Min(ActualWidth, MAX_BITMAP_SIZE);
-            int bitmapHeight = (int)Math.Min(ActualHeight, MAX_BITMAP_SIZE);
+            // Calculate oversized buffer dimensions (2x viewport for smooth panning)
+            int bitmapWidth = (int)Math.Min(ActualWidth * BUFFER_MULTIPLIER, MAX_BITMAP_SIZE);
+            int bitmapHeight = (int)Math.Min(ActualHeight * BUFFER_MULTIPLIER, MAX_BITMAP_SIZE);
 
             if (bitmapWidth < 1) bitmapWidth = 1;
             if (bitmapHeight < 1) bitmapHeight = 1;
 
-            // Calculate world viewport
+            // Calculate current viewport in world coordinates
             Point worldTopLeft = ScreenToWorld(new Point(0, 0));
             Point worldBottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+            double viewportWidth = Math.Abs(worldBottomRight.X - worldTopLeft.X);
+            double viewportHeight = Math.Abs(worldBottomRight.Y - worldTopLeft.Y);
+
+            // Calculate oversized world bounds (centered on current viewport)
+            double centerX = (worldTopLeft.X + worldBottomRight.X) / 2;
+            double centerY = (worldTopLeft.Y + worldBottomRight.Y) / 2;
+            double bufferWorldWidth = viewportWidth * BUFFER_MULTIPLIER;
+            double bufferWorldHeight = viewportHeight * BUFFER_MULTIPLIER;
+
             _backgroundWorldBounds = new Rect(
-                Math.Min(worldTopLeft.X, worldBottomRight.X),
-                Math.Min(worldTopLeft.Y, worldBottomRight.Y),
-                Math.Abs(worldBottomRight.X - worldTopLeft.X),
-                Math.Abs(worldBottomRight.Y - worldTopLeft.Y));
+                centerX - bufferWorldWidth / 2,
+                centerY - bufferWorldHeight / 2,
+                bufferWorldWidth,
+                bufferWorldHeight);
             _backgroundZoom = Zoom;
 
             try
@@ -1408,48 +1468,54 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Render primitive to viewport-sized grayscale buffer
+        /// Render primitive to oversized grayscale buffer
         /// </summary>
         private void RenderPrimitiveToViewportBuffer(byte[] pixels, int width, int height, GerberPrimitive prim)
         {
-            // Convert world coordinates to screen/buffer coordinates
-            Point screenPos = WorldToScreen(prim.Position);
-            double sw = prim.Width * Zoom;
-            double sh = prim.Height * Zoom;
+            // Convert world coordinates to buffer coordinates (not screen coordinates)
+            // Buffer maps _backgroundWorldBounds to (0,0)-(width,height)
+            double scaleX = width / _backgroundWorldBounds.Width;
+            double scaleY = height / _backgroundWorldBounds.Height;
+            double bufferX = (prim.X - _backgroundWorldBounds.Left) * scaleX;
+            double bufferY = (_backgroundWorldBounds.Top + _backgroundWorldBounds.Height - prim.Y) * scaleY;
+            double sw = prim.Width * scaleX;
+            double sh = prim.Height * scaleY;
 
             switch (prim.Type)
             {
                 case GerberPrimitiveType.Circle:
                 case GerberPrimitiveType.Flash:
-                    FillGrayscaleCircle(pixels, width, height, screenPos.X, screenPos.Y, sw / 2);
+                    FillGrayscaleCircle(pixels, width, height, bufferX, bufferY, sw / 2);
                     break;
                 case GerberPrimitiveType.Rectangle:
-                    FillGrayscaleRectangle(pixels, width, height, screenPos.X, screenPos.Y, sw, sh);
+                    FillGrayscaleRectangle(pixels, width, height, bufferX, bufferY, sw, sh);
                     break;
                 case GerberPrimitiveType.Obround:
-                    FillGrayscaleRectangle(pixels, width, height, screenPos.X, screenPos.Y, sw, sh);
+                    FillGrayscaleRectangle(pixels, width, height, bufferX, bufferY, sw, sh);
                     double r = Math.Min(sw, sh) / 2;
                     if (sw > sh)
                     {
-                        FillGrayscaleCircle(pixels, width, height, screenPos.X - sw / 2 + r, screenPos.Y, r);
-                        FillGrayscaleCircle(pixels, width, height, screenPos.X + sw / 2 - r, screenPos.Y, r);
+                        FillGrayscaleCircle(pixels, width, height, bufferX - sw / 2 + r, bufferY, r);
+                        FillGrayscaleCircle(pixels, width, height, bufferX + sw / 2 - r, bufferY, r);
                     }
                     else
                     {
-                        FillGrayscaleCircle(pixels, width, height, screenPos.X, screenPos.Y - sh / 2 + r, r);
-                        FillGrayscaleCircle(pixels, width, height, screenPos.X, screenPos.Y + sh / 2 - r, r);
+                        FillGrayscaleCircle(pixels, width, height, bufferX, bufferY - sh / 2 + r, r);
+                        FillGrayscaleCircle(pixels, width, height, bufferX, bufferY + sh / 2 - r, r);
                     }
                     break;
                 case GerberPrimitiveType.Line:
                 case GerberPrimitiveType.Arc:
                     if (prim.Points != null && prim.Points.Count >= 2)
                     {
-                        double lineWidth = Math.Max(1, prim.Width * Zoom);
+                        double lineWidth = Math.Max(1, prim.Width * scaleX);
                         for (int i = 1; i < prim.Points.Count; i++)
                         {
-                            Point p1 = WorldToScreen(prim.Points[i - 1]);
-                            Point p2 = WorldToScreen(prim.Points[i]);
-                            FillGrayscaleLine(pixels, width, height, p1.X, p1.Y, p2.X, p2.Y, lineWidth);
+                            double x1 = (prim.Points[i - 1].X - _backgroundWorldBounds.Left) * scaleX;
+                            double y1 = (_backgroundWorldBounds.Top + _backgroundWorldBounds.Height - prim.Points[i - 1].Y) * scaleY;
+                            double x2 = (prim.Points[i].X - _backgroundWorldBounds.Left) * scaleX;
+                            double y2 = (_backgroundWorldBounds.Top + _backgroundWorldBounds.Height - prim.Points[i].Y) * scaleY;
+                            FillGrayscaleLine(pixels, width, height, x1, y1, x2, y2, lineWidth);
                         }
                     }
                     break;
@@ -1459,13 +1525,15 @@ namespace PCBPlotter.Controls
                         var pts = new List<Point>();
                         foreach (var pt in prim.Points)
                         {
-                            pts.Add(WorldToScreen(pt));
+                            double px = (pt.X - _backgroundWorldBounds.Left) * scaleX;
+                            double py = (_backgroundWorldBounds.Top + _backgroundWorldBounds.Height - pt.Y) * scaleY;
+                            pts.Add(new Point(px, py));
                         }
                         FillGrayscalePolygon(pixels, width, height, pts);
                     }
                     break;
                 case GerberPrimitiveType.Polygon:
-                    FillGrayscaleRegularPolygon(pixels, width, height, screenPos.X, screenPos.Y, sw / 2, 6, prim.Rotation);
+                    FillGrayscaleRegularPolygon(pixels, width, height, bufferX, bufferY, sw / 2, 6, prim.Rotation);
                     break;
             }
         }
@@ -1731,51 +1799,6 @@ namespace PCBPlotter.Controls
                 points.Add(new Point(cx + radius * Math.Cos(angle), cy - radius * Math.Sin(angle)));
             }
             FillGrayscalePolygon(pixels, width, height, points);
-        }
-
-        /// <summary>
-        /// Render active layer as live vectors (selectable shapes)
-        /// </summary>
-        private void RenderActiveLayerVectors(DrawingContext dc)
-        {
-            if (_activeGerberLayer == null || _activeGerberLayer.Primitives == null)
-                return;
-
-            // Get viewport bounds for culling
-            Point worldTopLeft = ScreenToWorld(new Point(0, 0));
-            Point worldBottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
-            Rect worldViewport = new Rect(
-                Math.Min(worldTopLeft.X, worldBottomRight.X),
-                Math.Min(worldTopLeft.Y, worldBottomRight.Y),
-                Math.Abs(worldBottomRight.X - worldTopLeft.X),
-                Math.Abs(worldBottomRight.Y - worldTopLeft.Y));
-
-            double minWorldSize = MIN_PRIMITIVE_PIXELS / Zoom;
-
-            // Create brush for active layer with slight highlight
-            byte alpha = (byte)(_activeGerberLayer.Opacity * 255);
-            Color layerColor = _activeGerberLayer.Color;
-            // Brighten the active layer slightly for visual feedback
-            Color brightColor = Color.FromArgb(alpha,
-                (byte)Math.Min(255, layerColor.R + 30),
-                (byte)Math.Min(255, layerColor.G + 30),
-                (byte)Math.Min(255, layerColor.B + 30));
-            var layerBrush = new SolidColorBrush(brightColor);
-            layerBrush.Freeze();
-
-            // Render primitives
-            foreach (var prim in _activeGerberLayer.Primitives)
-            {
-                var primBounds = prim.GetBounds();
-                if (!worldViewport.IntersectsWith(primBounds))
-                    continue;
-
-                double primSize = Math.Max(prim.Width, prim.Height);
-                if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
-                    continue;
-
-                RenderGerberPrimitiveToScreen(dc, prim, layerBrush);
-            }
         }
 
         /// <summary>
