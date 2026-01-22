@@ -518,12 +518,13 @@ namespace PCBPlotter.Controls
 
             // Clear all caches when layers change
             canvas._gerberCacheDirty = true;
-            canvas._compositeDirty = true;
-            canvas._compositeBuffer = null;
+            canvas._backgroundDirty = true;
+            canvas._backgroundComposite = null;
             canvas._ghostDragBitmap = null;
             canvas._gerberCompositeBitmap = null;
-            canvas._hitTestQuadtree = null;
-            canvas._layerTileCaches.Clear();
+            canvas._activeLayerQuadtree = null;
+            canvas._activeGerberLayer = null;
+            canvas._frozenLayers.Clear();
             canvas.InvalidateVisual();
         }
 
@@ -531,12 +532,13 @@ namespace PCBPlotter.Controls
         {
             // Mark all caches as dirty when collection changes
             _gerberCacheDirty = true;
-            _compositeDirty = true;
-            _compositeBuffer = null;
+            _backgroundDirty = true;
+            _backgroundComposite = null;
             _ghostDragBitmap = null;
             _gerberCompositeBitmap = null;
-            _hitTestQuadtree = null;
-            _layerTileCaches.Clear();
+            _activeLayerQuadtree = null;
+            _activeGerberLayer = null;
+            _frozenLayers.Clear();
             InvalidateVisual();
         }
 
@@ -680,46 +682,83 @@ namespace PCBPlotter.Controls
         }
 
         // ===================================================================================
-        // TILE-BASED COMPOSITOR WITH SCREEN BLENDING
-        // Architecture: "Render Once, Compose Often"
-        // - Each layer is rendered to grayscale tiles (256x256) on load
-        // - Layers are composited using Screen blend mode via WriteableBitmap
-        // - Oversized buffer (3x viewport) eliminates render-on-pan lag
-        // - Ghost drag mode shows simplified view during pan for instant feedback
+        // HYBRID RENDERER ARCHITECTURE
+        // "Active Layer = Vectors, Inactive Layers = Raster"
+        //
+        // Only the active layer has live vector objects for selection/editing.
+        // All other visible layers are "frozen" into 1-bit monochrome bitmaps.
+        // This gives infinite performance regardless of layer count or complexity.
         // ===================================================================================
 
-        // Tile cache for each layer (grayscale alpha masks)
-        private Dictionary<GerberLayer, GerberLayerTileCache> _layerTileCaches = new Dictionary<GerberLayer, GerberLayerTileCache>();
+        // ACTIVE LAYER: Full vector support with quadtree for hit testing
+        private GerberLayer _activeGerberLayer;
+        private GerberQuadtree _activeLayerQuadtree;
 
-        // Composite buffer (3x viewport for smooth panning)
-        private WriteableBitmap _compositeBuffer;
-        private Rect _compositeWorldBounds; // World bounds covered by the composite
-        private double _compositeZoom;
-        private bool _compositeDirty = true;
+        // INACTIVE LAYERS: 1-bit monochrome bitmaps (frozen)
+        // Key: Layer ID, Value: (1-bit pixel data, world bounds, zoom level)
+        private Dictionary<string, FrozenLayerBitmap> _frozenLayers = new Dictionary<string, FrozenLayerBitmap>();
 
-        // Ghost drag mode state
+        // Composite of all inactive layers (screen blended)
+        private WriteableBitmap _backgroundComposite;
+        private Rect _backgroundWorldBounds;
+        private double _backgroundZoom;
+        private bool _backgroundDirty = true;
+
+        // Ghost drag mode for smooth panning
         private bool _isGhostDragMode = false;
-        private WriteableBitmap _ghostDragBitmap; // Quick 50% opacity top layer during pan
+        private WriteableBitmap _ghostDragBitmap;
 
-        // Quadtree for hit testing
-        private GerberQuadtree _hitTestQuadtree;
-        private Rect _quadtreeWorldBounds;
-
-        // Legacy fields for cache invalidation
+        // Cache state tracking
         private double _cachedZoom;
         private double _cachedPanX;
         private double _cachedPanY;
         private int _cachedWidth;
         private int _cachedHeight;
         private bool _gerberCacheDirty = true;
-        private RenderTargetBitmap _gerberCompositeBitmap; // Legacy fallback
+
+        // Legacy fallback
+        private RenderTargetBitmap _gerberCompositeBitmap;
 
         // Constants
-        private const int TILE_SIZE = 256;
-        private const int BUFFER_MULTIPLIER = 3; // 3x viewport = 1 screen padding on all sides
+        private const int BUFFER_MULTIPLIER = 3; // 3x viewport for smooth panning
         private const int MAX_BITMAP_SIZE = 4096;
-        private const int MIN_PRIMITIVE_PIXELS = 2; // Skip primitives smaller than this
-        private const double ZOOM_REBUILD_THRESHOLD = 0.1; // Rebuild tiles if zoom changes by 10%
+        private const int MIN_PRIMITIVE_PIXELS = 2;
+        private const double ZOOM_REBUILD_THRESHOLD = 0.1;
+
+        /// <summary>
+        /// Frozen layer bitmap - stores 1-bit monochrome data for inactive layers
+        /// </summary>
+        private class FrozenLayerBitmap
+        {
+            public byte[] Pixels { get; set; }      // 1-bit packed data (8 pixels per byte)
+            public int Width { get; set; }
+            public int Height { get; set; }
+            public Rect WorldBounds { get; set; }
+            public double Zoom { get; set; }
+            public Color LayerColor { get; set; }
+            public double Opacity { get; set; }
+
+            public bool GetPixel(int x, int y)
+            {
+                if (x < 0 || x >= Width || y < 0 || y >= Height)
+                    return false;
+                int byteIndex = (y * ((Width + 7) / 8)) + (x / 8);
+                int bitIndex = 7 - (x % 8);
+                return (Pixels[byteIndex] & (1 << bitIndex)) != 0;
+            }
+
+            public void SetPixel(int x, int y, bool value)
+            {
+                if (x < 0 || x >= Width || y < 0 || y >= Height)
+                    return;
+                int byteIndex = (y * ((Width + 7) / 8)) + (x / 8);
+                int bitIndex = 7 - (x % 8);
+                if (value)
+                    Pixels[byteIndex] |= (byte)(1 << bitIndex);
+                else
+                    Pixels[byteIndex] &= (byte)~(1 << bitIndex);
+            }
+        }
 
         /// <summary>
         /// Simple quadtree for spatial indexing of Gerber primitives
@@ -820,310 +859,217 @@ namespace PCBPlotter.Controls
             }
         }
 
-        /// <summary>
-        /// Tile cache for a single Gerber layer - stores grayscale alpha masks
-        /// </summary>
-        private class GerberLayerTileCache
-        {
-            public Rect WorldBounds { get; private set; }
-            public double Zoom { get; private set; }
-            public Dictionary<(int, int), byte[]> Tiles { get; private set; } // Key: (tileX, tileY), Value: grayscale pixels
-            public int TileSize { get; private set; }
-            public int TilesX { get; private set; }
-            public int TilesY { get; private set; }
-
-            public GerberLayerTileCache(Rect worldBounds, double zoom, int tileSize)
-            {
-                WorldBounds = worldBounds;
-                Zoom = zoom;
-                TileSize = tileSize;
-                Tiles = new Dictionary<(int, int), byte[]>();
-
-                // Calculate number of tiles needed
-                int pixelWidth = (int)(worldBounds.Width * zoom);
-                int pixelHeight = (int)(worldBounds.Height * zoom);
-                TilesX = (pixelWidth + tileSize - 1) / tileSize;
-                TilesY = (pixelHeight + tileSize - 1) / tileSize;
-            }
-
-            public void Clear()
-            {
-                Tiles.Clear();
-            }
-        }
-
         private void RenderGerberLayers(DrawingContext dc)
         {
             if (GerberLayers == null || GerberLayers.Count == 0)
                 return;
 
-            // Ghost drag mode: during panning, show simplified view for instant feedback
+            // Ensure we have an active layer set (default to first visible layer)
+            EnsureActiveLayerSet();
+
+            // Ghost drag mode: during panning, just translate existing bitmap - zero re-rendering!
             if (_isPanning && _isGhostDragMode && _ghostDragBitmap != null)
             {
-                // Just translate the existing bitmap - no re-rendering!
                 double offsetX = PanX - _cachedPanX;
-                double offsetY = -(PanY - _cachedPanY); // Invert Y
-
+                double offsetY = -(PanY - _cachedPanY);
                 dc.PushTransform(new TranslateTransform(offsetX, offsetY));
                 dc.DrawImage(_ghostDragBitmap, new Rect(0, 0, ActualWidth, ActualHeight));
                 dc.Pop();
                 return;
             }
 
-            // Check if we need to rebuild the composite
-            bool needsRebuild = _compositeDirty ||
-                                _compositeBuffer == null ||
-                                !IsViewportWithinComposite() ||
-                                Math.Abs(_compositeZoom - Zoom) / Math.Max(Zoom, 0.001) > ZOOM_REBUILD_THRESHOLD;
+            // Check if background composite needs rebuild
+            bool needsBackgroundRebuild = _backgroundDirty ||
+                                          _backgroundComposite == null ||
+                                          !IsViewportWithinBackground() ||
+                                          Math.Abs(_backgroundZoom - Zoom) / Math.Max(Zoom, 0.001) > ZOOM_REBUILD_THRESHOLD;
 
-            if (needsRebuild)
+            if (needsBackgroundRebuild)
             {
-                RebuildCompositeBuffer();
+                RebuildBackgroundComposite();
             }
 
-            // Draw the composite with screen blending
-            if (_compositeBuffer != null)
+            // 1. Draw background composite (all inactive visible layers - frozen as bitmaps)
+            if (_backgroundComposite != null)
             {
-                // Calculate where to draw the composite based on current pan vs cached bounds
-                double srcX = (ScreenToWorld(new Point(0, 0)).X - _compositeWorldBounds.X) * _compositeZoom;
-                double srcY = (_compositeWorldBounds.Y + _compositeWorldBounds.Height - ScreenToWorld(new Point(0, 0)).Y) * _compositeZoom;
-
-                // Simple case: draw the visible portion
-                dc.DrawImage(_compositeBuffer, new Rect(
-                    -srcX, -srcY,
-                    _compositeBuffer.PixelWidth,
-                    _compositeBuffer.PixelHeight));
+                double srcX = (ScreenToWorld(new Point(0, 0)).X - _backgroundWorldBounds.X) * _backgroundZoom;
+                double srcY = (_backgroundWorldBounds.Y + _backgroundWorldBounds.Height - ScreenToWorld(new Point(0, 0)).Y) * _backgroundZoom;
+                dc.DrawImage(_backgroundComposite, new Rect(-srcX, -srcY, _backgroundComposite.PixelWidth, _backgroundComposite.PixelHeight));
             }
 
-            // Draw selection highlights on top (these need to be interactive)
+            // 2. Draw active layer as live vectors (selectable/editable)
+            if (_activeGerberLayer != null && _activeGerberLayer.IsVisible)
+            {
+                RenderActiveLayerVectors(dc);
+            }
+
+            // 3. Draw selection highlights on top
             RenderGerberSelectionHighlights(dc);
         }
 
         /// <summary>
-        /// Check if current viewport is within the pre-rendered composite buffer
+        /// Ensure an active layer is set (default to first visible layer)
         /// </summary>
-        private bool IsViewportWithinComposite()
+        private void EnsureActiveLayerSet()
         {
-            if (_compositeBuffer == null || _compositeWorldBounds.IsEmpty)
-                return false;
-
-            Point topLeft = ScreenToWorld(new Point(0, 0));
-            Point bottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
-
-            Rect viewport = new Rect(
-                Math.Min(topLeft.X, bottomRight.X),
-                Math.Min(topLeft.Y, bottomRight.Y),
-                Math.Abs(bottomRight.X - topLeft.X),
-                Math.Abs(bottomRight.Y - topLeft.Y));
-
-            // Viewport must be fully contained within composite bounds
-            return _compositeWorldBounds.Contains(viewport);
-        }
-
-        /// <summary>
-        /// Rebuild the composite buffer with screen blending using tile-based rendering
-        /// </summary>
-        private void RebuildCompositeBuffer()
-        {
-            if (ActualWidth < 1 || ActualHeight < 1)
+            // Check if current active layer is still valid
+            if (_activeGerberLayer != null && GerberLayers.Contains(_activeGerberLayer))
                 return;
 
-            // Calculate oversized buffer bounds (3x viewport for smooth panning)
-            Point viewportCenter = ScreenToWorld(new Point(ActualWidth / 2, ActualHeight / 2));
-            double viewportWorldWidth = ActualWidth / Zoom;
-            double viewportWorldHeight = ActualHeight / Zoom;
+            // Find first active layer
+            _activeGerberLayer = GerberLayers.FirstOrDefault(l => l.IsActive && l.IsVisible);
 
-            // Create bounds with BUFFER_MULTIPLIER padding on all sides
-            double bufferWorldWidth = viewportWorldWidth * BUFFER_MULTIPLIER;
-            double bufferWorldHeight = viewportWorldHeight * BUFFER_MULTIPLIER;
-
-            _compositeWorldBounds = new Rect(
-                viewportCenter.X - bufferWorldWidth / 2,
-                viewportCenter.Y - bufferWorldHeight / 2,
-                bufferWorldWidth,
-                bufferWorldHeight);
-
-            _compositeZoom = Zoom;
-
-            // Calculate bitmap size (clamped to max)
-            int bitmapWidth = (int)Math.Min(bufferWorldWidth * Zoom, MAX_BITMAP_SIZE);
-            int bitmapHeight = (int)Math.Min(bufferWorldHeight * Zoom, MAX_BITMAP_SIZE);
-
-            if (bitmapWidth < 1) bitmapWidth = 1;
-            if (bitmapHeight < 1) bitmapHeight = 1;
-
-            // Effective scale (may be reduced if we hit MAX_BITMAP_SIZE)
-            double effectiveScale = Math.Min(
-                (double)bitmapWidth / (bufferWorldWidth * Zoom),
-                (double)bitmapHeight / (bufferWorldHeight * Zoom));
-
-            // Create the composite buffer
-            try
+            // If none marked active, pick first visible layer
+            if (_activeGerberLayer == null)
             {
-                _compositeBuffer = new WriteableBitmap(bitmapWidth, bitmapHeight, 96, 96, PixelFormats.Bgra32, null);
-
-                // Render layers with screen blending
-                RenderLayersWithScreenBlend(bitmapWidth, bitmapHeight, effectiveScale);
-
-                // Update ghost drag bitmap for future pans
-                _ghostDragBitmap = _compositeBuffer;
-            }
-            catch (OutOfMemoryException)
-            {
-                System.Diagnostics.Debug.WriteLine("Composite buffer out of memory, falling back to legacy rendering");
-                _compositeBuffer = null;
-                RebuildGerberCompositeBitmapLegacy();
-                return;
-            }
-
-            // Update cache state
-            _cachedZoom = Zoom;
-            _cachedPanX = PanX;
-            _cachedPanY = PanY;
-            _cachedWidth = (int)ActualWidth;
-            _cachedHeight = (int)ActualHeight;
-            _compositeDirty = false;
-            _gerberCacheDirty = false;
-
-            // Rebuild quadtree for hit testing
-            RebuildHitTestQuadtree(_compositeWorldBounds);
-        }
-
-        /// <summary>
-        /// Render all visible layers with screen blend mode using parallel processing
-        /// </summary>
-        private void RenderLayersWithScreenBlend(int width, int height, double effectiveScale)
-        {
-            // First, render each layer to a separate BGRA buffer
-            var layerBuffers = new List<(byte[] pixels, Color color, double opacity)>();
-
-            foreach (var layer in GerberLayers)
-            {
-                if (!layer.IsVisible || layer.Primitives == null || layer.Primitives.Count == 0)
-                    continue;
-
-                byte[] layerPixels = RenderLayerToGrayscale(layer, width, height, effectiveScale);
-                layerBuffers.Add((layerPixels, layer.Color, layer.Opacity));
-            }
-
-            if (layerBuffers.Count == 0)
-                return;
-
-            // Now composite all layers using screen blend in parallel
-            _compositeBuffer.Lock();
-            try
-            {
-                unsafe
+                _activeGerberLayer = GerberLayers.FirstOrDefault(l => l.IsVisible);
+                if (_activeGerberLayer != null)
                 {
-                    byte* destPtr = (byte*)_compositeBuffer.BackBuffer;
-                    int stride = _compositeBuffer.BackBufferStride;
-
-                    // Use parallel processing for the blend operation
-                    Parallel.For(0, height, y =>
-                    {
-                        for (int x = 0; x < width; x++)
-                        {
-                            int offset = y * stride + x * 4;
-
-                            // Start with black background (R=0, G=0, B=0, A=255)
-                            double resultR = 0;
-                            double resultG = 0;
-                            double resultB = 0;
-
-                            // Apply screen blend for each layer
-                            // Screen blend formula: Result = 1 - (1 - A) * (1 - B)
-                            foreach (var (pixels, color, opacity) in layerBuffers)
-                            {
-                                byte alpha = pixels[y * width + x]; // Grayscale value = coverage
-                                if (alpha == 0) continue;
-
-                                // Apply layer opacity
-                                double coverage = (alpha / 255.0) * opacity;
-
-                                // Layer color normalized
-                                double layerR = (color.R / 255.0) * coverage;
-                                double layerG = (color.G / 255.0) * coverage;
-                                double layerB = (color.B / 255.0) * coverage;
-
-                                // Screen blend: Result = 1 - (1 - Result) * (1 - Layer)
-                                resultR = 1.0 - (1.0 - resultR) * (1.0 - layerR);
-                                resultG = 1.0 - (1.0 - resultG) * (1.0 - layerG);
-                                resultB = 1.0 - (1.0 - resultB) * (1.0 - layerB);
-                            }
-
-                            // Write to destination
-                            destPtr[offset + 0] = (byte)(resultB * 255); // B
-                            destPtr[offset + 1] = (byte)(resultG * 255); // G
-                            destPtr[offset + 2] = (byte)(resultR * 255); // R
-                            destPtr[offset + 3] = 255; // A (opaque where there's content, but we use 255 for consistency)
-                        }
-                    });
+                    _activeGerberLayer.IsActive = true;
                 }
+            }
 
-                _compositeBuffer.AddDirtyRect(new Int32Rect(0, 0, width, height));
-            }
-            finally
+            // Rebuild quadtree for the new active layer
+            if (_activeGerberLayer != null)
             {
-                _compositeBuffer.Unlock();
+                RebuildActiveLayerQuadtree();
             }
+
+            // Mark background as dirty since active layer changed
+            _backgroundDirty = true;
         }
 
         /// <summary>
-        /// Render a single layer to a grayscale buffer (alpha mask)
+        /// Set the active layer (freeze old, thaw new)
         /// </summary>
-        private byte[] RenderLayerToGrayscale(GerberLayer layer, int width, int height, double effectiveScale)
+        public void SetActiveGerberLayer(GerberLayer layer)
         {
-            byte[] pixels = new byte[width * height];
+            if (layer == _activeGerberLayer)
+                return;
 
-            double minWorldSize = MIN_PRIMITIVE_PIXELS / (_compositeZoom * effectiveScale);
+            // Freeze the old active layer (convert to bitmap)
+            if (_activeGerberLayer != null)
+            {
+                _activeGerberLayer.IsActive = false;
+                FreezeLayer(_activeGerberLayer);
+            }
 
+            // Thaw the new layer (activate for vector editing)
+            _activeGerberLayer = layer;
+            if (_activeGerberLayer != null)
+            {
+                _activeGerberLayer.IsActive = true;
+                ThawLayer(_activeGerberLayer);
+                RebuildActiveLayerQuadtree();
+            }
+
+            // Background needs rebuild (exclude new active layer)
+            _backgroundDirty = true;
+            InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Get the currently active Gerber layer
+        /// </summary>
+        public GerberLayer GetActiveGerberLayer()
+        {
+            return _activeGerberLayer;
+        }
+
+        /// <summary>
+        /// Freeze a layer: render its vectors to a 1-bit monochrome bitmap
+        /// </summary>
+        private void FreezeLayer(GerberLayer layer)
+        {
+            if (layer == null || layer.Primitives == null || layer.Primitives.Count == 0)
+                return;
+
+            // Calculate bounds and size
+            Rect layerBounds = layer.Bounds;
+            if (layerBounds.IsEmpty)
+                return;
+
+            // Use current zoom level for the frozen bitmap
+            double zoom = Math.Max(Zoom, 1);
+            int width = (int)Math.Min(layerBounds.Width * zoom, MAX_BITMAP_SIZE);
+            int height = (int)Math.Min(layerBounds.Height * zoom, MAX_BITMAP_SIZE);
+
+            if (width < 1) width = 1;
+            if (height < 1) height = 1;
+
+            // Create 1-bit packed pixel array
+            int bytesPerRow = (width + 7) / 8;
+            byte[] pixels = new byte[bytesPerRow * height];
+
+            double effectiveZoom = (double)width / (layerBounds.Width * zoom) * zoom;
+
+            // Render primitives to 1-bit bitmap
             foreach (var prim in layer.Primitives)
             {
-                var primBounds = prim.GetBounds();
-
-                // Skip if outside buffer bounds
-                if (!_compositeWorldBounds.IntersectsWith(primBounds))
-                    continue;
-
-                // Skip if too small to see (except lines/arcs)
-                double primSize = Math.Max(prim.Width, prim.Height);
-                if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
-                    continue;
-
-                // Render primitive to the grayscale buffer
-                RenderPrimitiveToGrayscale(pixels, width, height, prim, effectiveScale);
+                RenderPrimitiveTo1Bit(pixels, width, height, bytesPerRow, prim, layerBounds, effectiveZoom);
             }
 
-            return pixels;
+            // Store the frozen bitmap
+            _frozenLayers[layer.Id] = new FrozenLayerBitmap
+            {
+                Pixels = pixels,
+                Width = width,
+                Height = height,
+                WorldBounds = layerBounds,
+                Zoom = effectiveZoom,
+                LayerColor = layer.Color,
+                Opacity = layer.Opacity
+            };
         }
 
         /// <summary>
-        /// Render a single primitive to the grayscale buffer
+        /// Thaw a layer: remove its frozen bitmap (vectors are already in memory)
         /// </summary>
-        private void RenderPrimitiveToGrayscale(byte[] pixels, int width, int height, GerberPrimitive prim, double effectiveScale)
+        private void ThawLayer(GerberLayer layer)
         {
-            double zoom = _compositeZoom * effectiveScale;
+            if (layer == null)
+                return;
 
-            // Convert primitive position to buffer coordinates
-            double bufferX = (prim.X - _compositeWorldBounds.X) * zoom;
-            double bufferY = (_compositeWorldBounds.Y + _compositeWorldBounds.Height - prim.Y) * zoom;
+            // Remove the frozen bitmap if it exists
+            _frozenLayers.Remove(layer.Id);
+        }
 
-            double screenWidth = prim.Width * zoom;
-            double screenHeight = prim.Height * zoom;
+        /// <summary>
+        /// Render a primitive to a 1-bit bitmap
+        /// </summary>
+        private void RenderPrimitiveTo1Bit(byte[] pixels, int width, int height, int bytesPerRow,
+            GerberPrimitive prim, Rect worldBounds, double zoom)
+        {
+            // Convert primitive position to bitmap coordinates
+            double bx = (prim.X - worldBounds.X) * zoom;
+            double by = (worldBounds.Y + worldBounds.Height - prim.Y) * zoom;
+            double sw = prim.Width * zoom;
+            double sh = prim.Height * zoom;
 
             switch (prim.Type)
             {
                 case GerberPrimitiveType.Circle:
                 case GerberPrimitiveType.Flash:
-                    RenderCircleToBuffer(pixels, width, height, bufferX, bufferY, screenWidth / 2);
+                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
                     break;
 
                 case GerberPrimitiveType.Rectangle:
-                    RenderRectangleToBuffer(pixels, width, height, bufferX, bufferY, screenWidth, screenHeight, prim.Rotation);
+                    Fill1BitRectangle(pixels, width, height, bytesPerRow, bx, by, sw, sh);
                     break;
 
                 case GerberPrimitiveType.Obround:
-                    RenderObroundToBuffer(pixels, width, height, bufferX, bufferY, screenWidth, screenHeight, prim.Rotation);
+                    Fill1BitRectangle(pixels, width, height, bytesPerRow, bx, by, sw, sh);
+                    double r = Math.Min(sw, sh) / 2;
+                    if (sw > sh)
+                    {
+                        Fill1BitCircle(pixels, width, height, bytesPerRow, bx - sw / 2 + r, by, r);
+                        Fill1BitCircle(pixels, width, height, bytesPerRow, bx + sw / 2 - r, by, r);
+                    }
+                    else
+                    {
+                        Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by - sh / 2 + r, r);
+                        Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by + sh / 2 - r, r);
+                    }
                     break;
 
                 case GerberPrimitiveType.Line:
@@ -1133,11 +1079,11 @@ namespace PCBPlotter.Controls
                         double lineWidth = Math.Max(1, prim.Width * zoom);
                         for (int i = 1; i < prim.Points.Count; i++)
                         {
-                            double x1 = (prim.Points[i - 1].X - _compositeWorldBounds.X) * zoom;
-                            double y1 = (_compositeWorldBounds.Y + _compositeWorldBounds.Height - prim.Points[i - 1].Y) * zoom;
-                            double x2 = (prim.Points[i].X - _compositeWorldBounds.X) * zoom;
-                            double y2 = (_compositeWorldBounds.Y + _compositeWorldBounds.Height - prim.Points[i].Y) * zoom;
-                            RenderLineToBuffer(pixels, width, height, x1, y1, x2, y2, lineWidth);
+                            double x1 = (prim.Points[i - 1].X - worldBounds.X) * zoom;
+                            double y1 = (worldBounds.Y + worldBounds.Height - prim.Points[i - 1].Y) * zoom;
+                            double x2 = (prim.Points[i].X - worldBounds.X) * zoom;
+                            double y2 = (worldBounds.Y + worldBounds.Height - prim.Points[i].Y) * zoom;
+                            Fill1BitLine(pixels, width, height, bytesPerRow, x1, y1, x2, y2, lineWidth);
                         }
                     }
                     break;
@@ -1145,34 +1091,40 @@ namespace PCBPlotter.Controls
                 case GerberPrimitiveType.Contour:
                     if (prim.Points != null && prim.Points.Count >= 3)
                     {
-                        // Convert points to buffer coordinates
-                        var bufferPoints = new List<Point>();
+                        var pts = new List<Point>();
                         foreach (var pt in prim.Points)
                         {
-                            double px = (pt.X - _compositeWorldBounds.X) * zoom;
-                            double py = (_compositeWorldBounds.Y + _compositeWorldBounds.Height - pt.Y) * zoom;
-                            bufferPoints.Add(new Point(px, py));
+                            pts.Add(new Point(
+                                (pt.X - worldBounds.X) * zoom,
+                                (worldBounds.Y + worldBounds.Height - pt.Y) * zoom));
                         }
-                        RenderPolygonToBuffer(pixels, width, height, bufferPoints);
+                        Fill1BitPolygon(pixels, width, height, bytesPerRow, pts);
                     }
                     break;
 
                 case GerberPrimitiveType.Polygon:
-                    // Regular polygon (hexagon, octagon, etc.)
-                    RenderRegularPolygonToBuffer(pixels, width, height, bufferX, bufferY, screenWidth / 2, 6, prim.Rotation);
+                    Fill1BitRegularPolygon(pixels, width, height, bytesPerRow, bx, by, sw / 2, 6, prim.Rotation);
                     break;
             }
         }
 
-        // Rasterization helpers for grayscale buffer
-        private void RenderCircleToBuffer(byte[] pixels, int width, int height, double cx, double cy, double radius)
+        // 1-bit rasterization helpers
+        private void Set1BitPixel(byte[] pixels, int width, int height, int bytesPerRow, int x, int y)
+        {
+            if (x < 0 || x >= width || y < 0 || y >= height)
+                return;
+            int byteIndex = y * bytesPerRow + (x / 8);
+            int bitIndex = 7 - (x % 8);
+            pixels[byteIndex] |= (byte)(1 << bitIndex);
+        }
+
+        private void Fill1BitCircle(byte[] pixels, int width, int height, int bytesPerRow, double cx, double cy, double radius)
         {
             int minX = Math.Max(0, (int)(cx - radius));
             int maxX = Math.Min(width - 1, (int)(cx + radius));
             int minY = Math.Max(0, (int)(cy - radius));
             int maxY = Math.Min(height - 1, (int)(cy + radius));
-
-            double radiusSq = radius * radius;
+            double r2 = radius * radius;
 
             for (int y = minY; y <= maxY; y++)
             {
@@ -1180,87 +1132,40 @@ namespace PCBPlotter.Controls
                 {
                     double dx = x - cx + 0.5;
                     double dy = y - cy + 0.5;
-                    if (dx * dx + dy * dy <= radiusSq)
-                    {
-                        pixels[y * width + x] = 255;
-                    }
+                    if (dx * dx + dy * dy <= r2)
+                        Set1BitPixel(pixels, width, height, bytesPerRow, x, y);
                 }
             }
         }
 
-        private void RenderRectangleToBuffer(byte[] pixels, int width, int height, double cx, double cy, double w, double h, double rotation)
+        private void Fill1BitRectangle(byte[] pixels, int width, int height, int bytesPerRow, double cx, double cy, double w, double h)
         {
-            if (Math.Abs(rotation) < 0.1)
-            {
-                // Axis-aligned rectangle (fast path)
-                int minX = Math.Max(0, (int)(cx - w / 2));
-                int maxX = Math.Min(width - 1, (int)(cx + w / 2));
-                int minY = Math.Max(0, (int)(cy - h / 2));
-                int maxY = Math.Min(height - 1, (int)(cy + h / 2));
+            int minX = Math.Max(0, (int)(cx - w / 2));
+            int maxX = Math.Min(width - 1, (int)(cx + w / 2));
+            int minY = Math.Max(0, (int)(cy - h / 2));
+            int maxY = Math.Min(height - 1, (int)(cy + h / 2));
 
-                for (int y = minY; y <= maxY; y++)
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
                 {
-                    for (int x = minX; x <= maxX; x++)
-                    {
-                        pixels[y * width + x] = 255;
-                    }
+                    Set1BitPixel(pixels, width, height, bytesPerRow, x, y);
                 }
             }
-            else
-            {
-                // Rotated rectangle - use polygon rendering
-                double rad = -rotation * Math.PI / 180;
-                double cos = Math.Cos(rad);
-                double sin = Math.Sin(rad);
-
-                var corners = new List<Point>
-                {
-                    new Point(cx + (-w/2 * cos - -h/2 * sin), cy + (-w/2 * sin + -h/2 * cos)),
-                    new Point(cx + (w/2 * cos - -h/2 * sin), cy + (w/2 * sin + -h/2 * cos)),
-                    new Point(cx + (w/2 * cos - h/2 * sin), cy + (w/2 * sin + h/2 * cos)),
-                    new Point(cx + (-w/2 * cos - h/2 * sin), cy + (-w/2 * sin + h/2 * cos))
-                };
-                RenderPolygonToBuffer(pixels, width, height, corners);
-            }
         }
 
-        private void RenderObroundToBuffer(byte[] pixels, int width, int height, double cx, double cy, double w, double h, double rotation)
+        private void Fill1BitLine(byte[] pixels, int width, int height, int bytesPerRow, double x1, double y1, double x2, double y2, double lineWidth)
         {
-            // Simplified: draw as rectangle + two semicircles (or just rectangle for speed)
-            RenderRectangleToBuffer(pixels, width, height, cx, cy, w, h, rotation);
-
-            // Add rounded ends
-            double radius = Math.Min(w, h) / 2;
-            if (w > h)
-            {
-                // Horizontal obround
-                RenderCircleToBuffer(pixels, width, height, cx - w / 2 + radius, cy, radius);
-                RenderCircleToBuffer(pixels, width, height, cx + w / 2 - radius, cy, radius);
-            }
-            else
-            {
-                // Vertical obround
-                RenderCircleToBuffer(pixels, width, height, cx, cy - h / 2 + radius, radius);
-                RenderCircleToBuffer(pixels, width, height, cx, cy + h / 2 - radius, radius);
-            }
-        }
-
-        private void RenderLineToBuffer(byte[] pixels, int width, int height, double x1, double y1, double x2, double y2, double lineWidth)
-        {
-            // Bresenham-style thick line
             double dx = x2 - x1;
             double dy = y2 - y1;
             double length = Math.Sqrt(dx * dx + dy * dy);
-
             if (length < 0.1) return;
 
-            // Normalize and get perpendicular
             dx /= length;
             dy /= length;
             double px = -dy * lineWidth / 2;
             double py = dx * lineWidth / 2;
 
-            // Create line as polygon
             var corners = new List<Point>
             {
                 new Point(x1 + px, y1 + py),
@@ -1268,39 +1173,30 @@ namespace PCBPlotter.Controls
                 new Point(x2 - px, y2 - py),
                 new Point(x1 - px, y1 - py)
             };
-            RenderPolygonToBuffer(pixels, width, height, corners);
+            Fill1BitPolygon(pixels, width, height, bytesPerRow, corners);
 
             // Round caps
-            double radius = lineWidth / 2;
-            RenderCircleToBuffer(pixels, width, height, x1, y1, radius);
-            RenderCircleToBuffer(pixels, width, height, x2, y2, radius);
+            Fill1BitCircle(pixels, width, height, bytesPerRow, x1, y1, lineWidth / 2);
+            Fill1BitCircle(pixels, width, height, bytesPerRow, x2, y2, lineWidth / 2);
         }
 
-        private void RenderPolygonToBuffer(byte[] pixels, int width, int height, List<Point> points)
+        private void Fill1BitPolygon(byte[] pixels, int width, int height, int bytesPerRow, List<Point> points)
         {
             if (points.Count < 3) return;
 
-            // Find bounding box
-            double minX = double.MaxValue, maxX = double.MinValue;
             double minY = double.MaxValue, maxY = double.MinValue;
             foreach (var p in points)
             {
-                minX = Math.Min(minX, p.X);
-                maxX = Math.Max(maxX, p.X);
                 minY = Math.Min(minY, p.Y);
                 maxY = Math.Max(maxY, p.Y);
             }
 
-            int iMinX = Math.Max(0, (int)minX);
-            int iMaxX = Math.Min(width - 1, (int)maxX);
             int iMinY = Math.Max(0, (int)minY);
             int iMaxY = Math.Min(height - 1, (int)maxY);
 
-            // Scanline fill
             for (int y = iMinY; y <= iMaxY; y++)
             {
                 var intersections = new List<double>();
-
                 for (int i = 0; i < points.Count; i++)
                 {
                     int j = (i + 1) % points.Count;
@@ -1315,32 +1211,503 @@ namespace PCBPlotter.Controls
                 }
 
                 intersections.Sort();
-
                 for (int i = 0; i + 1 < intersections.Count; i += 2)
                 {
-                    int startX = Math.Max(iMinX, (int)intersections[i]);
-                    int endX = Math.Min(iMaxX, (int)intersections[i + 1]);
-
+                    int startX = Math.Max(0, (int)intersections[i]);
+                    int endX = Math.Min(width - 1, (int)intersections[i + 1]);
                     for (int x = startX; x <= endX; x++)
                     {
-                        pixels[y * width + x] = 255;
+                        Set1BitPixel(pixels, width, height, bytesPerRow, x, y);
                     }
                 }
             }
         }
 
-        private void RenderRegularPolygonToBuffer(byte[] pixels, int width, int height, double cx, double cy, double radius, int vertices, double rotation)
+        private void Fill1BitRegularPolygon(byte[] pixels, int width, int height, int bytesPerRow, double cx, double cy, double radius, int vertices, double rotation)
         {
             var points = new List<Point>();
             double startAngle = rotation * Math.PI / 180;
-
             for (int i = 0; i < vertices; i++)
             {
                 double angle = startAngle + (2 * Math.PI * i / vertices);
                 points.Add(new Point(cx + radius * Math.Cos(angle), cy - radius * Math.Sin(angle)));
             }
+            Fill1BitPolygon(pixels, width, height, bytesPerRow, points);
+        }
 
-            RenderPolygonToBuffer(pixels, width, height, points);
+        /// <summary>
+        /// Check if current viewport is within the pre-rendered background composite
+        /// </summary>
+        private bool IsViewportWithinBackground()
+        {
+            if (_backgroundComposite == null || _backgroundWorldBounds.IsEmpty)
+                return false;
+
+            Point topLeft = ScreenToWorld(new Point(0, 0));
+            Point bottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+
+            Rect viewport = new Rect(
+                Math.Min(topLeft.X, bottomRight.X),
+                Math.Min(topLeft.Y, bottomRight.Y),
+                Math.Abs(bottomRight.X - topLeft.X),
+                Math.Abs(bottomRight.Y - topLeft.Y));
+
+            return _backgroundWorldBounds.Contains(viewport);
+        }
+
+        /// <summary>
+        /// Rebuild the background composite (all inactive visible layers with screen blend)
+        /// </summary>
+        private void RebuildBackgroundComposite()
+        {
+            if (ActualWidth < 1 || ActualHeight < 1)
+                return;
+
+            // Calculate oversized buffer bounds (3x viewport for smooth panning)
+            Point viewportCenter = ScreenToWorld(new Point(ActualWidth / 2, ActualHeight / 2));
+            double viewportWorldWidth = ActualWidth / Zoom;
+            double viewportWorldHeight = ActualHeight / Zoom;
+
+            double bufferWorldWidth = viewportWorldWidth * BUFFER_MULTIPLIER;
+            double bufferWorldHeight = viewportWorldHeight * BUFFER_MULTIPLIER;
+
+            _backgroundWorldBounds = new Rect(
+                viewportCenter.X - bufferWorldWidth / 2,
+                viewportCenter.Y - bufferWorldHeight / 2,
+                bufferWorldWidth,
+                bufferWorldHeight);
+
+            _backgroundZoom = Zoom;
+
+            // Calculate bitmap size (clamped to max)
+            int bitmapWidth = (int)Math.Min(bufferWorldWidth * Zoom, MAX_BITMAP_SIZE);
+            int bitmapHeight = (int)Math.Min(bufferWorldHeight * Zoom, MAX_BITMAP_SIZE);
+
+            if (bitmapWidth < 1) bitmapWidth = 1;
+            if (bitmapHeight < 1) bitmapHeight = 1;
+
+            double effectiveScale = Math.Min(
+                (double)bitmapWidth / (bufferWorldWidth * Zoom),
+                (double)bitmapHeight / (bufferWorldHeight * Zoom));
+
+            try
+            {
+                _backgroundComposite = new WriteableBitmap(bitmapWidth, bitmapHeight, 96, 96, PixelFormats.Bgra32, null);
+
+                // Render ONLY inactive layers with screen blending
+                RenderInactiveLayersWithScreenBlend(bitmapWidth, bitmapHeight, effectiveScale);
+
+                // Update ghost drag bitmap
+                _ghostDragBitmap = _backgroundComposite;
+            }
+            catch (OutOfMemoryException)
+            {
+                System.Diagnostics.Debug.WriteLine("Background composite out of memory");
+                _backgroundComposite = null;
+                return;
+            }
+
+            // Update cache state
+            _cachedZoom = Zoom;
+            _cachedPanX = PanX;
+            _cachedPanY = PanY;
+            _cachedWidth = (int)ActualWidth;
+            _cachedHeight = (int)ActualHeight;
+            _backgroundDirty = false;
+            _gerberCacheDirty = false;
+        }
+
+        /// <summary>
+        /// Render inactive layers with screen blend (excludes active layer)
+        /// </summary>
+        private void RenderInactiveLayersWithScreenBlend(int width, int height, double effectiveScale)
+        {
+            // Collect inactive visible layers
+            var layerBuffers = new List<(byte[] pixels, Color color, double opacity)>();
+
+            foreach (var layer in GerberLayers)
+            {
+                // Skip active layer - it's rendered as live vectors
+                if (layer == _activeGerberLayer)
+                    continue;
+
+                if (!layer.IsVisible || layer.Primitives == null || layer.Primitives.Count == 0)
+                    continue;
+
+                // Check if we have a frozen bitmap for this layer
+                if (_frozenLayers.TryGetValue(layer.Id, out var frozen))
+                {
+                    // Use the frozen 1-bit bitmap
+                    byte[] grayscale = Convert1BitToGrayscale(frozen, width, height, effectiveScale);
+                    layerBuffers.Add((grayscale, layer.Color, layer.Opacity));
+                }
+                else
+                {
+                    // Render fresh (this layer wasn't frozen yet)
+                    byte[] layerPixels = RenderLayerTo1BitGrayscale(layer, width, height, effectiveScale);
+                    layerBuffers.Add((layerPixels, layer.Color, layer.Opacity));
+                }
+            }
+
+            if (layerBuffers.Count == 0)
+                return;
+
+            // Composite with screen blend
+            _backgroundComposite.Lock();
+            try
+            {
+                unsafe
+                {
+                    byte* destPtr = (byte*)_backgroundComposite.BackBuffer;
+                    int stride = _backgroundComposite.BackBufferStride;
+
+                    Parallel.For(0, height, y =>
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            int offset = y * stride + x * 4;
+
+                            double resultR = 0, resultG = 0, resultB = 0;
+
+                            foreach (var (pixels, color, opacity) in layerBuffers)
+                            {
+                                byte alpha = pixels[y * width + x];
+                                if (alpha == 0) continue;
+
+                                double coverage = (alpha / 255.0) * opacity;
+                                double layerR = (color.R / 255.0) * coverage;
+                                double layerG = (color.G / 255.0) * coverage;
+                                double layerB = (color.B / 255.0) * coverage;
+
+                                // Screen blend
+                                resultR = 1.0 - (1.0 - resultR) * (1.0 - layerR);
+                                resultG = 1.0 - (1.0 - resultG) * (1.0 - layerG);
+                                resultB = 1.0 - (1.0 - resultB) * (1.0 - layerB);
+                            }
+
+                            destPtr[offset + 0] = (byte)(resultB * 255);
+                            destPtr[offset + 1] = (byte)(resultG * 255);
+                            destPtr[offset + 2] = (byte)(resultR * 255);
+                            destPtr[offset + 3] = 255;
+                        }
+                    });
+                }
+
+                _backgroundComposite.AddDirtyRect(new Int32Rect(0, 0, width, height));
+            }
+            finally
+            {
+                _backgroundComposite.Unlock();
+            }
+        }
+
+        /// <summary>
+        /// Convert a frozen 1-bit bitmap to grayscale for the current viewport
+        /// </summary>
+        private byte[] Convert1BitToGrayscale(FrozenLayerBitmap frozen, int width, int height, double effectiveScale)
+        {
+            byte[] result = new byte[width * height];
+
+            double zoom = _backgroundZoom * effectiveScale;
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    // Convert screen position to world position
+                    double worldX = _backgroundWorldBounds.X + x / zoom;
+                    double worldY = _backgroundWorldBounds.Y + _backgroundWorldBounds.Height - y / zoom;
+
+                    // Convert world to frozen bitmap coordinates
+                    int srcX = (int)((worldX - frozen.WorldBounds.X) * frozen.Zoom);
+                    int srcY = (int)((frozen.WorldBounds.Y + frozen.WorldBounds.Height - worldY) * frozen.Zoom);
+
+                    if (srcX >= 0 && srcX < frozen.Width && srcY >= 0 && srcY < frozen.Height)
+                    {
+                        if (frozen.GetPixel(srcX, srcY))
+                            result[y * width + x] = 255;
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Render a layer to grayscale (for layers without frozen bitmaps)
+        /// </summary>
+        private byte[] RenderLayerTo1BitGrayscale(GerberLayer layer, int width, int height, double effectiveScale)
+        {
+            byte[] pixels = new byte[width * height];
+
+            double zoom = _backgroundZoom * effectiveScale;
+            double minWorldSize = MIN_PRIMITIVE_PIXELS / zoom;
+
+            foreach (var prim in layer.Primitives)
+            {
+                var primBounds = prim.GetBounds();
+                if (!_backgroundWorldBounds.IntersectsWith(primBounds))
+                    continue;
+
+                double primSize = Math.Max(prim.Width, prim.Height);
+                if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
+                    continue;
+
+                RenderPrimitiveToGrayscaleBuffer(pixels, width, height, prim, zoom);
+            }
+
+            return pixels;
+        }
+
+        /// <summary>
+        /// Render primitive to grayscale buffer for background composite
+        /// </summary>
+        private void RenderPrimitiveToGrayscaleBuffer(byte[] pixels, int width, int height, GerberPrimitive prim, double zoom)
+        {
+            double bufferX = (prim.X - _backgroundWorldBounds.X) * zoom;
+            double bufferY = (_backgroundWorldBounds.Y + _backgroundWorldBounds.Height - prim.Y) * zoom;
+            double sw = prim.Width * zoom;
+            double sh = prim.Height * zoom;
+
+            switch (prim.Type)
+            {
+                case GerberPrimitiveType.Circle:
+                case GerberPrimitiveType.Flash:
+                    FillGrayscaleCircle(pixels, width, height, bufferX, bufferY, sw / 2);
+                    break;
+                case GerberPrimitiveType.Rectangle:
+                    FillGrayscaleRectangle(pixels, width, height, bufferX, bufferY, sw, sh);
+                    break;
+                case GerberPrimitiveType.Obround:
+                    FillGrayscaleRectangle(pixels, width, height, bufferX, bufferY, sw, sh);
+                    double r = Math.Min(sw, sh) / 2;
+                    if (sw > sh)
+                    {
+                        FillGrayscaleCircle(pixels, width, height, bufferX - sw / 2 + r, bufferY, r);
+                        FillGrayscaleCircle(pixels, width, height, bufferX + sw / 2 - r, bufferY, r);
+                    }
+                    else
+                    {
+                        FillGrayscaleCircle(pixels, width, height, bufferX, bufferY - sh / 2 + r, r);
+                        FillGrayscaleCircle(pixels, width, height, bufferX, bufferY + sh / 2 - r, r);
+                    }
+                    break;
+                case GerberPrimitiveType.Line:
+                case GerberPrimitiveType.Arc:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        double lineWidth = Math.Max(1, prim.Width * zoom);
+                        for (int i = 1; i < prim.Points.Count; i++)
+                        {
+                            double x1 = (prim.Points[i - 1].X - _backgroundWorldBounds.X) * zoom;
+                            double y1 = (_backgroundWorldBounds.Y + _backgroundWorldBounds.Height - prim.Points[i - 1].Y) * zoom;
+                            double x2 = (prim.Points[i].X - _backgroundWorldBounds.X) * zoom;
+                            double y2 = (_backgroundWorldBounds.Y + _backgroundWorldBounds.Height - prim.Points[i].Y) * zoom;
+                            FillGrayscaleLine(pixels, width, height, x1, y1, x2, y2, lineWidth);
+                        }
+                    }
+                    break;
+                case GerberPrimitiveType.Contour:
+                    if (prim.Points != null && prim.Points.Count >= 3)
+                    {
+                        var pts = new List<Point>();
+                        foreach (var pt in prim.Points)
+                        {
+                            pts.Add(new Point(
+                                (pt.X - _backgroundWorldBounds.X) * zoom,
+                                (_backgroundWorldBounds.Y + _backgroundWorldBounds.Height - pt.Y) * zoom));
+                        }
+                        FillGrayscalePolygon(pixels, width, height, pts);
+                    }
+                    break;
+                case GerberPrimitiveType.Polygon:
+                    FillGrayscaleRegularPolygon(pixels, width, height, bufferX, bufferY, sw / 2, 6, prim.Rotation);
+                    break;
+            }
+        }
+
+        // Grayscale rasterization helpers for background composite
+        private void FillGrayscaleCircle(byte[] pixels, int width, int height, double cx, double cy, double radius)
+        {
+            int minX = Math.Max(0, (int)(cx - radius));
+            int maxX = Math.Min(width - 1, (int)(cx + radius));
+            int minY = Math.Max(0, (int)(cy - radius));
+            int maxY = Math.Min(height - 1, (int)(cy + radius));
+            double r2 = radius * radius;
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    double dx = x - cx + 0.5;
+                    double dy = y - cy + 0.5;
+                    if (dx * dx + dy * dy <= r2)
+                        pixels[y * width + x] = 255;
+                }
+            }
+        }
+
+        private void FillGrayscaleRectangle(byte[] pixels, int width, int height, double cx, double cy, double w, double h)
+        {
+            int minX = Math.Max(0, (int)(cx - w / 2));
+            int maxX = Math.Min(width - 1, (int)(cx + w / 2));
+            int minY = Math.Max(0, (int)(cy - h / 2));
+            int maxY = Math.Min(height - 1, (int)(cy + h / 2));
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    pixels[y * width + x] = 255;
+                }
+            }
+        }
+
+        private void FillGrayscaleLine(byte[] pixels, int width, int height, double x1, double y1, double x2, double y2, double lineWidth)
+        {
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            double length = Math.Sqrt(dx * dx + dy * dy);
+            if (length < 0.1) return;
+
+            dx /= length;
+            dy /= length;
+            double px = -dy * lineWidth / 2;
+            double py = dx * lineWidth / 2;
+
+            var corners = new List<Point>
+            {
+                new Point(x1 + px, y1 + py),
+                new Point(x2 + px, y2 + py),
+                new Point(x2 - px, y2 - py),
+                new Point(x1 - px, y1 - py)
+            };
+            FillGrayscalePolygon(pixels, width, height, corners);
+            FillGrayscaleCircle(pixels, width, height, x1, y1, lineWidth / 2);
+            FillGrayscaleCircle(pixels, width, height, x2, y2, lineWidth / 2);
+        }
+
+        private void FillGrayscalePolygon(byte[] pixels, int width, int height, List<Point> points)
+        {
+            if (points.Count < 3) return;
+
+            double minY = double.MaxValue, maxY = double.MinValue;
+            foreach (var p in points) { minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y); }
+
+            int iMinY = Math.Max(0, (int)minY);
+            int iMaxY = Math.Min(height - 1, (int)maxY);
+
+            for (int y = iMinY; y <= iMaxY; y++)
+            {
+                var intersections = new List<double>();
+                for (int i = 0; i < points.Count; i++)
+                {
+                    int j = (i + 1) % points.Count;
+                    double y1 = points[i].Y, y2 = points[j].Y;
+                    double x1 = points[i].X, x2 = points[j].X;
+
+                    if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y))
+                    {
+                        double t = (y - y1) / (y2 - y1);
+                        intersections.Add(x1 + t * (x2 - x1));
+                    }
+                }
+
+                intersections.Sort();
+                for (int i = 0; i + 1 < intersections.Count; i += 2)
+                {
+                    int startX = Math.Max(0, (int)intersections[i]);
+                    int endX = Math.Min(width - 1, (int)intersections[i + 1]);
+                    for (int x = startX; x <= endX; x++)
+                        pixels[y * width + x] = 255;
+                }
+            }
+        }
+
+        private void FillGrayscaleRegularPolygon(byte[] pixels, int width, int height, double cx, double cy, double radius, int vertices, double rotation)
+        {
+            var points = new List<Point>();
+            double startAngle = rotation * Math.PI / 180;
+            for (int i = 0; i < vertices; i++)
+            {
+                double angle = startAngle + (2 * Math.PI * i / vertices);
+                points.Add(new Point(cx + radius * Math.Cos(angle), cy - radius * Math.Sin(angle)));
+            }
+            FillGrayscalePolygon(pixels, width, height, points);
+        }
+
+        /// <summary>
+        /// Render active layer as live vectors (selectable shapes)
+        /// </summary>
+        private void RenderActiveLayerVectors(DrawingContext dc)
+        {
+            if (_activeGerberLayer == null || _activeGerberLayer.Primitives == null)
+                return;
+
+            // Get viewport bounds for culling
+            Point worldTopLeft = ScreenToWorld(new Point(0, 0));
+            Point worldBottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+            Rect worldViewport = new Rect(
+                Math.Min(worldTopLeft.X, worldBottomRight.X),
+                Math.Min(worldTopLeft.Y, worldBottomRight.Y),
+                Math.Abs(worldBottomRight.X - worldTopLeft.X),
+                Math.Abs(worldBottomRight.Y - worldTopLeft.Y));
+
+            double minWorldSize = MIN_PRIMITIVE_PIXELS / Zoom;
+
+            // Create brush for active layer with slight highlight
+            byte alpha = (byte)(_activeGerberLayer.Opacity * 255);
+            Color layerColor = _activeGerberLayer.Color;
+            // Brighten the active layer slightly for visual feedback
+            Color brightColor = Color.FromArgb(alpha,
+                (byte)Math.Min(255, layerColor.R + 30),
+                (byte)Math.Min(255, layerColor.G + 30),
+                (byte)Math.Min(255, layerColor.B + 30));
+            var layerBrush = new SolidColorBrush(brightColor);
+            layerBrush.Freeze();
+
+            // Render primitives
+            foreach (var prim in _activeGerberLayer.Primitives)
+            {
+                var primBounds = prim.GetBounds();
+                if (!worldViewport.IntersectsWith(primBounds))
+                    continue;
+
+                double primSize = Math.Max(prim.Width, prim.Height);
+                if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
+                    continue;
+
+                RenderGerberPrimitiveToScreen(dc, prim, layerBrush);
+            }
+        }
+
+        /// <summary>
+        /// Rebuild the quadtree for the active layer only
+        /// </summary>
+        private void RebuildActiveLayerQuadtree()
+        {
+            if (_activeGerberLayer == null || _activeGerberLayer.Primitives == null)
+            {
+                _activeLayerQuadtree = null;
+                return;
+            }
+
+            // Calculate bounds for the active layer
+            Rect layerBounds = _activeGerberLayer.Bounds;
+            if (layerBounds.IsEmpty)
+            {
+                _activeLayerQuadtree = null;
+                return;
+            }
+
+            // Create quadtree with some padding
+            layerBounds.Inflate(layerBounds.Width * 0.1, layerBounds.Height * 0.1);
+            _activeLayerQuadtree = new GerberQuadtree(layerBounds);
+
+            foreach (var prim in _activeGerberLayer.Primitives)
+            {
+                _activeLayerQuadtree.Insert(prim);
+            }
         }
 
         /// <summary>
@@ -1430,51 +1797,16 @@ namespace PCBPlotter.Controls
             _cachedHeight = (int)ActualHeight;
             _gerberCacheDirty = false;
 
-            RebuildHitTestQuadtree(worldViewport);
         }
 
         /// <summary>
-        /// Redirects to the new composite buffer system
+        /// Legacy method for backward compatibility - redirects to hybrid renderer
         /// </summary>
         private void RebuildGerberCompositeBitmap()
         {
-            RebuildCompositeBuffer();
-        }
-
-        private void RebuildHitTestQuadtree(Rect worldViewport)
-        {
-            // Expand viewport slightly for hit testing near edges
-            var expandedBounds = worldViewport;
-            expandedBounds.Inflate(worldViewport.Width * 0.1, worldViewport.Height * 0.1);
-
-            // Only rebuild if bounds changed significantly
-            if (_hitTestQuadtree != null &&
-                Math.Abs(_quadtreeWorldBounds.X - expandedBounds.X) < 1 &&
-                Math.Abs(_quadtreeWorldBounds.Y - expandedBounds.Y) < 1 &&
-                Math.Abs(_quadtreeWorldBounds.Width - expandedBounds.Width) < 1)
-            {
-                return;
-            }
-
-            _quadtreeWorldBounds = expandedBounds;
-            _hitTestQuadtree = new GerberQuadtree(expandedBounds);
-
-            if (GerberLayers == null) return;
-
-            foreach (var layer in GerberLayers)
-            {
-                if (!layer.IsVisible || layer.Primitives == null)
-                    continue;
-
-                foreach (var prim in layer.Primitives)
-                {
-                    var primBounds = prim.GetBounds();
-                    if (expandedBounds.IntersectsWith(primBounds))
-                    {
-                        _hitTestQuadtree.Insert(prim);
-                    }
-                }
-            }
+            // In hybrid mode, this triggers a background rebuild
+            _backgroundDirty = true;
+            InvalidateVisual();
         }
 
         private void RenderGerberPrimitiveToScreen(DrawingContext dc, GerberPrimitive prim, SolidColorBrush fillBrush)
@@ -1623,16 +1955,18 @@ namespace PCBPlotter.Controls
 
         /// <summary>
         /// Hit test Gerber primitives at the given screen position
+        /// ONLY hits the ACTIVE layer - inactive layers are just pixels
         /// </summary>
         public GerberPrimitive HitTestGerberPrimitive(Point screenPos, double hitRadius = 5)
         {
-            if (_hitTestQuadtree == null || GerberLayers == null)
+            // Only hit test on the active layer - inactive layers are rasterized and not clickable
+            if (_activeLayerQuadtree == null || _activeGerberLayer == null)
                 return null;
 
             Point worldPos = ScreenToWorld(screenPos);
             double worldRadius = hitRadius / Zoom;
 
-            var candidates = _hitTestQuadtree.Query(worldPos, worldRadius);
+            var candidates = _activeLayerQuadtree.Query(worldPos, worldRadius);
 
             // Find the closest primitive
             GerberPrimitive closest = null;
@@ -1661,10 +1995,12 @@ namespace PCBPlotter.Controls
 
         /// <summary>
         /// Select Gerber primitives in the given screen rectangle
+        /// ONLY selects from the ACTIVE layer
         /// </summary>
         public List<GerberPrimitive> SelectGerberPrimitivesInRect(Rect screenRect)
         {
-            if (_hitTestQuadtree == null)
+            // Only select from active layer
+            if (_activeLayerQuadtree == null)
                 return new List<GerberPrimitive>();
 
             Point worldTL = ScreenToWorld(new Point(screenRect.Left, screenRect.Top));
@@ -1677,7 +2013,7 @@ namespace PCBPlotter.Controls
                 Math.Abs(worldBR.Y - worldTL.Y)
             );
 
-            return _hitTestQuadtree.QueryRect(worldRect);
+            return _activeLayerQuadtree.QueryRect(worldRect);
         }
 
         /// <summary>
@@ -1686,12 +2022,12 @@ namespace PCBPlotter.Controls
         public void InvalidateGerberCache()
         {
             _gerberCacheDirty = true;
-            _compositeDirty = true;
-            _compositeBuffer = null;
+            _backgroundDirty = true;
+            _backgroundComposite = null;
             _ghostDragBitmap = null;
             _gerberCompositeBitmap = null;
-            _hitTestQuadtree = null;
-            _layerTileCaches.Clear();
+            _activeLayerQuadtree = null;
+            _frozenLayers.Clear();
             InvalidateVisual();
         }
 

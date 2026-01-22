@@ -15,6 +15,7 @@ namespace PCBPlotter.Core.Models
         private string _filePath;
         private GerberLayerType _layerType = GerberLayerType.Unknown;
         private bool _isVisible = true;
+        private bool _isActive = false;
         private double _opacity = 1.0;
         private uint _color = 0xFF00FF00; // Green
         private List<GerberPrimitive> _primitives;
@@ -62,6 +63,16 @@ namespace PCBPlotter.Core.Models
         {
             get { return _isVisible; }
             set { SetProperty(ref _isVisible, value); }
+        }
+
+        /// <summary>
+        /// Whether this layer is the active/editable layer (only one can be active)
+        /// Active layer has vector shapes for selection, inactive layers are rasterized
+        /// </summary>
+        public bool IsActive
+        {
+            get { return _isActive; }
+            set { SetProperty(ref _isActive, value); }
         }
 
         /// <summary>
