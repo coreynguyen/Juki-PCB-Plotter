@@ -404,10 +404,9 @@ namespace PCBPlotter.ViewModels
             PanX = (ViewportWidth / 2) - (centerX * Zoom);
 
             // WorldToScreen: screenY = ViewportHeight - (world.Y * Zoom + PanY)
-            // We want: screenCenter = ViewportHeight - (centerY * Zoom + PanY)
-            // ViewportHeight/2 = ViewportHeight - (centerY * Zoom + PanY)
-            // centerY * Zoom + PanY = ViewportHeight / 2
-            // PanY = ViewportHeight/2 - centerY * Zoom
+            // We want: screenCenter (ViewportHeight/2) = ViewportHeight - (centerY * Zoom + PanY)
+            // Solving: centerY * Zoom + PanY = ViewportHeight/2
+            // So: PanY = ViewportHeight/2 - centerY * Zoom
             PanY = (ViewportHeight / 2) - (centerY * Zoom);
 
             Publish(new RequestRefreshEvent { FullRefresh = true });

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -184,40 +185,62 @@ namespace PCBPlotter.Controls
             set { SetValue(SelectedPackageProperty, value); }
         }
 
-        // Package editing state
-        private int _selectedGraphicIndex = -1;
-        private int _selectedPinIndex = -1;
+        // Package editing state - multi-select support
+        private HashSet<int> _selectedGraphicIndices = new HashSet<int>();
+        private HashSet<int> _selectedPinIndices = new HashSet<int>();
         private bool _isDraggingGraphic;
         private Point _dragStartWorld;
+        private bool _isPackageSelecting;
+        private Point _packageSelectStart;
+        private Rect _packageSelectRect;
 
+        // Undo stack for package editing
+        private Stack<PackageEditAction> _undoStack = new Stack<PackageEditAction>();
+        private Stack<PackageEditAction> _redoStack = new Stack<PackageEditAction>();
+
+        private class PackageEditAction
+        {
+            public List<int> GraphicIndices { get; set; }
+            public List<int> PinIndices { get; set; }
+            public List<Point> OldPositions { get; set; }
+            public List<Point> NewPositions { get; set; }
+        }
+
+        public HashSet<int> SelectedGraphicIndices => _selectedGraphicIndices;
+        public HashSet<int> SelectedPinIndices => _selectedPinIndices;
+
+        // Legacy single-select properties for compatibility
         public int SelectedGraphicIndex
         {
-            get { return _selectedGraphicIndex; }
+            get { return _selectedGraphicIndices.Count > 0 ? _selectedGraphicIndices.First() : -1; }
             set
             {
-                if (_selectedGraphicIndex != value)
-                {
-                    _selectedGraphicIndex = value;
-                    _selectedPinIndex = -1; // Clear pin selection
-                    InvalidateVisual();
-                    GraphicSelectionChanged?.Invoke(this, value);
-                }
+                _selectedGraphicIndices.Clear();
+                _selectedPinIndices.Clear();
+                if (value >= 0) _selectedGraphicIndices.Add(value);
+                InvalidateVisual();
+                GraphicSelectionChanged?.Invoke(this, value);
             }
         }
 
         public int SelectedPinIndex
         {
-            get { return _selectedPinIndex; }
+            get { return _selectedPinIndices.Count > 0 ? _selectedPinIndices.First() : -1; }
             set
             {
-                if (_selectedPinIndex != value)
-                {
-                    _selectedPinIndex = value;
-                    _selectedGraphicIndex = -1; // Clear graphic selection
-                    InvalidateVisual();
-                    PinSelectionChanged?.Invoke(this, value);
-                }
+                _selectedGraphicIndices.Clear();
+                _selectedPinIndices.Clear();
+                if (value >= 0) _selectedPinIndices.Add(value);
+                InvalidateVisual();
+                PinSelectionChanged?.Invoke(this, value);
             }
+        }
+
+        public void ClearPackageSelection()
+        {
+            _selectedGraphicIndices.Clear();
+            _selectedPinIndices.Clear();
+            InvalidateVisual();
         }
 
         #endregion
@@ -352,8 +375,14 @@ namespace PCBPlotter.Controls
             double centerX = worldBounds.X + worldBounds.Width / 2;
             double centerY = worldBounds.Y + worldBounds.Height / 2;
 
+            // WorldToScreen: screenX = world.X * Zoom + PanX
+            // Want screen center: ActualWidth/2 = centerX * Zoom + PanX
             PanX = ActualWidth / 2 - centerX * Zoom;
-            PanY = ActualHeight / 2 + centerY * Zoom; // Flip Y
+
+            // WorldToScreen: screenY = ActualHeight - (world.Y * Zoom + PanY)
+            // Want screen center: ActualHeight/2 = ActualHeight - (centerY * Zoom + PanY)
+            // Solving: centerY * Zoom + PanY = ActualHeight/2
+            PanY = ActualHeight / 2 - centerY * Zoom;
 
             InvalidateVisual();
         }
@@ -462,6 +491,17 @@ namespace PCBPlotter.Controls
             if (_isSelecting)
             {
                 RenderSelectionOverlayDirect(dc);
+            }
+
+            // Render package editor selection rectangle
+            if (_isPackageSelecting && _packageSelectRect.Width > 0 && _packageSelectRect.Height > 0)
+            {
+                var fillBrush = new SolidColorBrush(Color.FromArgb(40, 100, 200, 255));
+                fillBrush.Freeze();
+                var strokePen = new Pen(new SolidColorBrush(Color.FromRgb(100, 200, 255)), 1);
+                strokePen.DashStyle = DashStyles.Dash;
+                strokePen.Freeze();
+                dc.DrawRectangle(fillBrush, strokePen, _packageSelectRect);
             }
         }
 
@@ -643,7 +683,7 @@ namespace PCBPlotter.Controls
                 for (int i = 0; i < package.Graphics.Count; i++)
                 {
                     var graphic = package.Graphics[i];
-                    bool isSelected = (i == _selectedGraphicIndex);
+                    bool isSelected = _selectedGraphicIndices.Contains(i);
                     RenderGraphicShape(dc, graphic, bodyBrush, isSelected ? selectedPen : bodyPen);
 
                     // Draw selection handles if selected
@@ -666,7 +706,7 @@ namespace PCBPlotter.Controls
                 for (int i = 0; i < package.Pins.Count; i++)
                 {
                     var pin = package.Pins[i];
-                    bool isSelected = (i == _selectedPinIndex);
+                    bool isSelected = _selectedPinIndices.Contains(i);
                     var currentBrush = isSelected ? selectedPinBrush : pinBrush;
                     var currentPen = isSelected ? selectedPen : pinPen;
 
@@ -1256,9 +1296,9 @@ namespace PCBPlotter.Controls
             base.OnMouseLeftButtonUp(e);
 
             // Package editor mode
-            if (SelectedPackage != null && _isDraggingGraphic)
+            if (SelectedPackage != null && (_isDraggingGraphic || _isPackageSelecting))
             {
-                HandlePackageEditorMouseUp();
+                HandlePackageEditorMouseUp(e.GetPosition(this));
                 return;
             }
 
@@ -1400,6 +1440,10 @@ namespace PCBPlotter.Controls
 
             Point worldPos = ScreenToWorld(mousePos);
             _dragStartWorld = worldPos;
+            _packageSelectStart = mousePos;
+
+            bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+            bool hitSomething = false;
 
             // Hit test pins first (they're on top)
             double hitRadius = 10 / Zoom; // Screen pixels converted to world
@@ -1409,9 +1453,25 @@ namespace PCBPlotter.Controls
                 double dist = Math.Sqrt(Math.Pow(worldPos.X - pin.X, 2) + Math.Pow(worldPos.Y - pin.Y, 2));
                 if (dist <= Math.Max(pin.Width, pin.Height) / 2 + hitRadius)
                 {
-                    SelectedPinIndex = i;
+                    if (isCtrlPressed)
+                    {
+                        // Toggle selection
+                        if (_selectedPinIndices.Contains(i))
+                            _selectedPinIndices.Remove(i);
+                        else
+                            _selectedPinIndices.Add(i);
+                    }
+                    else if (!_selectedPinIndices.Contains(i))
+                    {
+                        // Clear and select this one
+                        ClearPackageSelection();
+                        _selectedPinIndices.Add(i);
+                    }
+                    hitSomething = true;
                     _isDraggingGraphic = true;
+                    SaveUndoState(); // Save state before move
                     CaptureMouse();
+                    InvalidateVisual();
                     return;
                 }
             }
@@ -1422,16 +1482,35 @@ namespace PCBPlotter.Controls
                 var g = package.Graphics[i];
                 if (HitTestGraphic(g, worldPos, hitRadius))
                 {
-                    SelectedGraphicIndex = i;
+                    if (isCtrlPressed)
+                    {
+                        // Toggle selection
+                        if (_selectedGraphicIndices.Contains(i))
+                            _selectedGraphicIndices.Remove(i);
+                        else
+                            _selectedGraphicIndices.Add(i);
+                    }
+                    else if (!_selectedGraphicIndices.Contains(i))
+                    {
+                        // Clear and select this one
+                        ClearPackageSelection();
+                        _selectedGraphicIndices.Add(i);
+                    }
+                    hitSomething = true;
                     _isDraggingGraphic = true;
+                    SaveUndoState(); // Save state before move
                     CaptureMouse();
+                    InvalidateVisual();
                     return;
                 }
             }
 
-            // Clicked on empty space - clear selection
-            SelectedGraphicIndex = -1;
-            SelectedPinIndex = -1;
+            // Clicked on empty space - start rectangle selection or clear
+            if (!isCtrlPressed)
+            {
+                ClearPackageSelection();
+            }
+            // Will start rectangle selection on mouse move
         }
 
         private bool HitTestGraphic(PackageGraphic g, Point worldPos, double hitRadius)
@@ -1504,31 +1583,65 @@ namespace PCBPlotter.Controls
 
         private void HandlePackageEditorMouseMove(Point mousePos)
         {
-            if (!_isDraggingGraphic) return;
-
             var package = SelectedPackage;
             if (package == null) return;
 
             Point worldPos = ScreenToWorld(mousePos);
+
+            // Handle rectangle selection
+            if (_isPackageSelecting && !_isDraggingGraphic)
+            {
+                _packageSelectRect = new Rect(
+                    Math.Min(_packageSelectStart.X, mousePos.X),
+                    Math.Min(_packageSelectStart.Y, mousePos.Y),
+                    Math.Abs(mousePos.X - _packageSelectStart.X),
+                    Math.Abs(mousePos.Y - _packageSelectStart.Y)
+                );
+                InvalidateVisual();
+                return;
+            }
+
+            if (!_isDraggingGraphic)
+            {
+                // Start rectangle selection after small movement
+                double dist = Math.Sqrt(Math.Pow(mousePos.X - _packageSelectStart.X, 2) +
+                                       Math.Pow(mousePos.Y - _packageSelectStart.Y, 2));
+                if (dist > 3 && _selectedGraphicIndices.Count == 0 && _selectedPinIndices.Count == 0)
+                {
+                    _isPackageSelecting = true;
+                    CaptureMouse();
+                }
+                return;
+            }
+
             double dx = worldPos.X - _dragStartWorld.X;
             double dy = worldPos.Y - _dragStartWorld.Y;
 
-            if (_selectedPinIndex >= 0 && _selectedPinIndex < package.Pins.Count)
+            // Move all selected pins
+            foreach (int pinIdx in _selectedPinIndices)
             {
-                var pin = package.Pins[_selectedPinIndex];
-                pin.X += dx;
-                pin.Y += dy;
-            }
-            else if (_selectedGraphicIndex >= 0 && _selectedGraphicIndex < package.Graphics.Count)
-            {
-                var g = package.Graphics[_selectedGraphicIndex];
-                g.X += dx;
-                g.Y += dy;
-                if (g.Points != null)
+                if (pinIdx >= 0 && pinIdx < package.Pins.Count)
                 {
-                    for (int i = 0; i < g.Points.Count; i++)
+                    var pin = package.Pins[pinIdx];
+                    pin.X += dx;
+                    pin.Y += dy;
+                }
+            }
+
+            // Move all selected graphics
+            foreach (int gIdx in _selectedGraphicIndices)
+            {
+                if (gIdx >= 0 && gIdx < package.Graphics.Count)
+                {
+                    var g = package.Graphics[gIdx];
+                    g.X += dx;
+                    g.Y += dy;
+                    if (g.Points != null)
                     {
-                        g.Points[i] = new Point(g.Points[i].X + dx, g.Points[i].Y + dy);
+                        for (int i = 0; i < g.Points.Count; i++)
+                        {
+                            g.Points[i] = new Point(g.Points[i].X + dx, g.Points[i].Y + dy);
+                        }
                     }
                 }
             }
@@ -1538,33 +1651,299 @@ namespace PCBPlotter.Controls
             InvalidateVisual();
         }
 
-        private void HandlePackageEditorMouseUp()
+        private void HandlePackageEditorMouseUp(Point mousePos)
         {
+            var package = SelectedPackage;
+
+            // Complete rectangle selection
+            if (_isPackageSelecting && package != null)
+            {
+                _isPackageSelecting = false;
+                ReleaseMouseCapture();
+
+                if (_packageSelectRect.Width > 5 && _packageSelectRect.Height > 5)
+                {
+                    bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+                    if (!isCtrlPressed)
+                    {
+                        ClearPackageSelection();
+                    }
+
+                    // Convert screen rect to world
+                    Point worldTL = ScreenToWorld(new Point(_packageSelectRect.Left, _packageSelectRect.Top));
+                    Point worldBR = ScreenToWorld(new Point(_packageSelectRect.Right, _packageSelectRect.Bottom));
+                    Rect worldRect = new Rect(
+                        Math.Min(worldTL.X, worldBR.X),
+                        Math.Min(worldTL.Y, worldBR.Y),
+                        Math.Abs(worldBR.X - worldTL.X),
+                        Math.Abs(worldBR.Y - worldTL.Y)
+                    );
+
+                    // Select all pins in rectangle
+                    for (int i = 0; i < package.Pins.Count; i++)
+                    {
+                        var pin = package.Pins[i];
+                        if (worldRect.Contains(new Point(pin.X, pin.Y)))
+                        {
+                            _selectedPinIndices.Add(i);
+                        }
+                    }
+
+                    // Select all graphics in rectangle
+                    for (int i = 0; i < package.Graphics.Count; i++)
+                    {
+                        var g = package.Graphics[i];
+                        Point center = GetGraphicCenter(g);
+                        if (worldRect.Contains(center))
+                        {
+                            _selectedGraphicIndices.Add(i);
+                        }
+                    }
+                }
+
+                _packageSelectRect = Rect.Empty;
+                InvalidateVisual();
+                return;
+            }
+
             if (_isDraggingGraphic)
             {
                 _isDraggingGraphic = false;
                 ReleaseMouseCapture();
+                FinalizeUndoState(); // Save final positions
             }
         }
 
+        private Point GetGraphicCenter(PackageGraphic g)
+        {
+            switch (g.ShapeType)
+            {
+                case GraphicShapeType.Circle:
+                case GraphicShapeType.Ellipse:
+                    return new Point(g.X, g.Y);
+                case GraphicShapeType.Rectangle:
+                case GraphicShapeType.RoundedRectangle:
+                    return new Point(g.X + g.Width / 2, g.Y + g.Height / 2);
+                case GraphicShapeType.Line:
+                case GraphicShapeType.Polygon:
+                    if (g.Points != null && g.Points.Count > 0)
+                    {
+                        double cx = 0, cy = 0;
+                        foreach (var pt in g.Points)
+                        {
+                            cx += pt.X;
+                            cy += pt.Y;
+                        }
+                        return new Point(cx / g.Points.Count, cy / g.Points.Count);
+                    }
+                    return new Point(g.X, g.Y);
+                default:
+                    return new Point(g.X, g.Y);
+            }
+        }
+
+        private PackageEditAction _currentEditAction;
+
+        private void SaveUndoState()
+        {
+            var package = SelectedPackage;
+            if (package == null) return;
+
+            _currentEditAction = new PackageEditAction
+            {
+                GraphicIndices = new List<int>(_selectedGraphicIndices),
+                PinIndices = new List<int>(_selectedPinIndices),
+                OldPositions = new List<Point>(),
+                NewPositions = new List<Point>()
+            };
+
+            // Save current positions of selected graphics
+            foreach (int idx in _selectedGraphicIndices)
+            {
+                if (idx >= 0 && idx < package.Graphics.Count)
+                {
+                    var g = package.Graphics[idx];
+                    _currentEditAction.OldPositions.Add(new Point(g.X, g.Y));
+                }
+            }
+
+            // Save current positions of selected pins
+            foreach (int idx in _selectedPinIndices)
+            {
+                if (idx >= 0 && idx < package.Pins.Count)
+                {
+                    var pin = package.Pins[idx];
+                    _currentEditAction.OldPositions.Add(new Point(pin.X, pin.Y));
+                }
+            }
+
+            // Clear redo stack when new action is started
+            _redoStack.Clear();
+        }
+
+        private void FinalizeUndoState()
+        {
+            var package = SelectedPackage;
+            if (package == null || _currentEditAction == null) return;
+
+            // Save final positions of selected graphics
+            foreach (int idx in _currentEditAction.GraphicIndices)
+            {
+                if (idx >= 0 && idx < package.Graphics.Count)
+                {
+                    var g = package.Graphics[idx];
+                    _currentEditAction.NewPositions.Add(new Point(g.X, g.Y));
+                }
+            }
+
+            // Save final positions of selected pins
+            foreach (int idx in _currentEditAction.PinIndices)
+            {
+                if (idx >= 0 && idx < package.Pins.Count)
+                {
+                    var pin = package.Pins[idx];
+                    _currentEditAction.NewPositions.Add(new Point(pin.X, pin.Y));
+                }
+            }
+
+            // Only add to undo stack if positions actually changed
+            bool hasChanges = false;
+            for (int i = 0; i < _currentEditAction.OldPositions.Count && i < _currentEditAction.NewPositions.Count; i++)
+            {
+                if (_currentEditAction.OldPositions[i] != _currentEditAction.NewPositions[i])
+                {
+                    hasChanges = true;
+                    break;
+                }
+            }
+
+            if (hasChanges)
+            {
+                _undoStack.Push(_currentEditAction);
+            }
+
+            _currentEditAction = null;
+        }
+
+        public void Undo()
+        {
+            var package = SelectedPackage;
+            if (package == null || _undoStack.Count == 0) return;
+
+            var action = _undoStack.Pop();
+            int posIdx = 0;
+
+            // Restore graphics positions
+            foreach (int idx in action.GraphicIndices)
+            {
+                if (idx >= 0 && idx < package.Graphics.Count && posIdx < action.OldPositions.Count)
+                {
+                    var g = package.Graphics[idx];
+                    double dx = action.OldPositions[posIdx].X - action.NewPositions[posIdx].X;
+                    double dy = action.OldPositions[posIdx].Y - action.NewPositions[posIdx].Y;
+                    g.X += dx;
+                    g.Y += dy;
+                    if (g.Points != null)
+                    {
+                        for (int i = 0; i < g.Points.Count; i++)
+                        {
+                            g.Points[i] = new Point(g.Points[i].X + dx, g.Points[i].Y + dy);
+                        }
+                    }
+                    posIdx++;
+                }
+            }
+
+            // Restore pin positions
+            foreach (int idx in action.PinIndices)
+            {
+                if (idx >= 0 && idx < package.Pins.Count && posIdx < action.OldPositions.Count)
+                {
+                    var pin = package.Pins[idx];
+                    pin.X = action.OldPositions[posIdx].X;
+                    pin.Y = action.OldPositions[posIdx].Y;
+                    posIdx++;
+                }
+            }
+
+            _redoStack.Push(action);
+            InvalidateVisual();
+        }
+
+        public void Redo()
+        {
+            var package = SelectedPackage;
+            if (package == null || _redoStack.Count == 0) return;
+
+            var action = _redoStack.Pop();
+            int posIdx = 0;
+
+            // Apply graphics positions
+            foreach (int idx in action.GraphicIndices)
+            {
+                if (idx >= 0 && idx < package.Graphics.Count && posIdx < action.NewPositions.Count)
+                {
+                    var g = package.Graphics[idx];
+                    double dx = action.NewPositions[posIdx].X - action.OldPositions[posIdx].X;
+                    double dy = action.NewPositions[posIdx].Y - action.OldPositions[posIdx].Y;
+                    g.X += dx;
+                    g.Y += dy;
+                    if (g.Points != null)
+                    {
+                        for (int i = 0; i < g.Points.Count; i++)
+                        {
+                            g.Points[i] = new Point(g.Points[i].X + dx, g.Points[i].Y + dy);
+                        }
+                    }
+                    posIdx++;
+                }
+            }
+
+            // Apply pin positions
+            foreach (int idx in action.PinIndices)
+            {
+                if (idx >= 0 && idx < package.Pins.Count && posIdx < action.NewPositions.Count)
+                {
+                    var pin = package.Pins[idx];
+                    pin.X = action.NewPositions[posIdx].X;
+                    pin.Y = action.NewPositions[posIdx].Y;
+                    posIdx++;
+                }
+            }
+
+            _undoStack.Push(action);
+            InvalidateVisual();
+        }
+
         /// <summary>
-        /// Delete the currently selected graphic or pin from the package
+        /// Delete all selected graphics and pins from the package
         /// </summary>
         public void DeleteSelectedGraphic()
         {
             var package = SelectedPackage;
             if (package == null) return;
 
-            if (_selectedPinIndex >= 0 && _selectedPinIndex < package.Pins.Count)
+            // Delete pins in reverse order to preserve indices
+            var sortedPinIndices = _selectedPinIndices.OrderByDescending(x => x).ToList();
+            foreach (int idx in sortedPinIndices)
             {
-                package.Pins.RemoveAt(_selectedPinIndex);
-                SelectedPinIndex = -1;
+                if (idx >= 0 && idx < package.Pins.Count)
+                {
+                    package.Pins.RemoveAt(idx);
+                }
             }
-            else if (_selectedGraphicIndex >= 0 && _selectedGraphicIndex < package.Graphics.Count)
+
+            // Delete graphics in reverse order to preserve indices
+            var sortedGraphicIndices = _selectedGraphicIndices.OrderByDescending(x => x).ToList();
+            foreach (int idx in sortedGraphicIndices)
             {
-                package.Graphics.RemoveAt(_selectedGraphicIndex);
-                SelectedGraphicIndex = -1;
+                if (idx >= 0 && idx < package.Graphics.Count)
+                {
+                    package.Graphics.RemoveAt(idx);
+                }
             }
+
+            ClearPackageSelection();
             InvalidateVisual();
         }
 
@@ -1598,7 +1977,42 @@ namespace PCBPlotter.Controls
         {
             base.OnKeyDown(e);
 
+            bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
             double panAmount = 50 / Zoom;
+
+            // Handle Ctrl+key combinations first
+            if (isCtrlPressed)
+            {
+                switch (e.Key)
+                {
+                    case Key.Z:
+                        // Undo
+                        if (SelectedPackage != null)
+                        {
+                            Undo();
+                            e.Handled = true;
+                        }
+                        return;
+
+                    case Key.Y:
+                        // Redo
+                        if (SelectedPackage != null)
+                        {
+                            Redo();
+                            e.Handled = true;
+                        }
+                        return;
+
+                    case Key.A:
+                        // Select all
+                        if (SelectedPackage != null)
+                        {
+                            SelectAllPackageElements();
+                            e.Handled = true;
+                        }
+                        return;
+                }
+            }
 
             switch (e.Key)
             {
@@ -1647,7 +2061,36 @@ namespace PCBPlotter.Controls
                         ZoomToFitPlacements();
                     e.Handled = true;
                     break;
+                case Key.Escape:
+                    // Clear selection
+                    if (SelectedPackage != null)
+                    {
+                        ClearPackageSelection();
+                        e.Handled = true;
+                    }
+                    break;
             }
+        }
+
+        public void SelectAllPackageElements()
+        {
+            var package = SelectedPackage;
+            if (package == null) return;
+
+            _selectedGraphicIndices.Clear();
+            _selectedPinIndices.Clear();
+
+            for (int i = 0; i < package.Graphics.Count; i++)
+            {
+                _selectedGraphicIndices.Add(i);
+            }
+
+            for (int i = 0; i < package.Pins.Count; i++)
+            {
+                _selectedPinIndices.Add(i);
+            }
+
+            InvalidateVisual();
         }
 
         #endregion
