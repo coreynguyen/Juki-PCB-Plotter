@@ -500,9 +500,6 @@ namespace PCBPlotter.Controls
             var canvas = d as DesignCanvas;
             if (canvas == null) return;
 
-            // Clear bitmap cache when layers change
-            canvas._layerBitmapCache.Clear();
-
             // Unsubscribe from old collection
             var oldCollection = e.OldValue as ObservableCollection<GerberLayer>;
             if (oldCollection != null)
@@ -517,42 +514,19 @@ namespace PCBPlotter.Controls
                 newCollection.CollectionChanged += canvas.OnGerberLayersCollectionChanged;
             }
 
+            // Clear bitmap cache when layers change
+            canvas._gerberCacheDirty = true;
+            canvas._gerberCompositeBitmap = null;
+            canvas._hitTestQuadtree = null;
             canvas.InvalidateVisual();
         }
 
         private void OnGerberLayersCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
-            // Clear cache for removed layers
-            if (e.OldItems != null)
-            {
-                foreach (GerberLayer layer in e.OldItems)
-                {
-                    _layerBitmapCache.Remove(layer);
-                }
-            }
-
-            // Mark new layers as needing cache
-            if (e.NewItems != null)
-            {
-                foreach (GerberLayer layer in e.NewItems)
-                {
-                    // Will be created on first render
-                    _layerBitmapCache.Remove(layer);
-                }
-            }
-
-            InvalidateVisual();
-        }
-
-        /// <summary>
-        /// Invalidates all Gerber layer bitmap caches, forcing re-render
-        /// </summary>
-        public void InvalidateGerberCache()
-        {
-            foreach (var cached in _layerBitmapCache.Values)
-            {
-                cached.IsDirty = true;
-            }
+            // Mark cache as dirty when collection changes
+            _gerberCacheDirty = true;
+            _gerberCompositeBitmap = null;
+            _hitTestQuadtree = null;
             InvalidateVisual();
         }
 
