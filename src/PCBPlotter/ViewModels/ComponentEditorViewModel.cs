@@ -516,8 +516,8 @@ namespace PCBPlotter.ViewModels
                 : 1;
 
             PinShape shape = PinShape.Rectangle;
-            if (shapeType == "Round") shape = PinShape.Round;
-            else if (shapeType == "Oblong") shape = PinShape.Oblong;
+            if (shapeType == "Round") shape = PinShape.Circle;
+            else if (shapeType == "Oblong") shape = PinShape.Oval;
 
             SelectedPackage.Pins.Add(new Pin
             {
@@ -684,7 +684,7 @@ namespace PCBPlotter.ViewModels
                 Width = 2.9,
                 Length = 1.3,
                 Height = 1.0,
-                PartClass = PartClass.Discrete,
+                PartClass = PartClass.SOT,
                 HasPolarity = true
             };
 
@@ -732,7 +732,7 @@ namespace PCBPlotter.ViewModels
                 Width = 5.0,
                 Length = 4.0,
                 Height = 1.75,
-                PartClass = PartClass.IC,
+                PartClass = PartClass.SOP,
                 HasPolarity = true
             };
 
@@ -807,7 +807,7 @@ namespace PCBPlotter.ViewModels
                 Width = 9.0,
                 Length = 9.0,
                 Height = 1.0,
-                PartClass = PartClass.IC,
+                PartClass = PartClass.QFP,
                 HasPolarity = true
             };
 
@@ -915,7 +915,7 @@ namespace PCBPlotter.ViewModels
                 Width = 6.0,
                 Length = 6.0,
                 Height = 1.2,
-                PartClass = PartClass.IC,
+                PartClass = PartClass.BGA,
                 HasPolarity = true
             };
 
@@ -962,7 +962,7 @@ namespace PCBPlotter.ViewModels
                         Y = startOffset + row * pitch,
                         Width = ballDia,
                         Height = ballDia,
-                        Shape = PinShape.Round
+                        Shape = PinShape.Circle
                     });
                 }
             }

@@ -108,9 +108,39 @@ namespace PCBPlotter.Views
                     ShowTranslatePlacementsDialog(e.Parameter as System.Collections.Generic.List<Core.Models.Placement>);
                     break;
 
+                case "ImportIPC356":
+                    ShowIpc356ImportDialog();
+                    break;
+
                 default:
                     System.Diagnostics.Debug.WriteLine("Unknown dialog type: " + e.DialogType);
                     break;
+            }
+        }
+
+        private void ShowIpc356ImportDialog()
+        {
+            var mainVm = DataContext as MainViewModel;
+            if (mainVm?.CurrentProject == null)
+            {
+                System.Windows.MessageBox.Show("Please create or open a project first.",
+                    "No Project", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var dialog = new Dialogs.ImportIpc356Dialog(mainVm.CurrentProject);
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                // Refresh views
+                EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+                EventAggregator.Instance.Publish(new ZoomFitRequestEvent());
+                EventAggregator.Instance.Publish(new StatusMessageEvent
+                {
+                    Message = string.Format("Imported {0} packages, {1} placements from IPC-D-356",
+                        dialog.ImportedPackages.Count, dialog.ImportedPlacements.Count)
+                });
             }
         }
 
