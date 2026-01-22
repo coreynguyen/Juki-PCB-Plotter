@@ -22,7 +22,7 @@
             <TextBlock Grid.Row="0" Text="Layers" FontWeight="SemiBold" Margin="8"/>
 
             <!-- Layer List -->
-            <ListBox Grid.Row="1"
+            <ListBox x:Name="LayerListBox" Grid.Row="1"
                      ItemsSource="{Binding Layers}"
                      SelectedItem="{Binding SelectedLayer}"
                      Margin="8,0">

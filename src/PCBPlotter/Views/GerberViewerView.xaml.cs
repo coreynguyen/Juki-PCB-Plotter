@@ -48,6 +48,22 @@ namespace PCBPlotter.Views
                     vm.ZoomToFitWithViewport(GerberCanvas.ActualWidth, GerberCanvas.ActualHeight);
                 }
             };
+
+            // Subscribe to layer list selection changes
+            LayerListBox.SelectionChanged += OnLayerListSelectionChanged;
+        }
+
+        private void OnLayerListSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var listBox = sender as ListBox;
+            if (listBox == null) return;
+
+            var selectedLayer = listBox.SelectedItem as GerberLayer;
+            if (selectedLayer != null)
+            {
+                // Activate the selected layer on the canvas
+                GerberCanvas.SetActiveGerberLayer(selectedLayer);
+            }
         }
 
         private void OnCursorPositionChanged(object sender, Point worldPos)
@@ -106,7 +122,7 @@ namespace PCBPlotter.Views
                 {
                     layer.Color = capturedColor;
                     contextMenu.IsOpen = false;
-                    GerberCanvas.InvalidateVisual();
+                    GerberCanvas.InvalidateGerberCache();
                 };
 
                 grid.Children.Add(colorRect);

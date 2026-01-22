@@ -878,29 +878,30 @@ namespace PCBPlotter.Controls
                 return;
             }
 
-            // Check if background composite needs rebuild
-            bool needsBackgroundRebuild = _backgroundDirty ||
-                                          _backgroundComposite == null ||
-                                          !IsViewportWithinBackground() ||
-                                          Math.Abs(_backgroundZoom - Zoom) / Math.Max(Zoom, 0.001) > ZOOM_REBUILD_THRESHOLD;
+            // Check if we need to rebuild
+            bool needsRebuild = _backgroundDirty ||
+                                _backgroundComposite == null ||
+                                Math.Abs(_cachedZoom - Zoom) > 0.001 ||
+                                Math.Abs(_cachedPanX - PanX) > 1 ||
+                                Math.Abs(_cachedPanY - PanY) > 1 ||
+                                _cachedWidth != (int)ActualWidth ||
+                                _cachedHeight != (int)ActualHeight;
 
-            if (needsBackgroundRebuild)
+            if (needsRebuild)
             {
                 RebuildBackgroundComposite();
             }
 
-            // 1. Draw background composite (all inactive visible layers - frozen as bitmaps)
+            // 1. Draw background composite (all visible layers including active - screen blended)
             if (_backgroundComposite != null)
             {
-                double srcX = (ScreenToWorld(new Point(0, 0)).X - _backgroundWorldBounds.X) * _backgroundZoom;
-                double srcY = (_backgroundWorldBounds.Y + _backgroundWorldBounds.Height - ScreenToWorld(new Point(0, 0)).Y) * _backgroundZoom;
-                dc.DrawImage(_backgroundComposite, new Rect(-srcX, -srcY, _backgroundComposite.PixelWidth, _backgroundComposite.PixelHeight));
+                dc.DrawImage(_backgroundComposite, new Rect(0, 0, ActualWidth, ActualHeight));
             }
 
-            // 2. Draw active layer as live vectors (selectable/editable)
+            // 2. Draw active layer highlight (subtle glow/border around active layer shapes)
             if (_activeGerberLayer != null && _activeGerberLayer.IsVisible)
             {
-                RenderActiveLayerVectors(dc);
+                RenderActiveLayerHighlight(dc);
             }
 
             // 3. Draw selection highlights on top
@@ -1256,46 +1257,35 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Rebuild the background composite (all inactive visible layers with screen blend)
+        /// Rebuild the background composite (all visible layers with screen blend)
         /// </summary>
         private void RebuildBackgroundComposite()
         {
             if (ActualWidth < 1 || ActualHeight < 1)
                 return;
 
-            // Calculate oversized buffer bounds (3x viewport for smooth panning)
-            Point viewportCenter = ScreenToWorld(new Point(ActualWidth / 2, ActualHeight / 2));
-            double viewportWorldWidth = ActualWidth / Zoom;
-            double viewportWorldHeight = ActualHeight / Zoom;
-
-            double bufferWorldWidth = viewportWorldWidth * BUFFER_MULTIPLIER;
-            double bufferWorldHeight = viewportWorldHeight * BUFFER_MULTIPLIER;
-
-            _backgroundWorldBounds = new Rect(
-                viewportCenter.X - bufferWorldWidth / 2,
-                viewportCenter.Y - bufferWorldHeight / 2,
-                bufferWorldWidth,
-                bufferWorldHeight);
-
-            _backgroundZoom = Zoom;
-
-            // Calculate bitmap size (clamped to max)
-            int bitmapWidth = (int)Math.Min(bufferWorldWidth * Zoom, MAX_BITMAP_SIZE);
-            int bitmapHeight = (int)Math.Min(bufferWorldHeight * Zoom, MAX_BITMAP_SIZE);
+            int bitmapWidth = (int)Math.Min(ActualWidth, MAX_BITMAP_SIZE);
+            int bitmapHeight = (int)Math.Min(ActualHeight, MAX_BITMAP_SIZE);
 
             if (bitmapWidth < 1) bitmapWidth = 1;
             if (bitmapHeight < 1) bitmapHeight = 1;
 
-            double effectiveScale = Math.Min(
-                (double)bitmapWidth / (bufferWorldWidth * Zoom),
-                (double)bitmapHeight / (bufferWorldHeight * Zoom));
+            // Calculate world viewport
+            Point worldTopLeft = ScreenToWorld(new Point(0, 0));
+            Point worldBottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+            _backgroundWorldBounds = new Rect(
+                Math.Min(worldTopLeft.X, worldBottomRight.X),
+                Math.Min(worldTopLeft.Y, worldBottomRight.Y),
+                Math.Abs(worldBottomRight.X - worldTopLeft.X),
+                Math.Abs(worldBottomRight.Y - worldTopLeft.Y));
+            _backgroundZoom = Zoom;
 
             try
             {
                 _backgroundComposite = new WriteableBitmap(bitmapWidth, bitmapHeight, 96, 96, PixelFormats.Bgra32, null);
 
-                // Render ONLY inactive layers with screen blending
-                RenderInactiveLayersWithScreenBlend(bitmapWidth, bitmapHeight, effectiveScale);
+                // Render ALL visible layers with screen blending
+                RenderAllLayersWithScreenBlend(bitmapWidth, bitmapHeight);
 
                 // Update ghost drag bitmap
                 _ghostDragBitmap = _backgroundComposite;
@@ -1315,38 +1305,29 @@ namespace PCBPlotter.Controls
             _cachedHeight = (int)ActualHeight;
             _backgroundDirty = false;
             _gerberCacheDirty = false;
+
+            // Rebuild quadtree for active layer hit testing
+            if (_activeGerberLayer != null)
+            {
+                RebuildActiveLayerQuadtree();
+            }
         }
 
         /// <summary>
-        /// Render inactive layers with screen blend (excludes active layer)
+        /// Render ALL visible layers with screen blend
         /// </summary>
-        private void RenderInactiveLayersWithScreenBlend(int width, int height, double effectiveScale)
+        private void RenderAllLayersWithScreenBlend(int width, int height)
         {
-            // Collect inactive visible layers
+            // Collect all visible layers
             var layerBuffers = new List<(byte[] pixels, Color color, double opacity)>();
 
             foreach (var layer in GerberLayers)
             {
-                // Skip active layer - it's rendered as live vectors
-                if (layer == _activeGerberLayer)
-                    continue;
-
                 if (!layer.IsVisible || layer.Primitives == null || layer.Primitives.Count == 0)
                     continue;
 
-                // Check if we have a frozen bitmap for this layer
-                if (_frozenLayers.TryGetValue(layer.Id, out var frozen))
-                {
-                    // Use the frozen 1-bit bitmap
-                    byte[] grayscale = Convert1BitToGrayscale(frozen, width, height, effectiveScale);
-                    layerBuffers.Add((grayscale, layer.Color, layer.Opacity));
-                }
-                else
-                {
-                    // Render fresh (this layer wasn't frozen yet)
-                    byte[] layerPixels = RenderLayerTo1BitGrayscale(layer, width, height, effectiveScale);
-                    layerBuffers.Add((layerPixels, layer.Color, layer.Opacity));
-                }
+                byte[] layerPixels = RenderLayerToGrayscaleViewport(layer, width, height);
+                layerBuffers.Add((layerPixels, layer.Color, layer.Opacity));
             }
 
             if (layerBuffers.Count == 0)
@@ -1399,6 +1380,122 @@ namespace PCBPlotter.Controls
             {
                 _backgroundComposite.Unlock();
             }
+        }
+
+        /// <summary>
+        /// Render a layer to grayscale buffer matching the current viewport
+        /// </summary>
+        private byte[] RenderLayerToGrayscaleViewport(GerberLayer layer, int width, int height)
+        {
+            byte[] pixels = new byte[width * height];
+
+            double minWorldSize = MIN_PRIMITIVE_PIXELS / Zoom;
+
+            foreach (var prim in layer.Primitives)
+            {
+                var primBounds = prim.GetBounds();
+                if (!_backgroundWorldBounds.IntersectsWith(primBounds))
+                    continue;
+
+                double primSize = Math.Max(prim.Width, prim.Height);
+                if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
+                    continue;
+
+                RenderPrimitiveToViewportBuffer(pixels, width, height, prim);
+            }
+
+            return pixels;
+        }
+
+        /// <summary>
+        /// Render primitive to viewport-sized grayscale buffer
+        /// </summary>
+        private void RenderPrimitiveToViewportBuffer(byte[] pixels, int width, int height, GerberPrimitive prim)
+        {
+            // Convert world coordinates to screen/buffer coordinates
+            Point screenPos = WorldToScreen(prim.Position);
+            double sw = prim.Width * Zoom;
+            double sh = prim.Height * Zoom;
+
+            switch (prim.Type)
+            {
+                case GerberPrimitiveType.Circle:
+                case GerberPrimitiveType.Flash:
+                    FillGrayscaleCircle(pixels, width, height, screenPos.X, screenPos.Y, sw / 2);
+                    break;
+                case GerberPrimitiveType.Rectangle:
+                    FillGrayscaleRectangle(pixels, width, height, screenPos.X, screenPos.Y, sw, sh);
+                    break;
+                case GerberPrimitiveType.Obround:
+                    FillGrayscaleRectangle(pixels, width, height, screenPos.X, screenPos.Y, sw, sh);
+                    double r = Math.Min(sw, sh) / 2;
+                    if (sw > sh)
+                    {
+                        FillGrayscaleCircle(pixels, width, height, screenPos.X - sw / 2 + r, screenPos.Y, r);
+                        FillGrayscaleCircle(pixels, width, height, screenPos.X + sw / 2 - r, screenPos.Y, r);
+                    }
+                    else
+                    {
+                        FillGrayscaleCircle(pixels, width, height, screenPos.X, screenPos.Y - sh / 2 + r, r);
+                        FillGrayscaleCircle(pixels, width, height, screenPos.X, screenPos.Y + sh / 2 - r, r);
+                    }
+                    break;
+                case GerberPrimitiveType.Line:
+                case GerberPrimitiveType.Arc:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        double lineWidth = Math.Max(1, prim.Width * Zoom);
+                        for (int i = 1; i < prim.Points.Count; i++)
+                        {
+                            Point p1 = WorldToScreen(prim.Points[i - 1]);
+                            Point p2 = WorldToScreen(prim.Points[i]);
+                            FillGrayscaleLine(pixels, width, height, p1.X, p1.Y, p2.X, p2.Y, lineWidth);
+                        }
+                    }
+                    break;
+                case GerberPrimitiveType.Contour:
+                    if (prim.Points != null && prim.Points.Count >= 3)
+                    {
+                        var pts = new List<Point>();
+                        foreach (var pt in prim.Points)
+                        {
+                            pts.Add(WorldToScreen(pt));
+                        }
+                        FillGrayscalePolygon(pixels, width, height, pts);
+                    }
+                    break;
+                case GerberPrimitiveType.Polygon:
+                    FillGrayscaleRegularPolygon(pixels, width, height, screenPos.X, screenPos.Y, sw / 2, 6, prim.Rotation);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Draw a subtle highlight around active layer shapes so user knows what's selectable
+        /// </summary>
+        private void RenderActiveLayerHighlight(DrawingContext dc)
+        {
+            // Draw a subtle indicator in the corner showing which layer is active
+            if (_activeGerberLayer == null) return;
+
+            var formattedText = new FormattedText(
+                "Active: " + _activeGerberLayer.Name,
+                System.Globalization.CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"),
+                12,
+                new SolidColorBrush(Color.FromArgb(180, 255, 255, 255)),
+                VisualTreeHelper.GetDpi(this).PixelsPerDip);
+
+            // Draw background
+            var textBounds = new Rect(8, 8, formattedText.Width + 12, formattedText.Height + 6);
+            dc.DrawRoundedRectangle(
+                new SolidColorBrush(Color.FromArgb(150, 0, 0, 0)),
+                null,
+                textBounds,
+                3, 3);
+
+            dc.DrawText(formattedText, new Point(14, 11));
         }
 
         /// <summary>
