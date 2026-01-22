@@ -79,6 +79,10 @@ namespace PCBPlotter.Controls
             DependencyProperty.Register("ShowLabels", typeof(bool), typeof(DesignCanvas),
                 new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
 
+        public static readonly DependencyProperty ShowPackageGraphicsProperty =
+            DependencyProperty.Register("ShowPackageGraphics", typeof(bool), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
+
         public static readonly DependencyProperty ViewSideProperty =
             DependencyProperty.Register("ViewSide", typeof(BoardSide), typeof(DesignCanvas),
                 new FrameworkPropertyMetadata(BoardSide.Top, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -139,6 +143,12 @@ namespace PCBPlotter.Controls
         {
             get { return (bool)GetValue(ShowLabelsProperty); }
             set { SetValue(ShowLabelsProperty, value); }
+        }
+
+        public bool ShowPackageGraphics
+        {
+            get { return (bool)GetValue(ShowPackageGraphicsProperty); }
+            set { SetValue(ShowPackageGraphicsProperty, value); }
         }
 
         public BoardSide ViewSide
@@ -480,23 +490,35 @@ namespace PCBPlotter.Controls
                     fillBrush = _placementErrorBrush;
                 }
 
-                // Draw placement marker (rounded rectangle - fixed screen size)
-                var placementRect = new Rect(
-                    screenPos.X - halfSize,
-                    screenPos.Y - halfSize,
-                    iconSize,
-                    iconSize
-                );
-                dc.DrawRoundedRectangle(fillBrush, outlinePen, placementRect, 2, 2);
+                // Draw package graphics if enabled and available
+                bool drewPackage = false;
+                if (ShowPackageGraphics && placement.Package != null &&
+                    (placement.Package.Graphics.Count > 0 || placement.Package.Pins.Count > 0))
+                {
+                    drewPackage = RenderPackageGraphics(dc, placement, fillBrush, outlinePen);
+                }
 
-                // Draw pin 1 indicator (small circle at top-left)
-                double pin1Size = 2;
-                double pin1Offset = halfSize * 0.6;
-                Point pin1Pos = new Point(
-                    screenPos.X - pin1Offset,
-                    screenPos.Y - pin1Offset
-                );
-                dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(255, 100, 100)), null, pin1Pos, pin1Size, pin1Size);
+                // Fall back to simple marker if no package graphics
+                if (!drewPackage)
+                {
+                    // Draw placement marker (rounded rectangle - fixed screen size)
+                    var placementRect = new Rect(
+                        screenPos.X - halfSize,
+                        screenPos.Y - halfSize,
+                        iconSize,
+                        iconSize
+                    );
+                    dc.DrawRoundedRectangle(fillBrush, outlinePen, placementRect, 2, 2);
+
+                    // Draw pin 1 indicator (small circle at top-left)
+                    double pin1Size = 2;
+                    double pin1Offset = halfSize * 0.6;
+                    Point pin1Pos = new Point(
+                        screenPos.X - pin1Offset,
+                        screenPos.Y - pin1Offset
+                    );
+                    dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(255, 100, 100)), null, pin1Pos, pin1Size, pin1Size);
+                }
 
                 // Draw center crosshair
                 double crossSize = 3;
@@ -593,6 +615,167 @@ namespace PCBPlotter.Controls
                         dc.DrawText(formattedText, new Point(screenPos.X + fidSize + 2, screenPos.Y - fontSize / 2));
                     }
                 }
+            }
+        }
+
+        private bool RenderPackageGraphics(DrawingContext dc, Placement placement, SolidColorBrush fillBrush, Pen outlinePen)
+        {
+            var package = placement.Package;
+            if (package == null) return false;
+
+            Point screenPos = WorldToScreen(placement.Position);
+            double scale = Zoom;
+
+            // Create transform for placement position and rotation
+            var transform = new TransformGroup();
+
+            // Rotate around origin
+            if (placement.Rotation != 0)
+            {
+                transform.Children.Add(new RotateTransform(placement.Rotation));
+            }
+
+            // Scale to screen coordinates
+            transform.Children.Add(new ScaleTransform(scale, -scale)); // Flip Y
+
+            // Translate to screen position
+            transform.Children.Add(new TranslateTransform(screenPos.X, screenPos.Y));
+
+            dc.PushTransform(transform);
+
+            try
+            {
+                // Render package graphics (body outline, etc.)
+                foreach (var graphic in package.Graphics)
+                {
+                    RenderGraphicShape(dc, graphic, fillBrush, outlinePen);
+                }
+
+                // Render pins
+                var pinBrush = new SolidColorBrush(Color.FromRgb(200, 180, 100));
+                pinBrush.Freeze();
+                var pinPen = new Pen(new SolidColorBrush(Color.FromRgb(150, 130, 80)), 0.05);
+                pinPen.Freeze();
+
+                foreach (var pin in package.Pins)
+                {
+                    double x = pin.X - pin.Width / 2;
+                    double y = pin.Y - pin.Height / 2;
+                    var pinRect = new Rect(x, y, pin.Width, pin.Height);
+
+                    switch (pin.Shape)
+                    {
+                        case PinShape.Circle:
+                            dc.DrawEllipse(pinBrush, pinPen, new Point(pin.X, pin.Y), pin.Width / 2, pin.Height / 2);
+                            break;
+                        case PinShape.Oval:
+                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width / 2, pin.Height / 2);
+                            break;
+                        case PinShape.RoundedRectangle:
+                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width * 0.2, pin.Height * 0.2);
+                            break;
+                        default: // Rectangle
+                            dc.DrawRectangle(pinBrush, pinPen, pinRect);
+                            break;
+                    }
+
+                    // Draw pin 1 indicator
+                    if (pin.Number == 1)
+                    {
+                        var pin1Brush = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+                        pin1Brush.Freeze();
+                        dc.DrawEllipse(pin1Brush, null, new Point(pin.X, pin.Y), pin.Width * 0.2, pin.Height * 0.2);
+                    }
+                }
+
+                return package.Graphics.Count > 0 || package.Pins.Count > 0;
+            }
+            finally
+            {
+                dc.Pop();
+            }
+        }
+
+        private void RenderGraphicShape(DrawingContext dc, PackageGraphic graphic, SolidColorBrush fillBrush, Pen outlinePen)
+        {
+            var graphicBrush = graphic.IsFilled ? fillBrush : null;
+            var graphicPen = new Pen(outlinePen.Brush, graphic.StrokeThickness > 0 ? graphic.StrokeThickness : 0.1);
+            graphicPen.Freeze();
+
+            switch (graphic.ShapeType)
+            {
+                case GraphicShapeType.Rectangle:
+                    dc.DrawRectangle(graphicBrush, graphicPen,
+                        new Rect(graphic.X, graphic.Y, graphic.Width, graphic.Height));
+                    break;
+
+                case GraphicShapeType.RoundedRectangle:
+                    double cornerRadius = Math.Min(graphic.Width, graphic.Height) * 0.1;
+                    dc.DrawRoundedRectangle(graphicBrush, graphicPen,
+                        new Rect(graphic.X, graphic.Y, graphic.Width, graphic.Height),
+                        cornerRadius, cornerRadius);
+                    break;
+
+                case GraphicShapeType.Circle:
+                case GraphicShapeType.Ellipse:
+                    dc.DrawEllipse(graphicBrush, graphicPen,
+                        new Point(graphic.X, graphic.Y),
+                        graphic.Width / 2, graphic.Height / 2);
+                    break;
+
+                case GraphicShapeType.Line:
+                    if (graphic.Points != null && graphic.Points.Count >= 2)
+                    {
+                        for (int i = 0; i < graphic.Points.Count - 1; i++)
+                        {
+                            dc.DrawLine(graphicPen, graphic.Points[i], graphic.Points[i + 1]);
+                        }
+                    }
+                    break;
+
+                case GraphicShapeType.Polygon:
+                    if (graphic.Points != null && graphic.Points.Count >= 3)
+                    {
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            ctx.BeginFigure(graphic.Points[0], graphic.IsFilled, true);
+                            for (int i = 1; i < graphic.Points.Count; i++)
+                            {
+                                ctx.LineTo(graphic.Points[i], true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(graphicBrush, graphicPen, geometry);
+                    }
+                    break;
+
+                case GraphicShapeType.Arc:
+                    // Draw arc using StreamGeometry
+                    var arcGeometry = new StreamGeometry();
+                    using (var ctx = arcGeometry.Open())
+                    {
+                        double startRad = graphic.StartAngle * Math.PI / 180;
+                        double sweepRad = graphic.SweepAngle * Math.PI / 180;
+                        double rx = graphic.Width / 2;
+                        double ry = graphic.Height / 2;
+
+                        Point startPoint = new Point(
+                            graphic.X + rx * Math.Cos(startRad),
+                            graphic.Y + ry * Math.Sin(startRad));
+                        Point endPoint = new Point(
+                            graphic.X + rx * Math.Cos(startRad + sweepRad),
+                            graphic.Y + ry * Math.Sin(startRad + sweepRad));
+
+                        ctx.BeginFigure(startPoint, false, false);
+                        ctx.ArcTo(endPoint, new Size(rx, ry),
+                            0, Math.Abs(graphic.SweepAngle) > 180,
+                            graphic.SweepAngle > 0 ? SweepDirection.Clockwise : SweepDirection.Counterclockwise,
+                            true, false);
+                    }
+                    arcGeometry.Freeze();
+                    dc.DrawGeometry(null, graphicPen, arcGeometry);
+                    break;
             }
         }
 
