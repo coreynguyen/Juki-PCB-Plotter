@@ -58,6 +58,8 @@ namespace PCBPlotter.ViewModels
                 {
                     LoadPackageForEditing();
                     OnPropertyChanged("PinCount");
+                    // Force command CanExecute re-evaluation
+                    System.Windows.Input.CommandManager.InvalidateRequerySuggested();
                 }
             }
         }

@@ -29,6 +29,16 @@ namespace PCBPlotter.Views
             ImportedPlacements = new List<Placement>();
         }
 
+        public ImportIpc356Dialog(Project project, string filePath) : this(project)
+        {
+            // Pre-populate with the provided file path
+            if (!string.IsNullOrEmpty(filePath) && System.IO.File.Exists(filePath))
+            {
+                FilePathTextBox.Text = filePath;
+                Loaded += (s, e) => ParseFile(filePath);
+            }
+        }
+
         private void BrowseButton_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new OpenFileDialog

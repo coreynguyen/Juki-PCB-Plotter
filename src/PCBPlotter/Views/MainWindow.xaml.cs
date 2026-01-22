@@ -341,15 +341,51 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "CAD Files (*.xml;*.ipc)|*.xml;*.ipc|ODB++ (*.zip;*.tgz)|*.zip;*.tgz|All Files (*.*)|*.*",
+                Filter = "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|CAD Files (*.xml)|*.xml|ODB++ (*.zip;*.tgz)|*.zip;*.tgz|All Files (*.*)|*.*",
                 Title = "Import CAD Data"
             };
 
             if (dialog.ShowDialog() == true)
             {
-                // TODO: Implement CAD import
-                MessageBox.Show("CAD import not yet implemented.\nSelected: " + dialog.FileName,
-                    "Import CAD", MessageBoxButton.OK, MessageBoxImage.Information);
+                string ext = System.IO.Path.GetExtension(dialog.FileName).ToLowerInvariant();
+
+                // Route IPC-D-356 files to the dedicated importer
+                if (ext == ".ipc" || ext == ".356" || ext == ".net")
+                {
+                    ShowIpc356ImportDialogWithFile(dialog.FileName);
+                }
+                else
+                {
+                    // TODO: Implement other CAD formats (XML, ODB++)
+                    MessageBox.Show("CAD import for this format not yet implemented.\nSelected: " + dialog.FileName,
+                        "Import CAD", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+        }
+
+        private void ShowIpc356ImportDialogWithFile(string filePath)
+        {
+            var mainVm = DataContext as MainViewModel;
+            if (mainVm?.CurrentProject == null)
+            {
+                System.Windows.MessageBox.Show("Please create or open a project first.",
+                    "No Project", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var dialog = new ImportIpc356Dialog(mainVm.CurrentProject, filePath);
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                // Refresh views
+                EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+                EventAggregator.Instance.Publish(new ZoomFitRequestEvent());
+                EventAggregator.Instance.Publish(new StatusMessageEvent
+                {
+                    Message = string.Format("Imported {0} packages, {1} placements from IPC-D-356",
+                        dialog.ImportedPackages.Count, dialog.ImportedPlacements.Count)
+                });
             }
         }
 
