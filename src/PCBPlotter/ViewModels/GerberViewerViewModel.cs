@@ -210,7 +210,7 @@ namespace PCBPlotter.ViewModels
                     Publish(new StatusMessageEvent
                     {
                         Message = $"Failed to import {System.IO.Path.GetFileName(filePath)}: {ex.Message}",
-                        IsError = true
+                        Type = StatusMessageType.Error
                     });
                 }
             }
