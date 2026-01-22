@@ -223,8 +223,7 @@ namespace PCBPlotter.Core.Services
                     Y = comp.CentroidY,
                     Rotation = 0, // Cannot determine from IPC-356 alone
                     Side = comp.IsSmt ? BoardSide.Top : BoardSide.Top, // Determine from access layer
-                    Package = package,
-                    IsEnabled = true
+                    Package = package
                 };
 
                 placements.Add(placement);
@@ -522,8 +521,7 @@ namespace PCBPlotter.Core.Services
                     Y = relY,
                     Width = pad.Width > 0 ? pad.Width : 0.5,
                     Height = pad.Height > 0 ? pad.Height : 0.5,
-                    Shape = shape,
-                    Rotation = pad.Rotation
+                    Shape = shape
                 });
 
                 pinNum++;
