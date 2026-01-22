@@ -124,6 +124,10 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Views\ImportIpc356Dialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="App.xaml.cs">
@@ -167,6 +171,9 @@
     </Compile>
     <Compile Include="Views\PcbAreaDialog.xaml.cs">
       <DependentUpon>PcbAreaDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ImportIpc356Dialog.xaml.cs">
+      <DependentUpon>ImportIpc356Dialog.xaml</DependentUpon>
     </Compile>
     <Compile Include="ViewModels\ViewModelBase.cs" />
     <Compile Include="ViewModels\RelayCommand.cs" />
