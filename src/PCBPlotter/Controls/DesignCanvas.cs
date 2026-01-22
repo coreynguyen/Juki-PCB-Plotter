@@ -669,14 +669,18 @@ namespace PCBPlotter.Controls
 
             try
             {
+                // Calculate zoom-independent line thicknesses (constant screen pixels)
+                double baseThickness = 1.0 / Zoom;  // 1 screen pixel
+                double selectThickness = 2.0 / Zoom; // 2 screen pixels for selection
+
                 // Body outline brush/pen
                 var bodyBrush = new SolidColorBrush(Color.FromArgb(40, 100, 150, 200));
                 bodyBrush.Freeze();
-                var bodyPen = new Pen(new SolidColorBrush(Color.FromRgb(100, 150, 200)), 0.05);
+                var bodyPen = new Pen(new SolidColorBrush(Color.FromRgb(100, 150, 200)), baseThickness);
                 bodyPen.Freeze();
 
-                // Selected item pen (highlighted)
-                var selectedPen = new Pen(new SolidColorBrush(Color.FromRgb(0, 200, 255)), 0.08);
+                // Selected item pen (highlighted) - slightly thicker
+                var selectedPen = new Pen(new SolidColorBrush(Color.FromRgb(0, 200, 255)), selectThickness);
                 selectedPen.Freeze();
 
                 // Render package graphics
@@ -696,7 +700,7 @@ namespace PCBPlotter.Controls
                 // Render pins
                 var pinBrush = new SolidColorBrush(Color.FromRgb(200, 180, 100));
                 pinBrush.Freeze();
-                var pinPen = new Pen(new SolidColorBrush(Color.FromRgb(150, 130, 80)), 0.02);
+                var pinPen = new Pen(new SolidColorBrush(Color.FromRgb(150, 130, 80)), baseThickness * 0.5);
                 pinPen.Freeze();
                 var selectedPinBrush = new SolidColorBrush(Color.FromRgb(100, 220, 255));
                 selectedPinBrush.Freeze();
@@ -737,8 +741,8 @@ namespace PCBPlotter.Controls
                     }
                 }
 
-                // Draw origin marker at package origin
-                var originPen = new Pen(new SolidColorBrush(Colors.Cyan), 0.02);
+                // Draw origin marker at package origin (zoom-independent)
+                var originPen = new Pen(new SolidColorBrush(Colors.Cyan), baseThickness);
                 originPen.Freeze();
                 double originSize = Math.Max(package.Width, package.Length) * 0.1;
                 if (originSize < 0.2) originSize = 0.5;
@@ -755,10 +759,11 @@ namespace PCBPlotter.Controls
         {
             var handleBrush = new SolidColorBrush(Colors.White);
             handleBrush.Freeze();
-            var handlePen = new Pen(new SolidColorBrush(Color.FromRgb(0, 150, 255)), 0.02);
+            var handlePen = new Pen(new SolidColorBrush(Color.FromRgb(0, 150, 255)), 1.0 / Zoom);
             handlePen.Freeze();
 
-            double handleSize = 0.08;
+            // Zoom-independent handle size (4 screen pixels)
+            double handleSize = 4.0 / Zoom;
 
             // Get corners based on shape type
             switch (g.ShapeType)

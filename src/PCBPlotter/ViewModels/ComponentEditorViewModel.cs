@@ -85,7 +85,69 @@ namespace PCBPlotter.ViewModels
         public PackageGraphic SelectedGraphic
         {
             get { return _selectedGraphic; }
-            set { SetProperty(ref _selectedGraphic, value); }
+            set
+            {
+                if (SetProperty(ref _selectedGraphic, value))
+                {
+                    // Notify all shape property bindings
+                    OnPropertyChanged("SelectedShapeX");
+                    OnPropertyChanged("SelectedShapeY");
+                    OnPropertyChanged("SelectedShapeWidth");
+                    OnPropertyChanged("SelectedShapeHeight");
+                    OnPropertyChanged("SelectedShapeRotation");
+                    OnPropertyChanged("SelectedShapeStroke");
+                    OnPropertyChanged("SelectedShapeFilled");
+                    System.Windows.Input.CommandManager.InvalidateRequerySuggested();
+                }
+            }
+        }
+
+        // Selected shape property accessors
+        public double SelectedShapeX
+        {
+            get { return _selectedGraphic?.X ?? 0; }
+            set { if (_selectedGraphic != null) { _selectedGraphic.X = value; OnPropertyChanged(); RefreshCanvas(); } }
+        }
+
+        public double SelectedShapeY
+        {
+            get { return _selectedGraphic?.Y ?? 0; }
+            set { if (_selectedGraphic != null) { _selectedGraphic.Y = value; OnPropertyChanged(); RefreshCanvas(); } }
+        }
+
+        public double SelectedShapeWidth
+        {
+            get { return _selectedGraphic?.Width ?? 0; }
+            set { if (_selectedGraphic != null) { _selectedGraphic.Width = value; OnPropertyChanged(); RefreshCanvas(); } }
+        }
+
+        public double SelectedShapeHeight
+        {
+            get { return _selectedGraphic?.Height ?? 0; }
+            set { if (_selectedGraphic != null) { _selectedGraphic.Height = value; OnPropertyChanged(); RefreshCanvas(); } }
+        }
+
+        public double SelectedShapeRotation
+        {
+            get { return _selectedGraphic?.Rotation ?? 0; }
+            set { if (_selectedGraphic != null) { _selectedGraphic.Rotation = value; OnPropertyChanged(); RefreshCanvas(); } }
+        }
+
+        public double SelectedShapeStroke
+        {
+            get { return _selectedGraphic?.StrokeThickness ?? 0.1; }
+            set { if (_selectedGraphic != null) { _selectedGraphic.StrokeThickness = value; OnPropertyChanged(); RefreshCanvas(); } }
+        }
+
+        public bool SelectedShapeFilled
+        {
+            get { return _selectedGraphic?.IsFilled ?? false; }
+            set { if (_selectedGraphic != null) { _selectedGraphic.IsFilled = value; OnPropertyChanged(); RefreshCanvas(); } }
+        }
+
+        private void RefreshCanvas()
+        {
+            Publish(new PackageModifiedEvent { Package = SelectedPackage });
         }
 
         #region Editing Properties
@@ -177,6 +239,11 @@ namespace PCBPlotter.ViewModels
         public ICommand MirrorXCommand { get; private set; }
         public ICommand MirrorYCommand { get; private set; }
 
+        // Shape manipulation
+        public ICommand RotateShape90Command { get; private set; }
+        public ICommand FlipShapeHCommand { get; private set; }
+        public ICommand FlipShapeVCommand { get; private set; }
+
         // Quick create commands
         public ICommand CreateChipCommand { get; private set; }
         public ICommand CreateSOT23Command { get; private set; }
@@ -224,6 +291,60 @@ namespace PCBPlotter.ViewModels
             CreateSOICCommand = new RelayCommand(ExecuteCreateSOIC);
             CreateQFPCommand = new RelayCommand(ExecuteCreateQFP);
             CreateBGACommand = new RelayCommand(ExecuteCreateBGA);
+
+            // Shape manipulation
+            RotateShape90Command = new RelayCommand(ExecuteRotateShape90, () => SelectedGraphic != null);
+            FlipShapeHCommand = new RelayCommand(ExecuteFlipShapeH, () => SelectedGraphic != null);
+            FlipShapeVCommand = new RelayCommand(ExecuteFlipShapeV, () => SelectedGraphic != null);
+        }
+
+        private void ExecuteRotateShape90()
+        {
+            if (SelectedGraphic == null) return;
+            SelectedGraphic.Rotation = (SelectedGraphic.Rotation + 90) % 360;
+            // For rectangle/ellipse, swap width/height
+            if (SelectedGraphic.ShapeType == GraphicShapeType.Rectangle ||
+                SelectedGraphic.ShapeType == GraphicShapeType.RoundedRectangle ||
+                SelectedGraphic.ShapeType == GraphicShapeType.Ellipse)
+            {
+                double temp = SelectedGraphic.Width;
+                SelectedGraphic.Width = SelectedGraphic.Height;
+                SelectedGraphic.Height = temp;
+            }
+            OnPropertyChanged("SelectedShapeRotation");
+            OnPropertyChanged("SelectedShapeWidth");
+            OnPropertyChanged("SelectedShapeHeight");
+            RefreshCanvas();
+        }
+
+        private void ExecuteFlipShapeH()
+        {
+            if (SelectedGraphic == null) return;
+            SelectedGraphic.X = -SelectedGraphic.X;
+            if (SelectedGraphic.Points != null)
+            {
+                for (int i = 0; i < SelectedGraphic.Points.Count; i++)
+                {
+                    SelectedGraphic.Points[i] = new System.Windows.Point(-SelectedGraphic.Points[i].X, SelectedGraphic.Points[i].Y);
+                }
+            }
+            OnPropertyChanged("SelectedShapeX");
+            RefreshCanvas();
+        }
+
+        private void ExecuteFlipShapeV()
+        {
+            if (SelectedGraphic == null) return;
+            SelectedGraphic.Y = -SelectedGraphic.Y;
+            if (SelectedGraphic.Points != null)
+            {
+                for (int i = 0; i < SelectedGraphic.Points.Count; i++)
+                {
+                    SelectedGraphic.Points[i] = new System.Windows.Point(SelectedGraphic.Points[i].X, -SelectedGraphic.Points[i].Y);
+                }
+            }
+            OnPropertyChanged("SelectedShapeY");
+            RefreshCanvas();
         }
 
         private void SubscribeToEvents()

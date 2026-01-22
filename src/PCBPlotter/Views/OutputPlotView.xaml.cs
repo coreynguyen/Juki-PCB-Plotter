@@ -13,6 +13,7 @@ namespace PCBPlotter.Views
         private bool _isRecallingSet = false;
         private bool _isSyncing = false;
         private System.Action<PCBPlotter.Core.Events.SelectionChangedEvent> _selectionHandler;
+        private System.Action<PCBPlotter.Core.Events.ZoomFitRequestEvent> _zoomFitHandler;
 
         public OutputPlotView()
         {
@@ -34,6 +35,19 @@ namespace PCBPlotter.Views
             // Subscribe to selection changed events from other tabs
             _selectionHandler = OnExternalSelectionChanged;
             PCBPlotter.Core.Events.EventAggregator.Instance.Subscribe(_selectionHandler);
+
+            // Subscribe to zoom-fit requests
+            _zoomFitHandler = OnZoomFitRequest;
+            PCBPlotter.Core.Events.EventAggregator.Instance.Subscribe(_zoomFitHandler);
+        }
+
+        private void OnZoomFitRequest(PCBPlotter.Core.Events.ZoomFitRequestEvent evt)
+        {
+            // Call the canvas's zoom-to-fit which uses actual dimensions
+            Dispatcher.BeginInvoke(new System.Action(() =>
+            {
+                DesignCanvas.ZoomToFitPlacements();
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -41,6 +55,10 @@ namespace PCBPlotter.Views
             if (_selectionHandler != null)
             {
                 PCBPlotter.Core.Events.EventAggregator.Instance.Unsubscribe(_selectionHandler);
+            }
+            if (_zoomFitHandler != null)
+            {
+                PCBPlotter.Core.Events.EventAggregator.Instance.Unsubscribe(_zoomFitHandler);
             }
         }
 
