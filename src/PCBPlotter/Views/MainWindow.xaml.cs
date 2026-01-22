@@ -391,18 +391,47 @@ namespace PCBPlotter.Views
 
         private void ShowMachineExportDialog()
         {
-            var dialog = new Microsoft.Win32.SaveFileDialog
+            var mainVm = DataContext as MainViewModel;
+            if (mainVm?.CurrentProject == null)
             {
-                Filter = "Juki H8H (*.h8h)|*.h8h|CSV (*.csv)|*.csv|All Files (*.*)|*.*",
-                DefaultExt = ".h8h",
+                MessageBox.Show("Please create or open a project first.",
+                    "No Project", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // Show format selection dialog
+            var formatDialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "Juki FX-3 Program (*.x01)|*.x01|Juki H8H (*.h8h)|*.h8h|CSV (*.csv)|*.csv|All Files (*.*)|*.*",
+                DefaultExt = ".x01",
                 Title = "Export Machine File"
             };
 
-            if (dialog.ShowDialog() == true)
+            if (formatDialog.ShowDialog() == true)
             {
-                // TODO: Implement machine export
-                MessageBox.Show("Machine export not yet implemented.\nTarget: " + dialog.FileName,
-                    "Export", MessageBoxButton.OK, MessageBoxImage.Information);
+                string ext = System.IO.Path.GetExtension(formatDialog.FileName).ToLowerInvariant();
+
+                if (ext == ".x01")
+                {
+                    // Show FX-3 export dialog with detailed options
+                    var fx3Dialog = new ExportJukiFx3Dialog(mainVm.CurrentProject);
+                    fx3Dialog.Owner = this;
+
+                    // Pre-fill the output path
+                    var outputField = fx3Dialog.FindName("OutputFileTextBox") as System.Windows.Controls.TextBox;
+                    if (outputField != null)
+                    {
+                        outputField.Text = formatDialog.FileName;
+                    }
+
+                    fx3Dialog.ShowDialog();
+                }
+                else
+                {
+                    // TODO: Implement other export formats
+                    MessageBox.Show("Export format not yet implemented.\nTarget: " + formatDialog.FileName,
+                        "Export", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
             }
         }
 

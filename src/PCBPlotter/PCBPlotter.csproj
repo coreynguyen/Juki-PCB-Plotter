@@ -128,6 +128,10 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Views\ExportJukiFx3Dialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="App.xaml.cs">
@@ -174,6 +178,9 @@
     </Compile>
     <Compile Include="Views\ImportIpc356Dialog.xaml.cs">
       <DependentUpon>ImportIpc356Dialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ExportJukiFx3Dialog.xaml.cs">
+      <DependentUpon>ExportJukiFx3Dialog.xaml</DependentUpon>
     </Compile>
     <Compile Include="ViewModels\ViewModelBase.cs" />
     <Compile Include="ViewModels\RelayCommand.cs" />
