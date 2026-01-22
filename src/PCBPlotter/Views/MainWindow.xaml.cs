@@ -341,7 +341,10 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|ODB++ Archives (*.tgz;*.tar;*.zip;*.odb)|*.tgz;*.tar;*.zip;*.odb|ODB++ Matrix File (matrix)|matrix|All Files (*.*)|*.*",
+                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz|" +
+                         "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|" +
+                         "ODB++ Archives (*.tgz;*.tar;*.zip;*.odb;*.tar.gz)|*.tgz;*.tar;*.zip;*.odb;*.tar.gz|" +
+                         "All Files (*.*)|*.*",
                 Title = "Import CAD Data"
             };
 
@@ -356,20 +359,16 @@ namespace PCBPlotter.Views
                 {
                     ShowIpc356ImportDialogWithFile(dialog.FileName);
                 }
-                // Route ODB++ archives and matrix file
+                // Route ODB++ archives
                 else if (ext == ".tgz" || ext == ".tar" || ext == ".zip" || ext == ".odb" ||
-                         fullPath.EndsWith(".tar.gz") ||
-                         fileName == "matrix")  // ODB++ matrix file (no extension)
+                         fullPath.EndsWith(".tar.gz"))
                 {
-                    // If matrix file selected, use parent directory (matrix folder's parent = odb root)
-                    string odbPath = dialog.FileName;
-                    if (fileName == "matrix")
-                    {
-                        // matrix file is in matrix/ folder, go up two levels to get odb root
-                        string matrixDir = System.IO.Path.GetDirectoryName(dialog.FileName);
-                        odbPath = System.IO.Path.GetDirectoryName(matrixDir);
-                    }
-                    ShowOdbImportDialogWithFile(odbPath);
+                    ShowOdbImportDialogWithFile(dialog.FileName);
+                }
+                // Check if user selected a file inside an ODB++ structure (like matrix file or any file in odb)
+                else if (IsInsideOdbStructure(dialog.FileName, out string odbRoot))
+                {
+                    ShowOdbImportDialogWithFile(odbRoot);
                 }
                 else
                 {
@@ -378,6 +377,49 @@ namespace PCBPlotter.Views
                         "Import CAD", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
+        }
+
+        private bool IsInsideOdbStructure(string filePath, out string odbRoot)
+        {
+            odbRoot = null;
+
+            // Check if file is "matrix" file or any file inside an ODB++ directory structure
+            string fileName = System.IO.Path.GetFileName(filePath).ToLowerInvariant();
+            string directory = System.IO.Path.GetDirectoryName(filePath);
+
+            // If the file is named "matrix" and is in a "matrix" folder
+            if (fileName == "matrix")
+            {
+                string parentDir = System.IO.Path.GetDirectoryName(directory);
+                if (parentDir != null)
+                {
+                    // Check if this looks like an ODB++ root (has matrix folder and possibly steps folder)
+                    string matrixFolder = System.IO.Path.Combine(parentDir, "matrix");
+                    if (Directory.Exists(matrixFolder))
+                    {
+                        odbRoot = parentDir;
+                        return true;
+                    }
+                }
+            }
+
+            // Walk up the directory tree looking for ODB++ structure
+            string currentDir = directory;
+            for (int i = 0; i < 5 && currentDir != null; i++) // Max 5 levels up
+            {
+                string matrixFolder = System.IO.Path.Combine(currentDir, "matrix");
+                string matrixFile = System.IO.Path.Combine(matrixFolder, "matrix");
+
+                if (Directory.Exists(matrixFolder) && File.Exists(matrixFile))
+                {
+                    odbRoot = currentDir;
+                    return true;
+                }
+
+                currentDir = System.IO.Path.GetDirectoryName(currentDir);
+            }
+
+            return false;
         }
 
         private void ShowOdbImportDialogWithFile(string filePath)

@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using PCBPlotter.Core.Models;
 using PCBPlotter.Core.Rendering;
 using PCBPlotter.Services;
@@ -499,6 +500,9 @@ namespace PCBPlotter.Controls
             var canvas = d as DesignCanvas;
             if (canvas == null) return;
 
+            // Clear bitmap cache when layers change
+            canvas._layerBitmapCache.Clear();
+
             // Unsubscribe from old collection
             var oldCollection = e.OldValue as ObservableCollection<GerberLayer>;
             if (oldCollection != null)
@@ -518,6 +522,37 @@ namespace PCBPlotter.Controls
 
         private void OnGerberLayersCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
+            // Clear cache for removed layers
+            if (e.OldItems != null)
+            {
+                foreach (GerberLayer layer in e.OldItems)
+                {
+                    _layerBitmapCache.Remove(layer);
+                }
+            }
+
+            // Mark new layers as needing cache
+            if (e.NewItems != null)
+            {
+                foreach (GerberLayer layer in e.NewItems)
+                {
+                    // Will be created on first render
+                    _layerBitmapCache.Remove(layer);
+                }
+            }
+
+            InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Invalidates all Gerber layer bitmap caches, forcing re-render
+        /// </summary>
+        public void InvalidateGerberCache()
+        {
+            foreach (var cached in _layerBitmapCache.Values)
+            {
+                cached.IsDirty = true;
+            }
             InvalidateVisual();
         }
 
@@ -660,13 +695,37 @@ namespace PCBPlotter.Controls
             dc.DrawEllipse(new SolidColorBrush(RenderColors.OriginMarker), null, screenOrigin, 4, 4);
         }
 
+        // Gerber layer bitmap cache for performance
+        private Dictionary<GerberLayer, CachedLayerBitmap> _layerBitmapCache = new Dictionary<GerberLayer, CachedLayerBitmap>();
+        private const int BITMAP_TILE_SIZE = 2048; // Max tile size
+        private const int MAX_PRIMITIVES_FOR_DIRECT_RENDER = 500; // Below this, render directly
+
+        private class CachedLayerBitmap
+        {
+            public System.Windows.Media.Imaging.RenderTargetBitmap Bitmap { get; set; }
+            public double CachedZoom { get; set; }
+            public Rect CachedWorldBounds { get; set; }
+            public Color CachedColor { get; set; }
+            public bool IsDirty { get; set; } = true;
+        }
+
         private void RenderGerberLayers(DrawingContext dc)
         {
             if (GerberLayers == null || GerberLayers.Count == 0)
                 return;
 
-            // Viewport bounds for culling
-            Rect viewport = new Rect(0, 0, ActualWidth, ActualHeight);
+            // Viewport bounds in world coordinates for culling
+            Point worldTopLeft = ScreenToWorld(new Point(0, 0));
+            Point worldBottomRight = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+            Rect worldViewport = new Rect(
+                Math.Min(worldTopLeft.X, worldBottomRight.X),
+                Math.Min(worldTopLeft.Y, worldBottomRight.Y),
+                Math.Abs(worldBottomRight.X - worldTopLeft.X),
+                Math.Abs(worldBottomRight.Y - worldTopLeft.Y)
+            );
+
+            // Screen viewport for culling
+            Rect screenViewport = new Rect(0, 0, ActualWidth, ActualHeight);
 
             // Render each visible layer
             foreach (var layer in GerberLayers)
@@ -674,67 +733,300 @@ namespace PCBPlotter.Controls
                 if (!layer.IsVisible || layer.Primitives == null || layer.Primitives.Count == 0)
                     continue;
 
-                // Create layer brush with alpha for opacity
-                byte alpha = (byte)(layer.Opacity * 255);
-                Color layerColor = Color.FromArgb(alpha, layer.Color.R, layer.Color.G, layer.Color.B);
-                var layerBrush = new SolidColorBrush(layerColor);
-                layerBrush.Freeze();
-                var layerPen = new Pen(layerBrush, 1);
-                layerPen.Freeze();
-
-                // Render primitives
-                foreach (var prim in layer.Primitives)
+                // Use cached bitmap for large layers, direct render for small ones
+                if (layer.Primitives.Count > MAX_PRIMITIVES_FOR_DIRECT_RENDER)
                 {
-                    RenderGerberPrimitive(dc, prim, layerBrush, layerPen, viewport);
+                    RenderGerberLayerCached(dc, layer, worldViewport, screenViewport);
+                }
+                else
+                {
+                    RenderGerberLayerDirect(dc, layer, worldViewport, screenViewport);
+                }
+            }
+
+            // Clean up cache for removed layers
+            var layersToRemove = _layerBitmapCache.Keys.Where(k => !GerberLayers.Contains(k)).ToList();
+            foreach (var key in layersToRemove)
+            {
+                _layerBitmapCache.Remove(key);
+            }
+        }
+
+        private void RenderGerberLayerDirect(DrawingContext dc, GerberLayer layer, Rect worldViewport, Rect screenViewport)
+        {
+            // Create layer brush with alpha for opacity
+            byte alpha = (byte)(layer.Opacity * 255);
+            Color layerColor = Color.FromArgb(alpha, layer.Color.R, layer.Color.G, layer.Color.B);
+            var layerBrush = new SolidColorBrush(layerColor);
+            layerBrush.Freeze();
+            var layerPen = new Pen(layerBrush, 1);
+            layerPen.Freeze();
+
+            // Only render primitives that intersect the viewport
+            foreach (var prim in layer.Primitives)
+            {
+                // Quick world-space bounds check
+                var primBounds = prim.GetBounds();
+                if (!worldViewport.IntersectsWith(primBounds))
+                    continue;
+
+                RenderGerberPrimitiveOptimized(dc, prim, layerBrush, layerPen);
+            }
+        }
+
+        private void RenderGerberLayerCached(DrawingContext dc, GerberLayer layer, Rect worldViewport, Rect screenViewport)
+        {
+            // Get or create cached bitmap entry
+            if (!_layerBitmapCache.TryGetValue(layer, out CachedLayerBitmap cached))
+            {
+                cached = new CachedLayerBitmap();
+                _layerBitmapCache[layer] = cached;
+            }
+
+            // Check if cache is still valid
+            bool needsRedraw = cached.IsDirty ||
+                               cached.Bitmap == null ||
+                               Math.Abs(cached.CachedZoom - Zoom) > Zoom * 0.01 || // Zoom changed by more than 1%
+                               cached.CachedColor != layer.Color ||
+                               !cached.CachedWorldBounds.IntersectsWith(worldViewport);
+
+            if (needsRedraw)
+            {
+                // Regenerate bitmap for visible area plus margin
+                RegenerateCachedBitmap(layer, cached, worldViewport);
+            }
+
+            // Draw the cached bitmap
+            if (cached.Bitmap != null)
+            {
+                // Calculate where to draw the bitmap
+                Point bitmapTopLeft = WorldToScreen(new Point(cached.CachedWorldBounds.Left, cached.CachedWorldBounds.Top + cached.CachedWorldBounds.Height));
+
+                // Apply layer opacity
+                dc.PushOpacity(layer.Opacity);
+                dc.DrawImage(cached.Bitmap, new Rect(bitmapTopLeft.X, bitmapTopLeft.Y, cached.Bitmap.PixelWidth, cached.Bitmap.PixelHeight));
+                dc.Pop();
+            }
+
+            // Draw selected primitives on top (they need to be interactive)
+            var selectedBrush = new SolidColorBrush(Color.FromArgb(180, 0, 200, 255));
+            selectedBrush.Freeze();
+            var selectedPen = new Pen(selectedBrush, 2);
+            selectedPen.Freeze();
+
+            foreach (var prim in layer.Primitives.Where(p => p.IsSelected))
+            {
+                var primBounds = prim.GetBounds();
+                if (worldViewport.IntersectsWith(primBounds))
+                {
+                    RenderGerberPrimitiveOptimized(dc, prim, selectedBrush, selectedPen);
                 }
             }
         }
 
-        private void RenderGerberPrimitive(DrawingContext dc, GerberPrimitive prim,
-            SolidColorBrush fillBrush, Pen strokePen, Rect viewport)
+        private void RegenerateCachedBitmap(GerberLayer layer, CachedLayerBitmap cached, Rect worldViewport)
         {
-            // Get screen coordinates for hit testing / culling
-            Point screenPos = WorldToScreen(prim.Position);
-
-            // Quick viewport culling based on position
-            double maxSize = Math.Max(prim.Width, prim.Height) * Zoom + 10;
-            Rect primScreenRect = new Rect(
-                screenPos.X - maxSize,
-                screenPos.Y - maxSize,
-                maxSize * 2,
-                maxSize * 2
+            // Expand viewport by 50% for smoother panning
+            double margin = Math.Max(worldViewport.Width, worldViewport.Height) * 0.5;
+            Rect expandedWorld = new Rect(
+                worldViewport.X - margin,
+                worldViewport.Y - margin,
+                worldViewport.Width + margin * 2,
+                worldViewport.Height + margin * 2
             );
 
-            if (!viewport.IntersectsWith(primScreenRect))
-                return;
+            // Calculate bitmap size (limit to reasonable size)
+            int bitmapWidth = (int)Math.Min(BITMAP_TILE_SIZE, expandedWorld.Width * Zoom);
+            int bitmapHeight = (int)Math.Min(BITMAP_TILE_SIZE, expandedWorld.Height * Zoom);
 
-            // Create pen for this primitive's stroke width
-            Pen primPen = strokePen;
-            if (prim.Width > 0 && (prim.Type == GerberPrimitiveType.Line || prim.Type == GerberPrimitiveType.Arc))
+            if (bitmapWidth < 1) bitmapWidth = 1;
+            if (bitmapHeight < 1) bitmapHeight = 1;
+
+            // Adjust world bounds based on actual bitmap size
+            double actualWorldWidth = bitmapWidth / Zoom;
+            double actualWorldHeight = bitmapHeight / Zoom;
+            expandedWorld = new Rect(
+                worldViewport.X + worldViewport.Width / 2 - actualWorldWidth / 2,
+                worldViewport.Y + worldViewport.Height / 2 - actualWorldHeight / 2,
+                actualWorldWidth,
+                actualWorldHeight
+            );
+
+            // Create drawing visual for the bitmap
+            var visual = new DrawingVisual();
+            using (var vdc = visual.RenderOpen())
             {
-                primPen = new Pen(fillBrush, prim.Width * Zoom);
-                primPen.StartLineCap = PenLineCap.Round;
-                primPen.EndLineCap = PenLineCap.Round;
-                primPen.Freeze();
+                // Set up transform: world to bitmap coordinates
+                var transform = new TransformGroup();
+                transform.Children.Add(new TranslateTransform(-expandedWorld.X, -expandedWorld.Y - expandedWorld.Height));
+                transform.Children.Add(new ScaleTransform(Zoom, -Zoom));
+                vdc.PushTransform(transform);
+
+                // Create brush for this layer
+                var layerBrush = new SolidColorBrush(layer.Color);
+                layerBrush.Freeze();
+                var layerPen = new Pen(layerBrush, 0.1 / Zoom); // Thin outline
+                layerPen.Freeze();
+
+                // Render all primitives that intersect the expanded bounds
+                foreach (var prim in layer.Primitives)
+                {
+                    var primBounds = prim.GetBounds();
+                    if (!expandedWorld.IntersectsWith(primBounds))
+                        continue;
+
+                    RenderGerberPrimitiveToVisual(vdc, prim, layerBrush);
+                }
+
+                vdc.Pop();
             }
 
-            // Selection highlight
-            if (prim.IsSelected)
-            {
-                var selectedPen = new Pen(new SolidColorBrush(Color.FromRgb(0, 200, 255)), 2);
-                selectedPen.Freeze();
-                RenderGerberPrimitiveShape(dc, prim, null, selectedPen);
-            }
+            // Render to bitmap
+            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                bitmapWidth, bitmapHeight, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(visual);
+            bitmap.Freeze();
 
-            RenderGerberPrimitiveShape(dc, prim, fillBrush, primPen);
+            // Update cache
+            cached.Bitmap = bitmap;
+            cached.CachedZoom = Zoom;
+            cached.CachedWorldBounds = expandedWorld;
+            cached.CachedColor = layer.Color;
+            cached.IsDirty = false;
         }
 
-        private void RenderGerberPrimitiveShape(DrawingContext dc, GerberPrimitive prim,
-            SolidColorBrush fillBrush, Pen strokePen)
+        private void RenderGerberPrimitiveToVisual(DrawingContext dc, GerberPrimitive prim, SolidColorBrush fillBrush)
+        {
+            // Render in world coordinates (transform is applied by caller)
+            double x = prim.X;
+            double y = prim.Y;
+            double w = prim.Width;
+            double h = prim.Height;
+
+            switch (prim.Type)
+            {
+                case GerberPrimitiveType.Circle:
+                case GerberPrimitiveType.Flash:
+                    dc.DrawEllipse(fillBrush, null, new Point(x, y), w / 2, h / 2);
+                    break;
+
+                case GerberPrimitiveType.Rectangle:
+                    {
+                        var rect = new Rect(x - w / 2, y - h / 2, w, h);
+                        if (prim.Rotation != 0)
+                        {
+                            dc.PushTransform(new RotateTransform(prim.Rotation, x, y));
+                            dc.DrawRectangle(fillBrush, null, rect);
+                            dc.Pop();
+                        }
+                        else
+                        {
+                            dc.DrawRectangle(fillBrush, null, rect);
+                        }
+                    }
+                    break;
+
+                case GerberPrimitiveType.Obround:
+                    {
+                        double cornerRadius = Math.Min(w, h) / 2;
+                        var rect = new Rect(x - w / 2, y - h / 2, w, h);
+                        if (prim.Rotation != 0)
+                        {
+                            dc.PushTransform(new RotateTransform(prim.Rotation, x, y));
+                            dc.DrawRoundedRectangle(fillBrush, null, rect, cornerRadius, cornerRadius);
+                            dc.Pop();
+                        }
+                        else
+                        {
+                            dc.DrawRoundedRectangle(fillBrush, null, rect, cornerRadius, cornerRadius);
+                        }
+                    }
+                    break;
+
+                case GerberPrimitiveType.Line:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        var linePen = new Pen(fillBrush, w > 0 ? w : 0.1);
+                        linePen.StartLineCap = PenLineCap.Round;
+                        linePen.EndLineCap = PenLineCap.Round;
+                        linePen.Freeze();
+
+                        for (int i = 0; i < prim.Points.Count - 1; i++)
+                        {
+                            dc.DrawLine(linePen, prim.Points[i], prim.Points[i + 1]);
+                        }
+                    }
+                    break;
+
+                case GerberPrimitiveType.Arc:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        var arcPen = new Pen(fillBrush, w > 0 ? w : 0.1);
+                        arcPen.StartLineCap = PenLineCap.Round;
+                        arcPen.EndLineCap = PenLineCap.Round;
+                        arcPen.Freeze();
+
+                        for (int i = 0; i < prim.Points.Count - 1; i++)
+                        {
+                            dc.DrawLine(arcPen, prim.Points[i], prim.Points[i + 1]);
+                        }
+                    }
+                    break;
+
+                case GerberPrimitiveType.Contour:
+                    if (prim.Points != null && prim.Points.Count >= 3)
+                    {
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            ctx.BeginFigure(prim.Points[0], true, true);
+                            for (int i = 1; i < prim.Points.Count; i++)
+                            {
+                                ctx.LineTo(prim.Points[i], true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(fillBrush, null, geometry);
+                    }
+                    break;
+
+                case GerberPrimitiveType.Polygon:
+                    {
+                        int vertices = 6;
+                        double radius = w / 2;
+                        double startAngle = prim.Rotation * Math.PI / 180;
+
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            for (int i = 0; i <= vertices; i++)
+                            {
+                                double angle = startAngle + (2 * Math.PI * i / vertices);
+                                double px = x + radius * Math.Cos(angle);
+                                double py = y + radius * Math.Sin(angle);
+
+                                if (i == 0)
+                                    ctx.BeginFigure(new Point(px, py), true, true);
+                                else
+                                    ctx.LineTo(new Point(px, py), true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(fillBrush, null, geometry);
+                    }
+                    break;
+            }
+        }
+
+        private void RenderGerberPrimitiveOptimized(DrawingContext dc, GerberPrimitive prim, SolidColorBrush fillBrush, Pen strokePen)
         {
             Point screenCenter = WorldToScreen(prim.Position);
             double screenWidth = prim.Width * Zoom;
             double screenHeight = prim.Height * Zoom;
+
+            // Skip very small primitives
+            if (screenWidth < 0.5 && screenHeight < 0.5)
+                return;
 
             switch (prim.Type)
             {
@@ -788,12 +1080,48 @@ namespace PCBPlotter.Controls
                     }
                     break;
 
+                case GerberPrimitiveType.Line:
+                case GerberPrimitiveType.Arc:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        var linePen = new Pen(fillBrush, Math.Max(1, prim.Width * Zoom));
+                        linePen.StartLineCap = PenLineCap.Round;
+                        linePen.EndLineCap = PenLineCap.Round;
+                        linePen.Freeze();
+
+                        Point prev = WorldToScreen(prim.Points[0]);
+                        for (int i = 1; i < prim.Points.Count; i++)
+                        {
+                            Point curr = WorldToScreen(prim.Points[i]);
+                            dc.DrawLine(linePen, prev, curr);
+                            prev = curr;
+                        }
+                    }
+                    break;
+
+                case GerberPrimitiveType.Contour:
+                    if (prim.Points != null && prim.Points.Count >= 3)
+                    {
+                        var geometry = new StreamGeometry();
+                        using (var ctx = geometry.Open())
+                        {
+                            Point first = WorldToScreen(prim.Points[0]);
+                            ctx.BeginFigure(first, true, true);
+                            for (int i = 1; i < prim.Points.Count; i++)
+                            {
+                                ctx.LineTo(WorldToScreen(prim.Points[i]), true, false);
+                            }
+                        }
+                        geometry.Freeze();
+                        dc.DrawGeometry(fillBrush, null, geometry);
+                    }
+                    break;
+
                 case GerberPrimitiveType.Polygon:
                     {
-                        // Draw regular polygon (assume stored in Width as diameter)
-                        int vertices = 6; // Default to hexagon if not specified
+                        int vertices = 6;
                         double radius = screenWidth / 2;
-                        double startAngle = (prim.Rotation) * Math.PI / 180;
+                        double startAngle = prim.Rotation * Math.PI / 180;
 
                         var geometry = new StreamGeometry();
                         using (var ctx = geometry.Open())
@@ -808,66 +1136,6 @@ namespace PCBPlotter.Controls
                                     ctx.BeginFigure(new Point(px, py), true, true);
                                 else
                                     ctx.LineTo(new Point(px, py), true, false);
-                            }
-                        }
-                        geometry.Freeze();
-                        dc.DrawGeometry(fillBrush, null, geometry);
-                    }
-                    break;
-
-                case GerberPrimitiveType.Line:
-                    if (prim.Points != null && prim.Points.Count >= 2)
-                    {
-                        var geometry = new StreamGeometry();
-                        using (var ctx = geometry.Open())
-                        {
-                            Point firstScreen = WorldToScreen(prim.Points[0]);
-                            ctx.BeginFigure(firstScreen, false, false);
-
-                            for (int i = 1; i < prim.Points.Count; i++)
-                            {
-                                Point ptScreen = WorldToScreen(prim.Points[i]);
-                                ctx.LineTo(ptScreen, true, false);
-                            }
-                        }
-                        geometry.Freeze();
-                        dc.DrawGeometry(null, strokePen, geometry);
-                    }
-                    break;
-
-                case GerberPrimitiveType.Arc:
-                    if (prim.Points != null && prim.Points.Count >= 2)
-                    {
-                        var geometry = new StreamGeometry();
-                        using (var ctx = geometry.Open())
-                        {
-                            Point firstScreen = WorldToScreen(prim.Points[0]);
-                            ctx.BeginFigure(firstScreen, false, false);
-
-                            for (int i = 1; i < prim.Points.Count; i++)
-                            {
-                                Point ptScreen = WorldToScreen(prim.Points[i]);
-                                ctx.LineTo(ptScreen, true, false);
-                            }
-                        }
-                        geometry.Freeze();
-                        dc.DrawGeometry(null, strokePen, geometry);
-                    }
-                    break;
-
-                case GerberPrimitiveType.Contour:
-                    if (prim.Points != null && prim.Points.Count >= 3)
-                    {
-                        var geometry = new StreamGeometry();
-                        using (var ctx = geometry.Open())
-                        {
-                            Point firstScreen = WorldToScreen(prim.Points[0]);
-                            ctx.BeginFigure(firstScreen, true, true);
-
-                            for (int i = 1; i < prim.Points.Count; i++)
-                            {
-                                Point ptScreen = WorldToScreen(prim.Points[i]);
-                                ctx.LineTo(ptScreen, true, false);
                             }
                         }
                         geometry.Freeze();
