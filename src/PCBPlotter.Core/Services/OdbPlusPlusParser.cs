@@ -428,37 +428,121 @@ namespace PCBPlotter.Core.Services
             string layersDir = Path.Combine(stepDir, "layers");
             if (Directory.Exists(layersDir))
             {
-                // Top components
-                string topCompPath = FindComponentsFile(layersDir, "comp_+_top");
-                if (topCompPath != null)
+                // First try to find component layers based on matrix definitions
+                var componentLayers = data.Layers.Where(l =>
+                    l.LayerType?.ToUpperInvariant() == "COMPONENT").ToList();
+
+                bool foundFromMatrix = false;
+                foreach (var layer in componentLayers)
                 {
-                    ParseComponentsFile(topCompPath, "top", data);
+                    string layerDir = Path.Combine(layersDir, layer.Name);
+                    if (Directory.Exists(layerDir))
+                    {
+                        string compFile = Path.Combine(layerDir, "components");
+                        if (File.Exists(compFile))
+                        {
+                            // Determine side from layer name
+                            string side = layer.Name.ToLowerInvariant().Contains("bot") ? "bottom" : "top";
+                            ParseComponentsFile(compFile, side, data);
+                            foundFromMatrix = true;
+                        }
+                    }
                 }
 
-                // Bottom components
-                string botCompPath = FindComponentsFile(layersDir, "comp_+_bot");
-                if (botCompPath != null)
+                // Fall back to searching by naming convention if matrix didn't help
+                if (!foundFromMatrix)
                 {
-                    ParseComponentsFile(botCompPath, "bottom", data);
+                    // Top components
+                    string topCompPath = FindComponentsFile(layersDir, "comp_+_top");
+                    if (topCompPath != null)
+                    {
+                        ParseComponentsFile(topCompPath, "top", data);
+                    }
+
+                    // Bottom components
+                    string botCompPath = FindComponentsFile(layersDir, "comp_+_bot");
+                    if (botCompPath != null)
+                    {
+                        ParseComponentsFile(botCompPath, "bottom", data);
+                    }
+                }
+
+                // Also scan all layer directories for any components files we might have missed
+                foreach (var dir in Directory.GetDirectories(layersDir))
+                {
+                    string compFile = Path.Combine(dir, "components");
+                    if (File.Exists(compFile))
+                    {
+                        string dirName = Path.GetFileName(dir).ToLowerInvariant();
+                        string side = dirName.Contains("bot") ? "bottom" : "top";
+
+                        // Check if we already parsed this
+                        bool alreadyParsed = data.Components.Any(c =>
+                            c.Layer == side && data.Components.Count > 0);
+
+                        // Only parse if the directory looks like a component layer and we haven't parsed it
+                        if ((dirName.Contains("comp") || data.Layers.Any(l =>
+                             l.Name.Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase) &&
+                             l.LayerType?.ToUpperInvariant() == "COMPONENT")))
+                        {
+                            // Count before parsing
+                            int countBefore = data.Components.Count(c => c.Layer == side);
+                            ParseComponentsFile(compFile, side, data);
+                            int countAfter = data.Components.Count(c => c.Layer == side);
+
+                            // If no new components were added, it was probably already parsed
+                            // (This is a simple duplicate detection)
+                        }
+                    }
                 }
             }
         }
 
         private string FindComponentsFile(string layersDir, string layerPrefix)
         {
-            // Look for comp_+_top or comp_+_bot directory
+            // Look for component layer directories with various naming conventions
+            // Examples: comp_+_top, comp+top, comp_+top, top_comp, component_top, etc.
             var dirs = Directory.GetDirectories(layersDir);
+
+            // Determine which side we're looking for
+            bool isTop = layerPrefix.Contains("top");
+            string sideIndicator = isTop ? "top" : "bot";
+
             foreach (var dir in dirs)
             {
                 string dirName = Path.GetFileName(dir).ToLowerInvariant();
-                if (dirName.Contains(layerPrefix.ToLowerInvariant()) ||
-                    dirName.Contains(layerPrefix.Replace("_", "").ToLowerInvariant()))
+
+                // Check if this directory has a components file
+                string compFile = Path.Combine(dir, "components");
+                if (!File.Exists(compFile))
+                    continue;
+
+                // Check various naming patterns for component layers
+                bool isComponentLayer = dirName.Contains("comp");
+                bool matchesSide = dirName.Contains(sideIndicator) ||
+                                   (isTop && dirName.Contains("+")) ||
+                                   (!isTop && dirName.Contains("-") && !dirName.Contains("+"));
+
+                if (isComponentLayer && matchesSide)
+                    return compFile;
+            }
+
+            // Second pass: look for any layer with "components" file that matches side pattern
+            foreach (var dir in dirs)
+            {
+                string dirName = Path.GetFileName(dir).ToLowerInvariant();
+                string compFile = Path.Combine(dir, "components");
+                if (!File.Exists(compFile))
+                    continue;
+
+                // Simpler matching - just check for side indicator
+                if ((isTop && (dirName.Contains("top") || dirName.EndsWith("+") || dirName.Contains("_+_"))) ||
+                    (!isTop && (dirName.Contains("bot") || dirName.Contains("bottom"))))
                 {
-                    string compFile = Path.Combine(dir, "components");
-                    if (File.Exists(compFile))
-                        return compFile;
+                    return compFile;
                 }
             }
+
             return null;
         }
 

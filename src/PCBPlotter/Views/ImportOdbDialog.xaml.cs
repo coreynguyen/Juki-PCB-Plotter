@@ -34,6 +34,12 @@ namespace PCBPlotter.Views
         public ImportOdbDialog(Project project, string sourcePath) : this(project)
         {
             SourcePathTextBox.Text = sourcePath;
+
+            // Auto-parse if path provided
+            if (!string.IsNullOrEmpty(sourcePath))
+            {
+                Loaded += (s, e) => ParseButton_Click(null, null);
+            }
         }
 
         private void BrowseFileButton_Click(object sender, RoutedEventArgs e)

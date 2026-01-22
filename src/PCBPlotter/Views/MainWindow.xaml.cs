@@ -341,25 +341,35 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|ODB++ Archives (*.tgz;*.tar;*.zip;*.odb)|*.tgz;*.tar;*.zip;*.odb|CAD Files (*.xml)|*.xml|All Files (*.*)|*.*",
+                Filter = "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|ODB++ Archives (*.tgz;*.tar;*.zip;*.odb)|*.tgz;*.tar;*.zip;*.odb|ODB++ Matrix File (matrix)|matrix|All Files (*.*)|*.*",
                 Title = "Import CAD Data"
             };
 
             if (dialog.ShowDialog() == true)
             {
                 string ext = System.IO.Path.GetExtension(dialog.FileName).ToLowerInvariant();
-                string fileName = dialog.FileName.ToLowerInvariant();
+                string fileName = System.IO.Path.GetFileName(dialog.FileName).ToLowerInvariant();
+                string fullPath = dialog.FileName.ToLowerInvariant();
 
                 // Route IPC-D-356 files to the dedicated importer
                 if (ext == ".ipc" || ext == ".356" || ext == ".net")
                 {
                     ShowIpc356ImportDialogWithFile(dialog.FileName);
                 }
-                // Route ODB++ archives
+                // Route ODB++ archives and matrix file
                 else if (ext == ".tgz" || ext == ".tar" || ext == ".zip" || ext == ".odb" ||
-                         fileName.EndsWith(".tar.gz"))
+                         fullPath.EndsWith(".tar.gz") ||
+                         fileName == "matrix")  // ODB++ matrix file (no extension)
                 {
-                    ShowOdbImportDialogWithFile(dialog.FileName);
+                    // If matrix file selected, use parent directory (matrix folder's parent = odb root)
+                    string odbPath = dialog.FileName;
+                    if (fileName == "matrix")
+                    {
+                        // matrix file is in matrix/ folder, go up two levels to get odb root
+                        string matrixDir = System.IO.Path.GetDirectoryName(dialog.FileName);
+                        odbPath = System.IO.Path.GetDirectoryName(matrixDir);
+                    }
+                    ShowOdbImportDialogWithFile(odbPath);
                 }
                 else
                 {
