@@ -57,6 +57,7 @@
     <Compile Include="Interfaces\IMachineExporter.cs" />
     <Compile Include="Services\ProjectService.cs" />
     <Compile Include="Services\UndoRedoService.cs" />
+    <Compile Include="Services\Ipc356Parser.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
     <Compile Include="Utilities\UnicodeHelper.cs" />
     <Compile Include="Utilities\UnitConverter.cs" />
