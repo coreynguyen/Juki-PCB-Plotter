@@ -6,26 +6,20 @@ using System.Windows.Data;
 using System.Windows.Input;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Core.Models;
-using Component = PCBPlotter.Core.Models.Component;
 
 namespace PCBPlotter.ViewModels
 {
     /// <summary>
-    /// View model for the component/package editor
+    /// View model for the package/footprint editor
     /// </summary>
     public class ComponentEditorViewModel : ViewModelBase
     {
         private Project _project;
         private ICollectionView _packagesView;
-        private ICollectionView _componentsView;
         private Package _selectedPackage;
-        private Component _selectedComponent;
         private string _filterText;
         private bool _isEditingPackage;
         private PackageGraphic _selectedGraphic;
-        private bool _showComponentsMode = true;
-        private bool _showPackagesMode;
-        private Placement _selectedComponentPlacement;
 
         // Package editing properties
         private string _editName;
@@ -36,16 +30,6 @@ namespace PCBPlotter.ViewModels
         private PartClass _editPartClass;
         private bool _editHasPolarity;
         private double _editDefaultRotation;
-
-        // Component editing properties
-        private string _editComponentPartNumber;
-        private string _editComponentManufacturer;
-        private string _editComponentValue;
-        private string _editComponentDescription;
-        private Package _editComponentPackage;
-        private string _editFeederSlot;
-        private string _editTapeWidth;
-        private string _editTapePitch;
 
         public Project Project
         {
@@ -65,12 +49,6 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _packagesView, value); }
         }
 
-        public ICollectionView ComponentsView
-        {
-            get { return _componentsView; }
-            set { SetProperty(ref _componentsView, value); }
-        }
-
         public Package SelectedPackage
         {
             get { return _selectedPackage; }
@@ -79,19 +57,7 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _selectedPackage, value))
                 {
                     LoadPackageForEditing();
-                }
-            }
-        }
-
-        public Component SelectedComponent
-        {
-            get { return _selectedComponent; }
-            set
-            {
-                if (SetProperty(ref _selectedComponent, value))
-                {
-                    LoadComponentForEditing();
-                    OnPropertyChanged("ComponentPlacements");
+                    OnPropertyChanged("PinCount");
                 }
             }
         }
@@ -104,7 +70,6 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _filterText, value))
                 {
                     PackagesView?.Refresh();
-                    ComponentsView?.Refresh();
                 }
             }
         }
@@ -119,51 +84,6 @@ namespace PCBPlotter.ViewModels
         {
             get { return _selectedGraphic; }
             set { SetProperty(ref _selectedGraphic, value); }
-        }
-
-        public bool ShowComponentsMode
-        {
-            get { return _showComponentsMode; }
-            set
-            {
-                if (SetProperty(ref _showComponentsMode, value) && value)
-                {
-                    ShowPackagesMode = false;
-                }
-            }
-        }
-
-        public bool ShowPackagesMode
-        {
-            get { return _showPackagesMode; }
-            set
-            {
-                if (SetProperty(ref _showPackagesMode, value) && value)
-                {
-                    ShowComponentsMode = false;
-                }
-            }
-        }
-
-        public Placement SelectedComponentPlacement
-        {
-            get { return _selectedComponentPlacement; }
-            set { SetProperty(ref _selectedComponentPlacement, value); }
-        }
-
-        public ObservableCollection<Placement> ComponentPlacements
-        {
-            get
-            {
-                if (SelectedComponent == null || Project == null) return new ObservableCollection<Placement>();
-                return new ObservableCollection<Placement>(
-                    Project.Placements.Where(p => p.Component == SelectedComponent));
-            }
-        }
-
-        public ObservableCollection<Package> AvailablePackages
-        {
-            get { return Project?.Packages; }
         }
 
         #region Editing Properties
@@ -216,55 +136,6 @@ namespace PCBPlotter.ViewModels
             set { SetProperty(ref _editDefaultRotation, value); }
         }
 
-        // Component editing properties
-        public string EditComponentPartNumber
-        {
-            get { return _editComponentPartNumber; }
-            set { SetProperty(ref _editComponentPartNumber, value); }
-        }
-
-        public string EditComponentManufacturer
-        {
-            get { return _editComponentManufacturer; }
-            set { SetProperty(ref _editComponentManufacturer, value); }
-        }
-
-        public string EditComponentValue
-        {
-            get { return _editComponentValue; }
-            set { SetProperty(ref _editComponentValue, value); }
-        }
-
-        public string EditComponentDescription
-        {
-            get { return _editComponentDescription; }
-            set { SetProperty(ref _editComponentDescription, value); }
-        }
-
-        public Package EditComponentPackage
-        {
-            get { return _editComponentPackage; }
-            set { SetProperty(ref _editComponentPackage, value); }
-        }
-
-        public string EditFeederSlot
-        {
-            get { return _editFeederSlot; }
-            set { SetProperty(ref _editFeederSlot, value); }
-        }
-
-        public string EditTapeWidth
-        {
-            get { return _editTapeWidth; }
-            set { SetProperty(ref _editTapeWidth, value); }
-        }
-
-        public string EditTapePitch
-        {
-            get { return _editTapePitch; }
-            set { SetProperty(ref _editTapePitch, value); }
-        }
-
         #endregion
 
         public int PackageCount
@@ -272,9 +143,9 @@ namespace PCBPlotter.ViewModels
             get { return Project?.Packages.Count ?? 0; }
         }
 
-        public int ComponentCount
+        public int PinCount
         {
-            get { return Project?.Components.Count ?? 0; }
+            get { return SelectedPackage?.Pins.Count ?? 0; }
         }
 
         // Commands
@@ -285,23 +156,31 @@ namespace PCBPlotter.ViewModels
         public ICommand CancelEditCommand { get; private set; }
         public ICommand ImportFromLibraryCommand { get; private set; }
         public ICommand ExportToLibraryCommand { get; private set; }
+        public ICommand ImportIPCCommand { get; private set; }
+        public ICommand ClearFilterCommand { get; private set; }
+
+        // Shape tools
         public ICommand AddRectangleCommand { get; private set; }
         public ICommand AddCircleCommand { get; private set; }
         public ICommand AddLineCommand { get; private set; }
         public ICommand AddPolygonCommand { get; private set; }
+        public ICommand AddArcCommand { get; private set; }
         public ICommand AddTextCommand { get; private set; }
         public ICommand AddPinCommand { get; private set; }
         public ICommand DeleteGraphicCommand { get; private set; }
+
+        // Utilities
         public ICommand CenterOriginCommand { get; private set; }
         public ICommand AutoSizeCommand { get; private set; }
-        public ICommand SaveCommand { get; private set; }
-        public ICommand ClearFilterCommand { get; private set; }
+        public ICommand MirrorXCommand { get; private set; }
+        public ICommand MirrorYCommand { get; private set; }
 
-        // Component commands
-        public ICommand NewComponentCommand { get; private set; }
-        public ICommand DeleteComponentCommand { get; private set; }
-        public ICommand AutoAssignFeedersCommand { get; private set; }
-        public ICommand FocusComponentPlacementCommand { get; private set; }
+        // Quick create commands
+        public ICommand CreateChipCommand { get; private set; }
+        public ICommand CreateSOT23Command { get; private set; }
+        public ICommand CreateSOICCommand { get; private set; }
+        public ICommand CreateQFPCommand { get; private set; }
+        public ICommand CreateBGACommand { get; private set; }
 
         public ComponentEditorViewModel()
         {
@@ -318,23 +197,31 @@ namespace PCBPlotter.ViewModels
             CancelEditCommand = new RelayCommand(ExecuteCancelEdit);
             ImportFromLibraryCommand = new RelayCommand(ExecuteImportFromLibrary);
             ExportToLibraryCommand = new RelayCommand(ExecuteExportToLibrary, () => SelectedPackage != null);
+            ImportIPCCommand = new RelayCommand(ExecuteImportIPC);
+            ClearFilterCommand = new RelayCommand(() => FilterText = "");
+
+            // Shape tools
             AddRectangleCommand = new RelayCommand(ExecuteAddRectangle, () => SelectedPackage != null);
             AddCircleCommand = new RelayCommand(ExecuteAddCircle, () => SelectedPackage != null);
             AddLineCommand = new RelayCommand(ExecuteAddLine, () => SelectedPackage != null);
             AddPolygonCommand = new RelayCommand(ExecuteAddPolygon, () => SelectedPackage != null);
+            AddArcCommand = new RelayCommand(ExecuteAddArc, () => SelectedPackage != null);
             AddTextCommand = new RelayCommand(ExecuteAddText, () => SelectedPackage != null);
-            AddPinCommand = new RelayCommand(ExecuteAddPin, () => SelectedPackage != null);
+            AddPinCommand = new RelayCommand<string>(ExecuteAddPin, s => SelectedPackage != null);
             DeleteGraphicCommand = new RelayCommand(ExecuteDeleteGraphic, () => SelectedGraphic != null);
+
+            // Utilities
             CenterOriginCommand = new RelayCommand(ExecuteCenterOrigin, () => SelectedPackage != null);
             AutoSizeCommand = new RelayCommand(ExecuteAutoSize, () => SelectedPackage != null);
-            SaveCommand = new RelayCommand(ExecuteSave);
-            ClearFilterCommand = new RelayCommand(() => FilterText = "");
+            MirrorXCommand = new RelayCommand(ExecuteMirrorX, () => SelectedPackage != null);
+            MirrorYCommand = new RelayCommand(ExecuteMirrorY, () => SelectedPackage != null);
 
-            // Component commands
-            NewComponentCommand = new RelayCommand(ExecuteNewComponent, () => Project != null);
-            DeleteComponentCommand = new RelayCommand(ExecuteDeleteComponent, () => SelectedComponent != null);
-            AutoAssignFeedersCommand = new RelayCommand(ExecuteAutoAssignFeeders, () => Project != null && Project.Components.Count > 0);
-            FocusComponentPlacementCommand = new RelayCommand(ExecuteFocusComponentPlacement, () => SelectedComponentPlacement != null);
+            // Quick create
+            CreateChipCommand = new RelayCommand(ExecuteCreateChip);
+            CreateSOT23Command = new RelayCommand(ExecuteCreateSOT23);
+            CreateSOICCommand = new RelayCommand(ExecuteCreateSOIC);
+            CreateQFPCommand = new RelayCommand(ExecuteCreateQFP);
+            CreateBGACommand = new RelayCommand(ExecuteCreateBGA);
         }
 
         private void SubscribeToEvents()
@@ -350,33 +237,12 @@ namespace PCBPlotter.ViewModels
                 PackagesView = CollectionViewSource.GetDefaultView(Project.Packages);
                 PackagesView.Filter = FilterPackage;
                 PackagesView.SortDescriptions.Add(new SortDescription("Name", ListSortDirection.Ascending));
-
-                ComponentsView = CollectionViewSource.GetDefaultView(Project.Components);
-                ComponentsView.Filter = FilterComponent;
-                ComponentsView.SortDescriptions.Add(new SortDescription("PartNumber", ListSortDirection.Ascending));
             }
             else
             {
                 PackagesView = null;
-                ComponentsView = null;
             }
             OnPropertyChanged("PackageCount");
-            OnPropertyChanged("ComponentCount");
-            OnPropertyChanged("AvailablePackages");
-        }
-
-        private bool FilterComponent(object obj)
-        {
-            if (string.IsNullOrEmpty(FilterText)) return true;
-
-            var component = obj as Component;
-            if (component == null) return false;
-
-            var text = FilterText.ToLower();
-            return (component.PartNumber ?? "").ToLower().Contains(text) ||
-                   (component.Manufacturer ?? "").ToLower().Contains(text) ||
-                   (component.Value ?? "").ToLower().Contains(text) ||
-                   (component.Description ?? "").ToLower().Contains(text);
         }
 
         private bool FilterPackage(object obj)
@@ -408,32 +274,6 @@ namespace PCBPlotter.ViewModels
             else
             {
                 IsEditingPackage = false;
-            }
-        }
-
-        private void LoadComponentForEditing()
-        {
-            if (SelectedComponent != null)
-            {
-                EditComponentPartNumber = SelectedComponent.PartNumber;
-                EditComponentManufacturer = SelectedComponent.Manufacturer;
-                EditComponentValue = SelectedComponent.Value;
-                EditComponentDescription = SelectedComponent.Description;
-                EditComponentPackage = SelectedComponent.Package;
-                EditFeederSlot = SelectedComponent.FeederSlot;
-                EditTapeWidth = SelectedComponent.TapeWidth;
-                EditTapePitch = SelectedComponent.TapePitch;
-            }
-            else
-            {
-                EditComponentPartNumber = null;
-                EditComponentManufacturer = null;
-                EditComponentValue = null;
-                EditComponentDescription = null;
-                EditComponentPackage = null;
-                EditFeederSlot = null;
-                EditTapeWidth = null;
-                EditTapePitch = null;
             }
         }
 
@@ -544,18 +384,21 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteImportFromLibrary()
         {
-            // TODO: Open library browser dialog
             Publish(new ShowDialogEvent { DialogType = "ImportPackageLibrary" });
         }
 
         private void ExecuteExportToLibrary()
         {
-            // TODO: Export to master library
             Publish(new ShowDialogEvent
             {
                 DialogType = "ExportPackageLibrary",
                 Parameter = SelectedPackage
             });
+        }
+
+        private void ExecuteImportIPC()
+        {
+            Publish(new ShowDialogEvent { DialogType = "ImportIPC356" });
         }
 
         private void ExecuteAddRectangle()
@@ -569,7 +412,8 @@ namespace PCBPlotter.ViewModels
                 Y = -0.5,
                 Width = 1.0,
                 Height = 1.0,
-                IsFilled = true
+                IsFilled = false,
+                StrokeThickness = 0.1
             });
 
             Publish(new PackageModifiedEvent { Package = SelectedPackage });
@@ -586,7 +430,8 @@ namespace PCBPlotter.ViewModels
                 Y = 0,
                 Width = 0.5,
                 Height = 0.5,
-                IsFilled = true
+                IsFilled = false,
+                StrokeThickness = 0.1
             });
 
             Publish(new PackageModifiedEvent { Package = SelectedPackage });
@@ -615,7 +460,8 @@ namespace PCBPlotter.ViewModels
             var graphic = new PackageGraphic
             {
                 ShapeType = GraphicShapeType.Polygon,
-                IsFilled = true
+                IsFilled = false,
+                StrokeThickness = 0.1
             };
             // Triangle by default
             graphic.Points.Add(new System.Windows.Point(0, -0.5));
@@ -623,6 +469,25 @@ namespace PCBPlotter.ViewModels
             graphic.Points.Add(new System.Windows.Point(-0.5, 0.5));
 
             SelectedPackage.Graphics.Add(graphic);
+            Publish(new PackageModifiedEvent { Package = SelectedPackage });
+        }
+
+        private void ExecuteAddArc()
+        {
+            if (SelectedPackage == null) return;
+
+            SelectedPackage.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Arc,
+                X = 0,
+                Y = 0,
+                Width = 0.5,
+                Height = 0.5,
+                StartAngle = 0,
+                SweepAngle = 90,
+                StrokeThickness = 0.1
+            });
+
             Publish(new PackageModifiedEvent { Package = SelectedPackage });
         }
 
@@ -642,7 +507,7 @@ namespace PCBPlotter.ViewModels
             Publish(new PackageModifiedEvent { Package = SelectedPackage });
         }
 
-        private void ExecuteAddPin()
+        private void ExecuteAddPin(string shapeType)
         {
             if (SelectedPackage == null) return;
 
@@ -650,15 +515,21 @@ namespace PCBPlotter.ViewModels
                 ? SelectedPackage.Pins.Max(p => p.Number) + 1
                 : 1;
 
+            PinShape shape = PinShape.Rectangle;
+            if (shapeType == "Round") shape = PinShape.Round;
+            else if (shapeType == "Oblong") shape = PinShape.Oblong;
+
             SelectedPackage.Pins.Add(new Pin
             {
                 Number = nextPinNumber,
                 X = 0,
                 Y = 0,
                 Width = 0.3,
-                Height = 0.3
+                Height = 0.3,
+                Shape = shape
             });
 
+            OnPropertyChanged("PinCount");
             Publish(new PackageModifiedEvent { Package = SelectedPackage });
         }
 
@@ -715,100 +586,394 @@ namespace PCBPlotter.ViewModels
             EditLength = bounds.Height;
         }
 
-        private void ExecuteSave()
+        private void ExecuteMirrorX()
         {
-            if (ShowComponentsMode && SelectedComponent != null)
-            {
-                // Save component
-                SelectedComponent.PartNumber = EditComponentPartNumber;
-                SelectedComponent.Manufacturer = EditComponentManufacturer;
-                SelectedComponent.Value = EditComponentValue;
-                SelectedComponent.Description = EditComponentDescription;
-                SelectedComponent.Package = EditComponentPackage;
-                SelectedComponent.FeederSlot = EditFeederSlot;
-                SelectedComponent.TapeWidth = EditTapeWidth;
-                SelectedComponent.TapePitch = EditTapePitch;
+            if (SelectedPackage == null) return;
 
-                Publish(new StatusMessageEvent { Message = "Component saved" });
-            }
-            else if (ShowPackagesMode && SelectedPackage != null)
+            foreach (var graphic in SelectedPackage.Graphics)
             {
-                ExecuteSavePackage();
+                graphic.X = -graphic.X;
+                if (graphic.Points != null)
+                {
+                    for (int i = 0; i < graphic.Points.Count; i++)
+                    {
+                        graphic.Points[i] = new System.Windows.Point(
+                            -graphic.Points[i].X, graphic.Points[i].Y);
+                    }
+                }
             }
+
+            foreach (var pin in SelectedPackage.Pins)
+            {
+                pin.X = -pin.X;
+            }
+
+            Publish(new PackageModifiedEvent { Package = SelectedPackage });
         }
 
-        private void ExecuteNewComponent()
+        private void ExecuteMirrorY()
+        {
+            if (SelectedPackage == null) return;
+
+            foreach (var graphic in SelectedPackage.Graphics)
+            {
+                graphic.Y = -graphic.Y;
+                if (graphic.Points != null)
+                {
+                    for (int i = 0; i < graphic.Points.Count; i++)
+                    {
+                        graphic.Points[i] = new System.Windows.Point(
+                            graphic.Points[i].X, -graphic.Points[i].Y);
+                    }
+                }
+            }
+
+            foreach (var pin in SelectedPackage.Pins)
+            {
+                pin.Y = -pin.Y;
+            }
+
+            Publish(new PackageModifiedEvent { Package = SelectedPackage });
+        }
+
+        #region Quick Create Commands
+
+        private void ExecuteCreateChip()
         {
             if (Project == null) return;
 
-            var component = new Component
+            // Create a standard 2-pin chip (0603 size by default: 1.6mm x 0.8mm)
+            var package = new Package("CHIP_0603")
             {
-                PartNumber = string.Format("PART{0:D4}", Project.Components.Count + 1)
+                Width = 1.6,
+                Length = 0.8,
+                Height = 0.45,
+                PartClass = PartClass.Chip,
+                HasPolarity = false
             };
 
-            Project.Components.Add(component);
-            ComponentsView?.Refresh();
-            SelectedComponent = component;
-            OnPropertyChanged("ComponentCount");
-            Publish(new ComponentAddedEvent { Component = component });
-        }
-
-        private void ExecuteDeleteComponent()
-        {
-            if (Project == null || SelectedComponent == null) return;
-
-            // Check if component is in use
-            var inUse = Project.Placements.Any(p => p.Component == SelectedComponent);
-            if (inUse)
+            // Add body outline
+            package.Graphics.Add(new PackageGraphic
             {
-                Publish(new StatusMessageEvent
-                {
-                    Message = "Cannot delete component: it is in use by placements",
-                    Type = StatusMessageType.Warning
-                });
-                return;
-            }
+                ShapeType = GraphicShapeType.Rectangle,
+                X = -0.8,
+                Y = -0.4,
+                Width = 1.6,
+                Height = 0.8,
+                IsFilled = false,
+                StrokeThickness = 0.05
+            });
 
-            var component = SelectedComponent;
-            Project.Components.Remove(component);
-            SelectedComponent = null;
-            ComponentsView?.Refresh();
-            OnPropertyChanged("ComponentCount");
-            Publish(new ComponentRemovedEvent { Component = component });
+            // Add pins
+            package.Pins.Add(new Pin { Number = 1, X = -0.7, Y = 0, Width = 0.4, Height = 0.6, Shape = PinShape.Rectangle });
+            package.Pins.Add(new Pin { Number = 2, X = 0.7, Y = 0, Width = 0.4, Height = 0.6, Shape = PinShape.Rectangle });
+
+            Project.Packages.Add(package);
+            SelectedPackage = package;
+            Publish(new PackageAddedEvent { Package = package });
+            OnPropertyChanged("PackageCount");
         }
 
-        private void ExecuteAutoAssignFeeders()
+        private void ExecuteCreateSOT23()
         {
             if (Project == null) return;
 
-            int slot = 1;
-            var sortedComponents = Project.Components
-                .OrderBy(c => c.Package?.Width ?? 0)
-                .ThenBy(c => c.PartNumber);
-
-            foreach (var component in sortedComponents)
+            // Create SOT23-3 package
+            var package = new Package("SOT23-3")
             {
-                component.FeederSlot = slot.ToString();
-                slot++;
+                Width = 2.9,
+                Length = 1.3,
+                Height = 1.0,
+                PartClass = PartClass.Discrete,
+                HasPolarity = true
+            };
+
+            // Add body outline
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Rectangle,
+                X = -1.45,
+                Y = -0.65,
+                Width = 2.9,
+                Height = 1.3,
+                IsFilled = false,
+                StrokeThickness = 0.05
+            });
+
+            // Add polarity marker (pin 1 indicator)
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Circle,
+                X = -1.1,
+                Y = -0.3,
+                Width = 0.2,
+                Height = 0.2,
+                IsFilled = true
+            });
+
+            // Add pins (SOT23-3 layout)
+            package.Pins.Add(new Pin { Number = 1, X = -0.95, Y = -1.1, Width = 0.6, Height = 0.7, Shape = PinShape.Rectangle });
+            package.Pins.Add(new Pin { Number = 2, X = 0.95, Y = -1.1, Width = 0.6, Height = 0.7, Shape = PinShape.Rectangle });
+            package.Pins.Add(new Pin { Number = 3, X = 0, Y = 1.1, Width = 0.6, Height = 0.7, Shape = PinShape.Rectangle });
+
+            Project.Packages.Add(package);
+            SelectedPackage = package;
+            Publish(new PackageAddedEvent { Package = package });
+            OnPropertyChanged("PackageCount");
+        }
+
+        private void ExecuteCreateSOIC()
+        {
+            if (Project == null) return;
+
+            // Create SOIC-8 package
+            var package = new Package("SOIC-8")
+            {
+                Width = 5.0,
+                Length = 4.0,
+                Height = 1.75,
+                PartClass = PartClass.IC,
+                HasPolarity = true
+            };
+
+            double pitch = 1.27;
+            double pinWidth = 0.5;
+            double pinHeight = 1.0;
+            double bodyWidth = 3.9;
+            double pinSpan = 5.8;
+
+            // Add body outline
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Rectangle,
+                X = -bodyWidth / 2,
+                Y = -2.0,
+                Width = bodyWidth,
+                Height = 4.0,
+                IsFilled = false,
+                StrokeThickness = 0.1
+            });
+
+            // Add pin 1 marker
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Circle,
+                X = -1.5,
+                Y = -1.5,
+                Width = 0.3,
+                Height = 0.3,
+                IsFilled = true
+            });
+
+            // Add pins (4 on each side)
+            for (int i = 0; i < 4; i++)
+            {
+                double y = -1.905 + i * pitch;
+                // Left side (pins 1-4)
+                package.Pins.Add(new Pin
+                {
+                    Number = i + 1,
+                    X = -pinSpan / 2,
+                    Y = y,
+                    Width = pinHeight,
+                    Height = pinWidth,
+                    Shape = PinShape.Rectangle
+                });
+                // Right side (pins 8-5)
+                package.Pins.Add(new Pin
+                {
+                    Number = 8 - i,
+                    X = pinSpan / 2,
+                    Y = y,
+                    Width = pinHeight,
+                    Height = pinWidth,
+                    Shape = PinShape.Rectangle
+                });
             }
 
-            ComponentsView?.Refresh();
-            Publish(new StatusMessageEvent
-            {
-                Message = string.Format("Assigned {0} feeder slots", Project.Components.Count)
-            });
+            Project.Packages.Add(package);
+            SelectedPackage = package;
+            Publish(new PackageAddedEvent { Package = package });
+            OnPropertyChanged("PackageCount");
         }
 
-        private void ExecuteFocusComponentPlacement()
+        private void ExecuteCreateQFP()
         {
-            if (SelectedComponentPlacement == null) return;
+            if (Project == null) return;
 
-            Publish(new FocusPlacementEvent
+            // Create TQFP-32 package (7x7mm body, 0.8mm pitch)
+            var package = new Package("TQFP-32")
             {
-                Placement = SelectedComponentPlacement,
-                CenterView = true
+                Width = 9.0,
+                Length = 9.0,
+                Height = 1.0,
+                PartClass = PartClass.IC,
+                HasPolarity = true
+            };
+
+            double bodySize = 7.0;
+            double pitch = 0.8;
+            double pinWidth = 0.37;
+            double pinHeight = 1.0;
+            int pinsPerSide = 8;
+
+            // Add body outline
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Rectangle,
+                X = -bodySize / 2,
+                Y = -bodySize / 2,
+                Width = bodySize,
+                Height = bodySize,
+                IsFilled = false,
+                StrokeThickness = 0.1
             });
+
+            // Add pin 1 marker
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Circle,
+                X = -bodySize / 2 + 0.5,
+                Y = -bodySize / 2 + 0.5,
+                Width = 0.4,
+                Height = 0.4,
+                IsFilled = true
+            });
+
+            double startOffset = -(pinsPerSide - 1) * pitch / 2;
+            int pinNum = 1;
+
+            // Bottom side (pins 1-8)
+            for (int i = 0; i < pinsPerSide; i++)
+            {
+                package.Pins.Add(new Pin
+                {
+                    Number = pinNum++,
+                    X = startOffset + i * pitch,
+                    Y = -4.5,
+                    Width = pinWidth,
+                    Height = pinHeight,
+                    Shape = PinShape.Rectangle
+                });
+            }
+
+            // Right side (pins 9-16)
+            for (int i = 0; i < pinsPerSide; i++)
+            {
+                package.Pins.Add(new Pin
+                {
+                    Number = pinNum++,
+                    X = 4.5,
+                    Y = startOffset + i * pitch,
+                    Width = pinHeight,
+                    Height = pinWidth,
+                    Shape = PinShape.Rectangle
+                });
+            }
+
+            // Top side (pins 17-24)
+            for (int i = 0; i < pinsPerSide; i++)
+            {
+                package.Pins.Add(new Pin
+                {
+                    Number = pinNum++,
+                    X = -startOffset - i * pitch,
+                    Y = 4.5,
+                    Width = pinWidth,
+                    Height = pinHeight,
+                    Shape = PinShape.Rectangle
+                });
+            }
+
+            // Left side (pins 25-32)
+            for (int i = 0; i < pinsPerSide; i++)
+            {
+                package.Pins.Add(new Pin
+                {
+                    Number = pinNum++,
+                    X = -4.5,
+                    Y = -startOffset - i * pitch,
+                    Width = pinHeight,
+                    Height = pinWidth,
+                    Shape = PinShape.Rectangle
+                });
+            }
+
+            Project.Packages.Add(package);
+            SelectedPackage = package;
+            Publish(new PackageAddedEvent { Package = package });
+            OnPropertyChanged("PackageCount");
         }
+
+        private void ExecuteCreateBGA()
+        {
+            if (Project == null) return;
+
+            // Create BGA-49 (7x7 grid, 0.8mm pitch)
+            var package = new Package("BGA-49")
+            {
+                Width = 6.0,
+                Length = 6.0,
+                Height = 1.2,
+                PartClass = PartClass.IC,
+                HasPolarity = true
+            };
+
+            double pitch = 0.8;
+            double ballDia = 0.4;
+            int gridSize = 7;
+
+            // Add body outline
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Rectangle,
+                X = -3.0,
+                Y = -3.0,
+                Width = 6.0,
+                Height = 6.0,
+                IsFilled = false,
+                StrokeThickness = 0.1
+            });
+
+            // Add pin 1 marker (A1 corner)
+            package.Graphics.Add(new PackageGraphic
+            {
+                ShapeType = GraphicShapeType.Circle,
+                X = -2.5,
+                Y = -2.5,
+                Width = 0.3,
+                Height = 0.3,
+                IsFilled = true
+            });
+
+            double startOffset = -(gridSize - 1) * pitch / 2;
+            string[] rows = { "A", "B", "C", "D", "E", "F", "G" };
+            int pinNum = 1;
+
+            for (int row = 0; row < gridSize; row++)
+            {
+                for (int col = 0; col < gridSize; col++)
+                {
+                    package.Pins.Add(new Pin
+                    {
+                        Number = pinNum++,
+                        Name = rows[row] + (col + 1).ToString(),
+                        X = startOffset + col * pitch,
+                        Y = startOffset + row * pitch,
+                        Width = ballDia,
+                        Height = ballDia,
+                        Shape = PinShape.Round
+                    });
+                }
+            }
+
+            Project.Packages.Add(package);
+            SelectedPackage = package;
+            Publish(new PackageAddedEvent { Package = package });
+            OnPropertyChanged("PackageCount");
+        }
+
+        #endregion
 
         #endregion
 

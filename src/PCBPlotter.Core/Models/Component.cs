@@ -17,9 +17,6 @@ namespace PCBPlotter.Core.Models
         private Package _defaultPackage;
         private ComponentStatus _status = ComponentStatus.Valid;
         private List<string> _referenceDesignators;
-        private string _feederSlot;
-        private string _tapeWidth;
-        private string _tapePitch;
 
         /// <summary>
         /// Unique identifier
@@ -112,42 +109,6 @@ namespace PCBPlotter.Core.Models
         public int PlacementCount
         {
             get { return _referenceDesignators != null ? _referenceDesignators.Count : 0; }
-        }
-
-        /// <summary>
-        /// Alias for DefaultPackage (used in UI bindings)
-        /// </summary>
-        public Package Package
-        {
-            get { return _defaultPackage; }
-            set { DefaultPackage = value; }
-        }
-
-        /// <summary>
-        /// Feeder slot assignment for pick and place machine
-        /// </summary>
-        public string FeederSlot
-        {
-            get { return _feederSlot; }
-            set { SetProperty(ref _feederSlot, value); }
-        }
-
-        /// <summary>
-        /// Tape width for component packaging (8mm, 12mm, 16mm, etc.)
-        /// </summary>
-        public string TapeWidth
-        {
-            get { return _tapeWidth; }
-            set { SetProperty(ref _tapeWidth, value); }
-        }
-
-        /// <summary>
-        /// Tape pitch (component spacing in tape)
-        /// </summary>
-        public string TapePitch
-        {
-            get { return _tapePitch; }
-            set { SetProperty(ref _tapePitch, value); }
         }
 
         public Component()

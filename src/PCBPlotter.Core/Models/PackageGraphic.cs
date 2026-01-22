@@ -24,6 +24,8 @@ namespace PCBPlotter.Core.Models
         private List<Point> _points;
         private string _text;
         private double _textSize = 0.5;
+        private double _startAngle;
+        private double _sweepAngle = 90;
 
         // Colors stored as ARGB for serialization
         private uint _fillColor = 0xFF4A4A4A;  // Dark gray
@@ -117,6 +119,24 @@ namespace PCBPlotter.Core.Models
         {
             get { return _textSize; }
             set { SetProperty(ref _textSize, value); }
+        }
+
+        /// <summary>
+        /// Start angle for arc shapes (in degrees)
+        /// </summary>
+        public double StartAngle
+        {
+            get { return _startAngle; }
+            set { SetProperty(ref _startAngle, value); }
+        }
+
+        /// <summary>
+        /// Sweep angle for arc shapes (in degrees)
+        /// </summary>
+        public double SweepAngle
+        {
+            get { return _sweepAngle; }
+            set { SetProperty(ref _sweepAngle, value); }
         }
 
         public uint FillColorArgb
@@ -221,6 +241,8 @@ namespace PCBPlotter.Core.Models
                 StrokeThickness = this.StrokeThickness,
                 Text = this.Text,
                 TextSize = this.TextSize,
+                StartAngle = this.StartAngle,
+                SweepAngle = this.SweepAngle,
                 FillColorArgb = this.FillColorArgb,
                 StrokeColorArgb = this.StrokeColorArgb
             };

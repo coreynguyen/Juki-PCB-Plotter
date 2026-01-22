@@ -2,21 +2,16 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="clr-namespace:PCBPlotter.Controls"
-             xmlns:converters="clr-namespace:PCBPlotter.Converters"
              Background="{StaticResource BackgroundMediumBrush}">
-
-    <UserControl.Resources>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
-    </UserControl.Resources>
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" MinWidth="300"/>
+            <ColumnDefinition Width="250"/>
             <ColumnDefinition Width="Auto"/>
-            <ColumnDefinition Width="350" MinWidth="250"/>
+            <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Components/Packages List (Left Panel) -->
+        <!-- Package List -->
         <Grid Grid.Column="0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -25,285 +20,210 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- Tab Header for switching between Components and Packages -->
-            <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
-                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
-                    Padding="8">
-                <StackPanel Orientation="Horizontal">
-                    <RadioButton Content="Components" GroupName="EditorMode"
-                                 IsChecked="{Binding ShowComponentsMode}" Margin="0,0,16,0"/>
-                    <RadioButton Content="Packages" GroupName="EditorMode"
-                                 IsChecked="{Binding ShowPackagesMode}"/>
-                </StackPanel>
-            </Border>
+            <TextBlock Grid.Row="0" Text="Packages" FontWeight="SemiBold" Margin="8"/>
 
-            <!-- Filter Bar -->
-            <Border Grid.Row="1" Background="{StaticResource BackgroundLightBrush}"
-                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
-                    Padding="8">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Filter:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox Grid.Column="1" Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"/>
-                    <Button Grid.Column="2" Content="X" Width="22" Height="22" Margin="4,0,0,0"
-                            Command="{Binding ClearFilterCommand}" ToolTip="Clear filter"/>
-                </Grid>
-            </Border>
+            <!-- Filter -->
+            <Grid Grid.Row="1" Margin="8,0,8,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0" Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"/>
+                <Button Grid.Column="1" Content="X" Width="22" Height="22" Margin="4,0,0,0"
+                        Command="{Binding ClearFilterCommand}" ToolTip="Clear filter"/>
+            </Grid>
 
-            <!-- Components DataGrid (visible when ShowComponentsMode) -->
-            <DataGrid Grid.Row="2" x:Name="ComponentsGrid"
-                      ItemsSource="{Binding ComponentsView}"
-                      SelectedItem="{Binding SelectedComponent}"
-                      AutoGenerateColumns="False"
-                      CanUserAddRows="False"
-                      CanUserDeleteRows="False"
-                      SelectionMode="Extended"
-                      GridLinesVisibility="Horizontal"
-                      Visibility="{Binding ShowComponentsMode, Converter={StaticResource BoolToVisibilityConverter}}">
-                <DataGrid.Columns>
-                    <DataGridTextColumn Header="Part Number" Binding="{Binding PartNumber}" Width="150"/>
-                    <DataGridTextColumn Header="Manufacturer" Binding="{Binding Manufacturer}" Width="120"/>
-                    <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="80"/>
-                    <DataGridTextColumn Header="Description" Binding="{Binding Description}" Width="*"/>
-                    <DataGridTextColumn Header="Package" Binding="{Binding Package.Name}" Width="100" IsReadOnly="True"/>
-                    <DataGridTextColumn Header="Uses" Binding="{Binding PlacementCount}" Width="50" IsReadOnly="True"/>
-                    <DataGridTextColumn Header="Feeder" Binding="{Binding FeederSlot}" Width="60"/>
-                </DataGrid.Columns>
-            </DataGrid>
-
-            <!-- Packages ListBox (visible when ShowPackagesMode) -->
+            <!-- Package List -->
             <ListBox Grid.Row="2"
                      ItemsSource="{Binding PackagesView}"
                      SelectedItem="{Binding SelectedPackage}"
                      DisplayMemberPath="Name"
-                     Visibility="{Binding ShowPackagesMode, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                     Margin="8,0"/>
 
-            <!-- Bottom Action Bar -->
-            <Border Grid.Row="3" Background="{StaticResource BackgroundLightBrush}"
-                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,1,0,0"
-                    Padding="8">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-
-                    <!-- Stats -->
-                    <TextBlock Grid.Column="0" VerticalAlignment="Center">
-                        <Run Text="Components: "/>
-                        <Run Text="{Binding ComponentCount, Mode=OneWay}" FontWeight="SemiBold"/>
-                        <Run Text="  |  Packages: "/>
-                        <Run Text="{Binding PackageCount, Mode=OneWay}" FontWeight="SemiBold"/>
-                    </TextBlock>
-
-                    <!-- Actions (Context-sensitive) -->
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <!-- Component actions -->
-                        <Button Content="New Component" Command="{Binding NewComponentCommand}"
-                                Visibility="{Binding ShowComponentsMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                                Padding="8,4" Margin="0,0,4,0"/>
-                        <Button Content="Auto-Assign Feeders" Command="{Binding AutoAssignFeedersCommand}"
-                                Visibility="{Binding ShowComponentsMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                                Padding="8,4" Margin="0,0,4,0" ToolTip="Auto-assign feeder slots based on package size"/>
-                        <Button Content="Delete" Command="{Binding DeleteComponentCommand}"
-                                Visibility="{Binding ShowComponentsMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                                Padding="8,4" Background="{StaticResource ErrorBrush}"/>
-
-                        <!-- Package actions -->
-                        <Button Content="New" Command="{Binding NewPackageCommand}"
-                                Visibility="{Binding ShowPackagesMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                                Padding="8,4" Margin="0,0,4,0"/>
-                        <Button Content="Duplicate" Command="{Binding DuplicatePackageCommand}"
-                                Visibility="{Binding ShowPackagesMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                                Padding="8,4" Margin="0,0,4,0"/>
-                        <Button Content="Delete" Command="{Binding DeletePackageCommand}"
-                                Visibility="{Binding ShowPackagesMode, Converter={StaticResource BoolToVisibilityConverter}}"
-                                Padding="8,4" Background="{StaticResource ErrorBrush}"/>
-                    </StackPanel>
-                </Grid>
-            </Border>
+            <!-- List Actions -->
+            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="8">
+                <Button Content="New" Command="{Binding NewPackageCommand}" Padding="8,4" Margin="0,0,4,0"/>
+                <Button Content="Duplicate" Command="{Binding DuplicatePackageCommand}" Padding="8,4" Margin="0,0,4,0"/>
+                <Button Content="Delete" Command="{Binding DeletePackageCommand}" Padding="8,4"
+                        Background="{StaticResource ErrorBrush}"/>
+            </StackPanel>
         </Grid>
 
         <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch"
                       Background="{StaticResource BorderDarkBrush}"/>
 
-        <!-- Right Panel: Properties Editor -->
+        <!-- Package Editor -->
         <Grid Grid.Column="2">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- Component Properties Panel (when component selected) -->
-            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto"
-                          Visibility="{Binding ShowComponentsMode, Converter={StaticResource BoolToVisibilityConverter}}">
-                <StackPanel Margin="8">
-                    <TextBlock Text="Component Properties" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,12"/>
-
-                    <!-- Part Number -->
-                    <TextBlock Text="Part Number:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding EditComponentPartNumber, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,12"/>
-
-                    <!-- Manufacturer -->
-                    <TextBlock Text="Manufacturer:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding EditComponentManufacturer, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,12"/>
-
-                    <!-- Value -->
-                    <TextBlock Text="Value:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding EditComponentValue, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,12"/>
-
-                    <!-- Description -->
-                    <TextBlock Text="Description:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding EditComponentDescription, UpdateSourceTrigger=PropertyChanged}"
-                             TextWrapping="Wrap" AcceptsReturn="True" Height="60" Margin="0,0,0,12"/>
-
-                    <Separator Margin="0,8"/>
-
-                    <!-- Package Assignment -->
-                    <TextBlock Text="Package Assignment" FontWeight="SemiBold" Margin="0,8,0,8"/>
-                    <TextBlock Text="Package:" Margin="0,0,0,4"/>
-                    <ComboBox ItemsSource="{Binding AvailablePackages}"
-                              SelectedItem="{Binding EditComponentPackage}"
-                              DisplayMemberPath="Name" Margin="0,0,0,12"/>
-
-                    <Separator Margin="0,8"/>
-
-                    <!-- Feeder Assignment -->
-                    <TextBlock Text="Feeder Assignment" FontWeight="SemiBold" Margin="0,8,0,8"/>
-
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Feeder Slot:" VerticalAlignment="Center" Margin="0,0,8,4"/>
-                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding EditFeederSlot, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4"/>
-
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Tape Width:" VerticalAlignment="Center" Margin="0,0,8,4"/>
-                        <ComboBox Grid.Row="1" Grid.Column="1" SelectedValue="{Binding EditTapeWidth}" Margin="0,0,0,4">
-                            <ComboBoxItem Content="8mm"/>
-                            <ComboBoxItem Content="12mm"/>
-                            <ComboBoxItem Content="16mm"/>
-                            <ComboBoxItem Content="24mm"/>
-                            <ComboBoxItem Content="32mm"/>
-                        </ComboBox>
-
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Pitch:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <ComboBox Grid.Row="2" Grid.Column="1" SelectedValue="{Binding EditTapePitch}">
-                            <ComboBoxItem Content="2mm"/>
-                            <ComboBoxItem Content="4mm"/>
-                            <ComboBoxItem Content="8mm"/>
-                            <ComboBoxItem Content="12mm"/>
-                        </ComboBox>
-                    </Grid>
-
-                    <Separator Margin="0,8"/>
-
-                    <!-- Placements using this component -->
-                    <TextBlock Text="Placements Using This Component" FontWeight="SemiBold" Margin="0,8,0,8"/>
-                    <ListBox ItemsSource="{Binding ComponentPlacements}" Height="120"
-                             DisplayMemberPath="Reference"
-                             SelectedItem="{Binding SelectedComponentPlacement}"/>
-                    <Button Content="Focus in Design" Command="{Binding FocusComponentPlacementCommand}"
-                            Padding="8,4" Margin="0,8,0,0" HorizontalAlignment="Left"/>
-                </StackPanel>
-            </ScrollViewer>
-
-            <!-- Package Editor Panel (when package selected) -->
-            <Grid Grid.Row="0"
-                  Visibility="{Binding ShowPackagesMode, Converter={StaticResource BoolToVisibilityConverter}}">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-
-                <!-- Package Properties -->
-                <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
-                        BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
-                        Padding="8">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="50"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="50"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="50"/>
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Grid.Column="0" Text="Name:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <TextBox Grid.Column="1" Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}"/>
-
-                        <TextBlock Grid.Column="2" Text="W:" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                        <TextBox Grid.Column="3" Text="{Binding EditWidth, UpdateSourceTrigger=PropertyChanged}"/>
-
-                        <TextBlock Grid.Column="4" Text="L:" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                        <TextBox Grid.Column="5" Text="{Binding EditLength, UpdateSourceTrigger=PropertyChanged}"/>
-
-                        <TextBlock Grid.Column="6" Text="H:" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                        <TextBox Grid.Column="7" Text="{Binding EditHeight, UpdateSourceTrigger=PropertyChanged}"/>
-                    </Grid>
-                </Border>
-
-                <!-- Package Graphics Canvas -->
-                <Grid Grid.Row="1">
+            <!-- Properties Panel -->
+            <Border Grid.Row="0" Background="{StaticResource BackgroundLightBrush}"
+                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
+                    Padding="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="70"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="70"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="70"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Row 0: Name and dimensions -->
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Name:" VerticalAlignment="Center" Margin="0,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4"/>
+
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Width:" VerticalAlignment="Center" Margin="16,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding EditWidth, StringFormat=F3}" Margin="0,0,0,4"/>
+
+                    <TextBlock Grid.Row="0" Grid.Column="4" Text="Length:" VerticalAlignment="Center" Margin="8,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="5" Text="{Binding EditLength, StringFormat=F3}" Margin="0,0,0,4"/>
+
+                    <TextBlock Grid.Row="0" Grid.Column="6" Text="Height:" VerticalAlignment="Center" Margin="8,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="7" Text="{Binding EditHeight, StringFormat=F3}" Margin="0,0,0,4"/>
+
+                    <!-- Row 1: Part class, polarity, rotation -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Class:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox Grid.Row="1" Grid.Column="1" SelectedValue="{Binding EditPartClass}"
+                              SelectedValuePath="Tag">
+                        <ComboBoxItem Content="Chip" Tag="Chip"/>
+                        <ComboBoxItem Content="IC" Tag="IC"/>
+                        <ComboBoxItem Content="Connector" Tag="Connector"/>
+                        <ComboBoxItem Content="Discrete" Tag="Discrete"/>
+                        <ComboBoxItem Content="Mechanical" Tag="Mechanical"/>
+                        <ComboBoxItem Content="Other" Tag="Other"/>
+                    </ComboBox>
+
+                    <CheckBox Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Content="Has Polarity"
+                              IsChecked="{Binding EditHasPolarity}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="4" Text="Default Rot:" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                    <TextBox Grid.Row="1" Grid.Column="5" Text="{Binding EditDefaultRotation, StringFormat=F1}"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="6" Text="Pins:" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                    <TextBlock Grid.Row="1" Grid.Column="7" Text="{Binding PinCount}" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <!-- Graphics Canvas -->
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Canvas for editing package graphics -->
+                <controls:DesignCanvas Grid.Column="0" x:Name="PackageCanvas"
+                                       GridSpacing="0.1"
+                                       ShowGrid="True"/>
+
+                <!-- Drawing Tools -->
+                <Border Grid.Column="1" Background="{StaticResource BackgroundLightBrush}"
+                        BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1,0,0,0"
+                        Width="140" Padding="8">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="Shape Tools" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Rectangle" Command="{Binding AddRectangleCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add rectangular outline"/>
+                            <Button Content="Circle" Command="{Binding AddCircleCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add circular outline"/>
+                            <Button Content="Line" Command="{Binding AddLineCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add line segment"/>
+                            <Button Content="Polygon" Command="{Binding AddPolygonCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add polygon outline"/>
+                            <Button Content="Arc" Command="{Binding AddArcCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add arc segment"/>
+
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="Pin Tools" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Add Pin (Rect)" Command="{Binding AddPinCommand}"
+                                    CommandParameter="Rectangle" Margin="0,0,0,4"
+                                    ToolTip="Add rectangular pad/pin"/>
+                            <Button Content="Add Pin (Round)" Command="{Binding AddPinCommand}"
+                                    CommandParameter="Round" Margin="0,0,0,4"
+                                    ToolTip="Add round pad/pin"/>
+                            <Button Content="Add Pin (Oblong)" Command="{Binding AddPinCommand}"
+                                    CommandParameter="Oblong" Margin="0,0,0,4"
+                                    ToolTip="Add oblong pad/pin"/>
+
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="Quick Create" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Chip (2-pin)" Command="{Binding CreateChipCommand}" Margin="0,0,0,4"
+                                    ToolTip="Create 2-pin chip component (0402, 0603, etc.)"/>
+                            <Button Content="SOT23" Command="{Binding CreateSOT23Command}" Margin="0,0,0,4"
+                                    ToolTip="Create SOT23 3-pin transistor"/>
+                            <Button Content="SOIC" Command="{Binding CreateSOICCommand}" Margin="0,0,0,4"
+                                    ToolTip="Create SOIC package"/>
+                            <Button Content="QFP" Command="{Binding CreateQFPCommand}" Margin="0,0,0,4"
+                                    ToolTip="Create QFP package"/>
+                            <Button Content="BGA" Command="{Binding CreateBGACommand}" Margin="0,0,0,4"
+                                    ToolTip="Create BGA package"/>
+
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="Utilities" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Center Origin" Command="{Binding CenterOriginCommand}" Margin="0,0,0,4"
+                                    ToolTip="Move origin to center of component"/>
+                            <Button Content="Auto Size" Command="{Binding AutoSizeCommand}" Margin="0,0,0,4"
+                                    ToolTip="Calculate dimensions from graphics"/>
+                            <Button Content="Mirror X" Command="{Binding MirrorXCommand}" Margin="0,0,0,4"
+                                    ToolTip="Mirror graphics horizontally"/>
+                            <Button Content="Mirror Y" Command="{Binding MirrorYCommand}" Margin="0,0,0,4"
+                                    ToolTip="Mirror graphics vertically"/>
+
+                            <Separator Margin="0,8"/>
+                            <Button Content="Delete Selected" Command="{Binding DeleteGraphicCommand}"
+                                    Background="{StaticResource ErrorBrush}"
+                                    ToolTip="Delete selected graphic element"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+
+            <!-- Bottom Action Bar -->
+            <Border Grid.Row="2" Background="{StaticResource BackgroundLightBrush}"
+                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,1,0,0"
+                    Padding="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <controls:DesignCanvas Grid.Column="0" x:Name="PackageCanvas"
-                                           GridSpacing="0.1"
-                                           ShowGrid="True"/>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <Button Content="Import IPC-D-356..." Command="{Binding ImportIPCCommand}"
+                                Padding="8,4" Margin="0,0,4,0" ToolTip="Import device outlines from IPC-D-356 file"/>
+                        <Button Content="Import from Library..." Command="{Binding ImportFromLibraryCommand}"
+                                Padding="8,4" Margin="0,0,4,0"/>
+                        <Button Content="Export to Library..." Command="{Binding ExportToLibraryCommand}"
+                                Padding="8,4"/>
+                    </StackPanel>
 
-                    <!-- Drawing Tools -->
-                    <Border Grid.Column="1" Background="{StaticResource BackgroundLightBrush}"
-                            BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1,0,0,0"
-                            Width="100" Padding="8">
-                        <StackPanel>
-                            <TextBlock Text="Tools" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <Button Content="Rectangle" Command="{Binding AddRectangleCommand}" Margin="0,0,0,4"/>
-                            <Button Content="Circle" Command="{Binding AddCircleCommand}" Margin="0,0,0,4"/>
-                            <Button Content="Line" Command="{Binding AddLineCommand}" Margin="0,0,0,4"/>
-                            <Button Content="Add Pin" Command="{Binding AddPinCommand}" Margin="0,0,0,4"/>
-                            <Separator Margin="0,8"/>
-                            <CheckBox Content="Polarity" IsChecked="{Binding EditHasPolarity}" Margin="0,0,0,8"/>
-                            <Button Content="Center" Command="{Binding CenterOriginCommand}" Margin="0,0,0,4"/>
-                            <Button Content="Auto Size" Command="{Binding AutoSizeCommand}" Margin="0,0,0,4"/>
-                            <Separator Margin="0,8"/>
-                            <Button Content="Delete" Command="{Binding DeleteGraphicCommand}"
-                                    Background="{StaticResource ErrorBrush}"/>
-                        </StackPanel>
-                    </Border>
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <Run Text="Packages: "/>
+                        <Run Text="{Binding PackageCount, Mode=OneWay}" FontWeight="SemiBold"/>
+                    </TextBlock>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <Button Content="Cancel" Command="{Binding CancelEditCommand}"
+                                Padding="12,4" Margin="0,0,4,0"/>
+                        <Button Content="Save Package" Command="{Binding SavePackageCommand}"
+                                Padding="12,4" Background="{StaticResource AccentPrimaryBrush}"/>
+                    </StackPanel>
                 </Grid>
-            </Grid>
-
-            <!-- Save/Cancel Buttons -->
-            <Border Grid.Row="1" Background="{StaticResource BackgroundLightBrush}"
-                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,1,0,0"
-                    Padding="8">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="Import Library" Command="{Binding ImportFromLibraryCommand}"
-                            Padding="8,4" Margin="0,0,4,0"/>
-                    <Button Content="Export Library" Command="{Binding ExportToLibraryCommand}"
-                            Padding="8,4" Margin="0,0,16,0"/>
-                    <Button Content="Cancel" Command="{Binding CancelEditCommand}"
-                            Padding="12,4" Margin="0,0,4,0"/>
-                    <Button Content="Save" Command="{Binding SaveCommand}"
-                            Padding="12,4" Background="{StaticResource AccentPrimaryBrush}"/>
-                </StackPanel>
             </Border>
         </Grid>
     </Grid>
