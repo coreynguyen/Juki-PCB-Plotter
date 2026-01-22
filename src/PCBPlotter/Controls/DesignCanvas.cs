@@ -698,9 +698,10 @@ namespace PCBPlotter.Controls
         private Rect _worldBounds = Rect.Empty;
 
         // Render resolution (pixels per world unit, e.g., mm)
-        private const double WORLD_PIXELS_PER_UNIT = 100.0; // 100 pixels per mm = high res
-        private const int MAX_LAYER_BITMAP_SIZE = 8192;
-        private const int MIN_LAYER_BITMAP_SIZE = 256;
+        // Reduced to avoid GPU memory issues - 50 pixels/mm is still good quality
+        private const double WORLD_PIXELS_PER_UNIT = 50.0;
+        private const int MAX_LAYER_BITMAP_SIZE = 4096; // Reduced from 8192 for GPU compatibility
+        private const int MIN_LAYER_BITMAP_SIZE = 64;
 
         // Active layer for selection (still vector-based)
         private GerberLayer _activeGerberLayer;
@@ -949,64 +950,88 @@ namespace PCBPlotter.Controls
         /// </summary>
         private void RasterizeLayerToWorldBitmap(GerberLayer layer)
         {
-            if (layer.Primitives == null || layer.Primitives.Count == 0)
-                return;
-
-            Rect bounds = layer.Bounds;
-            if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0)
-                return;
-
-            // Calculate bitmap size based on world bounds and resolution
-            // Add small margin to avoid edge clipping
-            bounds.Inflate(bounds.Width * 0.02, bounds.Height * 0.02);
-
-            double pixelsPerUnit = WORLD_PIXELS_PER_UNIT;
-            int width = (int)Math.Ceiling(bounds.Width * pixelsPerUnit);
-            int height = (int)Math.Ceiling(bounds.Height * pixelsPerUnit);
-
-            // Clamp to max size, adjust resolution if needed
-            if (width > MAX_LAYER_BITMAP_SIZE || height > MAX_LAYER_BITMAP_SIZE)
+            try
             {
-                double scale = Math.Min(
-                    (double)MAX_LAYER_BITMAP_SIZE / width,
-                    (double)MAX_LAYER_BITMAP_SIZE / height);
-                width = (int)(width * scale);
-                height = (int)(height * scale);
-                pixelsPerUnit *= scale;
+                if (layer.Primitives == null || layer.Primitives.Count == 0)
+                    return;
+
+                Rect bounds = layer.Bounds;
+                if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0)
+                    return;
+
+                // Validate bounds are reasonable
+                if (double.IsNaN(bounds.Width) || double.IsNaN(bounds.Height) ||
+                    double.IsInfinity(bounds.Width) || double.IsInfinity(bounds.Height))
+                {
+                    System.Diagnostics.Debug.WriteLine($"Layer '{layer.Name}' has invalid bounds");
+                    return;
+                }
+
+                // Calculate bitmap size based on world bounds and resolution
+                // Add small margin to avoid edge clipping
+                bounds.Inflate(bounds.Width * 0.02, bounds.Height * 0.02);
+
+                double pixelsPerUnit = WORLD_PIXELS_PER_UNIT;
+                int width = (int)Math.Ceiling(bounds.Width * pixelsPerUnit);
+                int height = (int)Math.Ceiling(bounds.Height * pixelsPerUnit);
+
+                // Validate calculated dimensions
+                if (width <= 0 || height <= 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Layer '{layer.Name}' calculated invalid dimensions: {width}x{height}");
+                    return;
+                }
+
+                // Clamp to max size, adjust resolution if needed
+                if (width > MAX_LAYER_BITMAP_SIZE || height > MAX_LAYER_BITMAP_SIZE)
+                {
+                    double scale = Math.Min(
+                        (double)MAX_LAYER_BITMAP_SIZE / width,
+                        (double)MAX_LAYER_BITMAP_SIZE / height);
+                    width = (int)(width * scale);
+                    height = (int)(height * scale);
+                    pixelsPerUnit *= scale;
+                }
+
+                width = Math.Max(MIN_LAYER_BITMAP_SIZE, Math.Min(width, MAX_LAYER_BITMAP_SIZE));
+                height = Math.Max(MIN_LAYER_BITMAP_SIZE, Math.Min(height, MAX_LAYER_BITMAP_SIZE));
+
+                // Create 1-bit storage
+                int bytesPerRow = (width + 7) / 8;
+                byte[] monoPixels = new byte[bytesPerRow * height];
+
+                // Rasterize all primitives to 1-bit bitmap
+                foreach (var prim in layer.Primitives)
+                {
+                    RasterizePrimitiveToMono(monoPixels, width, height, bytesPerRow, prim, bounds, pixelsPerUnit);
+                }
+
+                // Create the cached layer bitmap
+                var layerBitmap = new LayerWorldBitmap
+                {
+                    MonoPixels = monoPixels,
+                    MonoWidth = width,
+                    MonoHeight = height,
+                    WorldBounds = bounds,
+                    PixelsPerUnit = pixelsPerUnit,
+                    LayerColor = layer.Color,
+                    Opacity = layer.Opacity,
+                    IsDirty = false
+                };
+
+                // Convert 1-bit to colored BGRA bitmap
+                layerBitmap.Bitmap = CreateColoredBitmapFromMono(layerBitmap);
+
+                if (layerBitmap.Bitmap != null)
+                {
+                    _layerBitmaps[layer.Id] = layerBitmap;
+                    System.Diagnostics.Debug.WriteLine($"Rasterized layer '{layer.Name}': {width}x{height} pixels, {monoPixels.Length / 1024}KB (1-bit)");
+                }
             }
-
-            width = Math.Max(MIN_LAYER_BITMAP_SIZE, width);
-            height = Math.Max(MIN_LAYER_BITMAP_SIZE, height);
-
-            // Create 1-bit storage
-            int bytesPerRow = (width + 7) / 8;
-            byte[] monoPixels = new byte[bytesPerRow * height];
-
-            // Rasterize all primitives to 1-bit bitmap
-            foreach (var prim in layer.Primitives)
+            catch (Exception ex)
             {
-                RasterizePrimitiveToMono(monoPixels, width, height, bytesPerRow, prim, bounds, pixelsPerUnit);
+                System.Diagnostics.Debug.WriteLine($"Error rasterizing layer '{layer.Name}': {ex.Message}");
             }
-
-            // Create the cached layer bitmap
-            var layerBitmap = new LayerWorldBitmap
-            {
-                MonoPixels = monoPixels,
-                MonoWidth = width,
-                MonoHeight = height,
-                WorldBounds = bounds,
-                PixelsPerUnit = pixelsPerUnit,
-                LayerColor = layer.Color,
-                Opacity = layer.Opacity,
-                IsDirty = false
-            };
-
-            // Convert 1-bit to colored BGRA bitmap
-            layerBitmap.Bitmap = CreateColoredBitmapFromMono(layerBitmap);
-
-            _layerBitmaps[layer.Id] = layerBitmap;
-
-            System.Diagnostics.Debug.WriteLine($"Rasterized layer '{layer.Name}': {width}x{height} pixels, {monoPixels.Length / 1024}KB (1-bit)");
         }
 
         /// <summary>
@@ -1090,7 +1115,24 @@ namespace PCBPlotter.Controls
         {
             int width = layerBitmap.MonoWidth;
             int height = layerBitmap.MonoHeight;
-            var bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+
+            // Validate dimensions
+            if (width <= 0 || height <= 0 || width > MAX_LAYER_BITMAP_SIZE || height > MAX_LAYER_BITMAP_SIZE)
+            {
+                System.Diagnostics.Debug.WriteLine($"Invalid bitmap dimensions: {width}x{height}");
+                return null;
+            }
+
+            WriteableBitmap bitmap;
+            try
+            {
+                bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to create bitmap {width}x{height}: {ex.Message}");
+                return null;
+            }
 
             byte r = layerBitmap.LayerColor.R;
             byte g = layerBitmap.LayerColor.G;
@@ -1178,33 +1220,39 @@ namespace PCBPlotter.Controls
         /// </summary>
         private void RebuildDisplayComposite()
         {
-            if (_worldBounds.IsEmpty || _layerBitmaps.Count == 0)
+            try
             {
-                _displayComposite = null;
-                _compositeNeedsUpdate = false;
-                return;
-            }
-
-            // Find max resolution among all layers
-            int maxWidth = 0, maxHeight = 0;
-            foreach (var kvp in _layerBitmaps)
-            {
-                if (kvp.Value.Bitmap != null)
+                if (_worldBounds.IsEmpty || _layerBitmaps.Count == 0)
                 {
-                    maxWidth = Math.Max(maxWidth, kvp.Value.MonoWidth);
-                    maxHeight = Math.Max(maxHeight, kvp.Value.MonoHeight);
+                    _displayComposite = null;
+                    _compositeNeedsUpdate = false;
+                    return;
                 }
-            }
 
-            if (maxWidth <= 0 || maxHeight <= 0)
-            {
-                _displayComposite = null;
-                _compositeNeedsUpdate = false;
-                return;
-            }
+                // Find max resolution among all layers
+                int maxWidth = 0, maxHeight = 0;
+                foreach (var kvp in _layerBitmaps)
+                {
+                    if (kvp.Value.Bitmap != null)
+                    {
+                        maxWidth = Math.Max(maxWidth, kvp.Value.MonoWidth);
+                        maxHeight = Math.Max(maxHeight, kvp.Value.MonoHeight);
+                    }
+                }
 
-            // Create composite bitmap
-            _displayComposite = new WriteableBitmap(maxWidth, maxHeight, 96, 96, PixelFormats.Bgra32, null);
+                // Clamp to safe size
+                maxWidth = Math.Min(maxWidth, MAX_LAYER_BITMAP_SIZE);
+                maxHeight = Math.Min(maxHeight, MAX_LAYER_BITMAP_SIZE);
+
+                if (maxWidth <= 0 || maxHeight <= 0)
+                {
+                    _displayComposite = null;
+                    _compositeNeedsUpdate = false;
+                    return;
+                }
+
+                // Create composite bitmap
+                _displayComposite = new WriteableBitmap(maxWidth, maxHeight, 96, 96, PixelFormats.Bgra32, null);
 
             _displayComposite.Lock();
             try
@@ -1301,6 +1349,13 @@ namespace PCBPlotter.Controls
             }
 
             _compositeNeedsUpdate = false;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error rebuilding display composite: {ex.Message}");
+                _displayComposite = null;
+                _compositeNeedsUpdate = false;
+            }
         }
 
         /// <summary>
