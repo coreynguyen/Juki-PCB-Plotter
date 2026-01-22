@@ -63,10 +63,12 @@ namespace PCBPlotter.Views
             bool includeSkipped = IncludeSkippedCheckBox.IsChecked == true;
 
             int placementCount = _project.Placements
-                .Count(p => p.Side == side && (includeSkipped || p.EnableForExport));
+                .Count(p => p.Side == side && (includeSkipped ||
+                    (side == BoardSide.Top ? p.IsExportEnabledTop : p.IsExportEnabledBottom)));
 
             int packageCount = _project.Placements
-                .Where(p => p.Side == side && (includeSkipped || p.EnableForExport))
+                .Where(p => p.Side == side && (includeSkipped ||
+                    (side == BoardSide.Top ? p.IsExportEnabledTop : p.IsExportEnabledBottom)))
                 .Where(p => p.Package != null)
                 .Select(p => p.Package)
                 .Distinct()

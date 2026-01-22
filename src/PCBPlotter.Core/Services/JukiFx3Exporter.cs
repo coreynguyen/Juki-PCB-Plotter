@@ -57,7 +57,8 @@ namespace PCBPlotter.Core.Services
             // Filter placements by side
             var placements = project.Placements
                 .Where(p => p.Side == options.ExportSide)
-                .Where(p => options.IncludeSkippedPlacements || p.EnableForExport)
+                .Where(p => options.IncludeSkippedPlacements ||
+                    (options.ExportSide == BoardSide.Top ? p.IsExportEnabledTop : p.IsExportEnabledBottom))
                 .ToList();
 
             // Get unique packages used by placements
@@ -446,10 +447,10 @@ namespace PCBPlotter.Core.Services
                 return placement.Package.Name;
             }
 
-            // Fall back to part number
-            if (!string.IsNullOrEmpty(placement.PartNumber))
+            // Fall back to part number from component
+            if (placement.Component != null && !string.IsNullOrEmpty(placement.Component.PartNumber))
             {
-                return placement.PartNumber;
+                return placement.Component.PartNumber;
             }
 
             // Generate from reference
