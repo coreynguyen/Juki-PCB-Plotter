@@ -341,25 +341,81 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|CAD Files (*.xml)|*.xml|ODB++ (*.zip;*.tgz)|*.zip;*.tgz|All Files (*.*)|*.*",
+                Filter = "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|ODB++ Archives (*.tgz;*.tar;*.zip;*.odb)|*.tgz;*.tar;*.zip;*.odb|CAD Files (*.xml)|*.xml|All Files (*.*)|*.*",
                 Title = "Import CAD Data"
             };
 
             if (dialog.ShowDialog() == true)
             {
                 string ext = System.IO.Path.GetExtension(dialog.FileName).ToLowerInvariant();
+                string fileName = dialog.FileName.ToLowerInvariant();
 
                 // Route IPC-D-356 files to the dedicated importer
                 if (ext == ".ipc" || ext == ".356" || ext == ".net")
                 {
                     ShowIpc356ImportDialogWithFile(dialog.FileName);
                 }
+                // Route ODB++ archives
+                else if (ext == ".tgz" || ext == ".tar" || ext == ".zip" || ext == ".odb" ||
+                         fileName.EndsWith(".tar.gz"))
+                {
+                    ShowOdbImportDialogWithFile(dialog.FileName);
+                }
                 else
                 {
-                    // TODO: Implement other CAD formats (XML, ODB++)
+                    // TODO: Implement other CAD formats (XML)
                     MessageBox.Show("CAD import for this format not yet implemented.\nSelected: " + dialog.FileName,
                         "Import CAD", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
+            }
+        }
+
+        private void ShowOdbImportDialogWithFile(string filePath)
+        {
+            var mainVm = DataContext as MainViewModel;
+            if (mainVm?.CurrentProject == null)
+            {
+                System.Windows.MessageBox.Show("Please create or open a project first.",
+                    "No Project", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var dialog = new ImportOdbDialog(mainVm.CurrentProject, filePath);
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                // Add imported packages to project
+                foreach (var pkg in dialog.ImportedPackages)
+                {
+                    if (!mainVm.CurrentProject.Packages.Any(p => p.Name == pkg.Name))
+                    {
+                        mainVm.CurrentProject.Packages.Add(pkg);
+                    }
+                }
+
+                // Add imported placements to project
+                foreach (var placement in dialog.ImportedPlacements)
+                {
+                    // Assign package reference from project
+                    var projectPkg = mainVm.CurrentProject.Packages.FirstOrDefault(p => p.Name == placement.Package?.Name);
+                    if (projectPkg != null)
+                    {
+                        placement.Package = projectPkg;
+                    }
+                    mainVm.CurrentProject.Placements.Add(placement);
+                }
+
+                // Refresh views
+                PCBPlotter.Core.Events.EventAggregator.Instance.Publish(
+                    new PCBPlotter.Core.Events.RequestRefreshEvent { FullRefresh = true });
+                PCBPlotter.Core.Events.EventAggregator.Instance.Publish(
+                    new PCBPlotter.Core.Events.ZoomFitRequestEvent());
+                PCBPlotter.Core.Events.EventAggregator.Instance.Publish(
+                    new PCBPlotter.Core.Events.StatusMessageEvent
+                    {
+                        Message = $"Imported {dialog.ImportedPlacements.Count} placements from ODB++"
+                    });
             }
         }
 

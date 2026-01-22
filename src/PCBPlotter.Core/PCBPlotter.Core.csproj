@@ -35,6 +35,8 @@
     <Reference Include="System.Xml.Linq" />
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Models\Project.cs" />
@@ -59,6 +61,7 @@
     <Compile Include="Services\UndoRedoService.cs" />
     <Compile Include="Services\Ipc356Parser.cs" />
     <Compile Include="Services\JukiFx3Exporter.cs" />
+    <Compile Include="Services\OdbPlusPlusParser.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
     <Compile Include="Utilities\UnicodeHelper.cs" />
     <Compile Include="Utilities\UnitConverter.cs" />
