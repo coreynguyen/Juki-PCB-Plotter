@@ -65,7 +65,7 @@ namespace PCBPlotter.ViewModels
             get { return _zoom; }
             set
             {
-                if (SetProperty(ref _zoom, Math.Max(0.1, Math.Min(50, value))))
+                if (SetProperty(ref _zoom, Math.Max(0.1, Math.Min(500, value))))
                 {
                     Publish(new ZoomChangedEvent { ZoomLevel = _zoom });
                 }

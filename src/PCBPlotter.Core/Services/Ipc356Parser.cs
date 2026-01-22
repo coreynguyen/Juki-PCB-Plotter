@@ -506,8 +506,10 @@ namespace PCBPlotter.Core.Services
                 PinShape shape = PinShape.Rectangle;
                 if (pad.DrillDiameter > 0)
                     shape = PinShape.Circle;
-                else if (pad.Width != pad.Height)
-                    shape = PinShape.Oval;
+                // Use Rectangle for rectangular SMD pads (most common)
+                // Only use Oval for truly round/circular pads with equal dimensions
+                else if (Math.Abs(pad.Width - pad.Height) < 0.01 && pad.Width > 0)
+                    shape = PinShape.Circle;
 
                 int pinNumber;
                 if (!int.TryParse(pad.PinNumber, out pinNumber))

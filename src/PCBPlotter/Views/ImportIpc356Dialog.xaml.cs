@@ -177,12 +177,13 @@ namespace PCBPlotter.Views
                 }
 
                 Log("Import complete!");
-                MessageBox.Show(
+                ThemedMessageBox.Show(
                     string.Format("Import successful!\n\nPackages created: {0}\nPlacements created: {1}",
                         packagesCreated, placementsCreated),
                     "Import Complete",
                     MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                    MessageBoxImage.Information,
+                    this);
 
                 DialogResult = true;
                 Close();
@@ -190,8 +191,8 @@ namespace PCBPlotter.Views
             catch (Exception ex)
             {
                 Log("ERROR: " + ex.Message);
-                MessageBox.Show("Import failed: " + ex.Message, "Import Error",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                ThemedMessageBox.Show("Import failed: " + ex.Message, "Import Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error, this);
             }
         }
 

@@ -121,8 +121,8 @@ namespace PCBPlotter.Views
                 // Validate output file
                 if (string.IsNullOrWhiteSpace(OutputFileTextBox.Text))
                 {
-                    MessageBox.Show("Please specify an output file.", "Export Error",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    ThemedMessageBox.Show("Please specify an output file.", "Export Error",
+                        MessageBoxButton.OK, MessageBoxImage.Warning, this);
                     return;
                 }
 
@@ -149,18 +149,18 @@ namespace PCBPlotter.Views
                 // Export
                 _exporter.Export(_project, OutputFileTextBox.Text, options);
 
-                MessageBox.Show(
+                ThemedMessageBox.Show(
                     string.Format("Successfully exported to:\n{0}", OutputFileTextBox.Text),
-                    "Export Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+                    "Export Complete", MessageBoxButton.OK, MessageBoxImage.Information, this);
 
                 DialogResult = true;
                 Close();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
+                ThemedMessageBox.Show(
                     string.Format("Export failed: {0}", ex.Message),
-                    "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    "Export Error", MessageBoxButton.OK, MessageBoxImage.Error, this);
             }
         }
 

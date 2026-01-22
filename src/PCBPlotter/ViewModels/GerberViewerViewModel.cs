@@ -39,7 +39,7 @@ namespace PCBPlotter.ViewModels
         public double Zoom
         {
             get { return _zoom; }
-            set { SetProperty(ref _zoom, Math.Max(0.1, Math.Min(50, value))); }
+            set { SetProperty(ref _zoom, Math.Max(0.1, Math.Min(500, value))); }
         }
 
         public double PanX

@@ -37,9 +37,17 @@ namespace PCBPlotter.Controls
         private SolidColorBrush _placementSelectedBrush;
         private SolidColorBrush _placementErrorBrush;
         private SolidColorBrush _labelBrush;
+        private SolidColorBrush _labelBgBrush;
+        private SolidColorBrush _crosshairBrush;
+        private SolidColorBrush _pin1Brush;
+        private SolidColorBrush _pinBrush;
+        private SolidColorBrush _fiducialBrush;
         private Pen _placementOutlinePen;
         private Pen _placementSelectedPen;
         private Pen _pin1Pen;
+        private Pen _crosshairPen;
+        private Pen _pinPen;
+        private Pen _fiducialPen;
         private Typeface _labelTypeface;
 
         #region Dependency Properties
@@ -402,6 +410,21 @@ namespace PCBPlotter.Controls
             _labelBrush = new SolidColorBrush(Colors.White);
             _labelBrush.Freeze();
 
+            _labelBgBrush = new SolidColorBrush(Color.FromArgb(180, 30, 30, 35));
+            _labelBgBrush.Freeze();
+
+            _crosshairBrush = new SolidColorBrush(Colors.White);
+            _crosshairBrush.Freeze();
+
+            _pin1Brush = new SolidColorBrush(Color.FromRgb(255, 100, 100));
+            _pin1Brush.Freeze();
+
+            _pinBrush = new SolidColorBrush(Color.FromRgb(200, 180, 100));
+            _pinBrush.Freeze();
+
+            _fiducialBrush = new SolidColorBrush(Color.FromRgb(255, 0, 255));
+            _fiducialBrush.Freeze();
+
             // Create and freeze pens
             _placementOutlinePen = new Pen(new SolidColorBrush(Color.FromRgb(150, 150, 160)), 1.5);
             _placementOutlinePen.Freeze();
@@ -411,6 +434,15 @@ namespace PCBPlotter.Controls
 
             _pin1Pen = new Pen(new SolidColorBrush(Color.FromRgb(255, 100, 100)), 2);
             _pin1Pen.Freeze();
+
+            _crosshairPen = new Pen(_crosshairBrush, 1);
+            _crosshairPen.Freeze();
+
+            _pinPen = new Pen(new SolidColorBrush(Color.FromRgb(150, 130, 80)), 0.05);
+            _pinPen.Freeze();
+
+            _fiducialPen = new Pen(_fiducialBrush, 2);
+            _fiducialPen.Freeze();
 
             _labelTypeface = new Typeface("Segoe UI");
         }
@@ -815,12 +847,13 @@ namespace PCBPlotter.Controls
             double margin = 50;
             Rect viewport = new Rect(-margin, -margin, ActualWidth + margin * 2, ActualHeight + margin * 2);
 
-            // Only render package details at zoom levels where they're visible
+            // Level of detail thresholds
             bool renderPackageDetails = ShowPackageGraphics && Zoom > 0.5;
+            bool renderLabels = ShowLabels && Zoom > 0.3;  // Skip labels at very low zoom
+            bool renderCrosshairs = Zoom > 0.2;  // Skip crosshairs at very low zoom
 
-            // Pre-cache pin1 brush
-            var pin1Brush = new SolidColorBrush(Color.FromRgb(255, 100, 100));
-            pin1Brush.Freeze();
+            // Get DPI once for all label rendering
+            double pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
 
             foreach (var placement in Placements)
             {
@@ -876,22 +909,23 @@ namespace PCBPlotter.Controls
                         screenPos.X - pin1Offset,
                         screenPos.Y - pin1Offset
                     );
-                    dc.DrawEllipse(pin1Brush, null, pin1Pos, pin1Size, pin1Size);
+                    dc.DrawEllipse(_pin1Brush, null, pin1Pos, pin1Size, pin1Size);
                 }
 
-                // Draw center crosshair
-                double crossSize = 3;
-                var crossPen = new Pen(new SolidColorBrush(Colors.White), 1);
-                crossPen.Freeze();
-                dc.DrawLine(crossPen,
-                    new Point(screenPos.X - crossSize, screenPos.Y),
-                    new Point(screenPos.X + crossSize, screenPos.Y));
-                dc.DrawLine(crossPen,
-                    new Point(screenPos.X, screenPos.Y - crossSize),
-                    new Point(screenPos.X, screenPos.Y + crossSize));
+                // Draw center crosshair (skip at very low zoom for performance)
+                if (renderCrosshairs)
+                {
+                    double crossSize = 3;
+                    dc.DrawLine(_crosshairPen,
+                        new Point(screenPos.X - crossSize, screenPos.Y),
+                        new Point(screenPos.X + crossSize, screenPos.Y));
+                    dc.DrawLine(_crosshairPen,
+                        new Point(screenPos.X, screenPos.Y - crossSize),
+                        new Point(screenPos.X, screenPos.Y + crossSize));
+                }
 
-                // Draw reference label if enabled
-                if (ShowLabels && !string.IsNullOrEmpty(placement.Reference))
+                // Draw reference label if enabled and zoom is sufficient
+                if (renderLabels && !string.IsNullOrEmpty(placement.Reference))
                 {
                     double fontSize = 10; // Fixed font size
                     var formattedText = new FormattedText(
@@ -901,7 +935,7 @@ namespace PCBPlotter.Controls
                         _labelTypeface,
                         fontSize,
                         _labelBrush,
-                        VisualTreeHelper.GetDpi(this).PixelsPerDip
+                        pixelsPerDip
                     );
 
                     // Position label below the placement
@@ -917,9 +951,7 @@ namespace PCBPlotter.Controls
                         formattedText.Width + 4,
                         formattedText.Height + 2
                     );
-                    var labelBgBrush = new SolidColorBrush(Color.FromArgb(180, 30, 30, 35));
-                    labelBgBrush.Freeze();
-                    dc.DrawRoundedRectangle(labelBgBrush, null, labelBgRect, 2, 2);
+                    dc.DrawRoundedRectangle(_labelBgBrush, null, labelBgRect, 2, 2);
 
                     dc.DrawText(formattedText, labelPos);
                 }
@@ -937,13 +969,11 @@ namespace PCBPlotter.Controls
 
                     Point screenPos = WorldToScreen(new Point(fiducial.X, fiducial.Y));
 
-                    // Draw fiducial as a diamond shape
-                    var fidBrush = new SolidColorBrush(Color.FromRgb(255, 0, 255));
-                    fidBrush.Freeze();
-                    var fidPen = new Pen(fidBrush, 2);
-                    fidPen.Freeze();
+                    // Viewport culling for fiducials
+                    if (!viewport.Contains(screenPos))
+                        continue;
 
-                    // Draw diamond
+                    // Draw diamond using cached pen
                     var diamondGeometry = new StreamGeometry();
                     using (var ctx = diamondGeometry.Open())
                     {
@@ -953,23 +983,23 @@ namespace PCBPlotter.Controls
                         ctx.LineTo(new Point(screenPos.X - fidSize, screenPos.Y), true, false);
                     }
                     diamondGeometry.Freeze();
-                    dc.DrawGeometry(null, fidPen, diamondGeometry);
+                    dc.DrawGeometry(null, _fiducialPen, diamondGeometry);
 
                     // Draw center dot
-                    dc.DrawEllipse(fidBrush, null, screenPos, 2, 2);
+                    dc.DrawEllipse(_fiducialBrush, null, screenPos, 2, 2);
 
-                    // Draw label if enabled
-                    if (ShowLabels && !string.IsNullOrEmpty(fiducial.Name))
+                    // Draw label if enabled and zoom sufficient
+                    if (renderLabels && !string.IsNullOrEmpty(fiducial.Name))
                     {
-                        double fontSize = 9; // Fixed font size
+                        double fontSize = 9;
                         var formattedText = new FormattedText(
                             fiducial.Name,
                             CultureInfo.CurrentCulture,
                             FlowDirection.LeftToRight,
                             _labelTypeface,
                             fontSize,
-                            fidBrush,
-                            VisualTreeHelper.GetDpi(this).PixelsPerDip
+                            _fiducialBrush,
+                            pixelsPerDip
                         );
                         dc.DrawText(formattedText, new Point(screenPos.X + fidSize + 2, screenPos.Y - fontSize / 2));
                     }
@@ -1010,12 +1040,7 @@ namespace PCBPlotter.Controls
                     RenderGraphicShape(dc, graphic, fillBrush, outlinePen);
                 }
 
-                // Render pins
-                var pinBrush = new SolidColorBrush(Color.FromRgb(200, 180, 100));
-                pinBrush.Freeze();
-                var pinPen = new Pen(new SolidColorBrush(Color.FromRgb(150, 130, 80)), 0.05);
-                pinPen.Freeze();
-
+                // Render pins using cached brushes
                 foreach (var pin in package.Pins)
                 {
                     double x = pin.X - pin.Width / 2;
@@ -1025,25 +1050,23 @@ namespace PCBPlotter.Controls
                     switch (pin.Shape)
                     {
                         case PinShape.Circle:
-                            dc.DrawEllipse(pinBrush, pinPen, new Point(pin.X, pin.Y), pin.Width / 2, pin.Height / 2);
+                            dc.DrawEllipse(_pinBrush, _pinPen, new Point(pin.X, pin.Y), pin.Width / 2, pin.Height / 2);
                             break;
                         case PinShape.Oval:
-                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width / 2, pin.Height / 2);
+                            dc.DrawRoundedRectangle(_pinBrush, _pinPen, pinRect, pin.Width / 2, pin.Height / 2);
                             break;
                         case PinShape.RoundedRectangle:
-                            dc.DrawRoundedRectangle(pinBrush, pinPen, pinRect, pin.Width * 0.2, pin.Height * 0.2);
+                            dc.DrawRoundedRectangle(_pinBrush, _pinPen, pinRect, pin.Width * 0.2, pin.Height * 0.2);
                             break;
                         default: // Rectangle
-                            dc.DrawRectangle(pinBrush, pinPen, pinRect);
+                            dc.DrawRectangle(_pinBrush, _pinPen, pinRect);
                             break;
                     }
 
-                    // Draw pin 1 indicator
+                    // Draw pin 1 indicator using cached brush
                     if (pin.Number == 1)
                     {
-                        var pin1Brush = new SolidColorBrush(Color.FromRgb(255, 100, 100));
-                        pin1Brush.Freeze();
-                        dc.DrawEllipse(pin1Brush, null, new Point(pin.X, pin.Y), pin.Width * 0.2, pin.Height * 0.2);
+                        dc.DrawEllipse(_pin1Brush, null, new Point(pin.X, pin.Y), pin.Width * 0.2, pin.Height * 0.2);
                     }
                 }
 
