@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using PCBPlotter.Core.Events;
+using PCBPlotter.Dialogs;
 using PCBPlotter.Services;
 using PCBPlotter.ViewModels;
 
@@ -128,7 +129,7 @@ namespace PCBPlotter.Views
                 return;
             }
 
-            var dialog = new Dialogs.ImportIpc356Dialog(mainVm.CurrentProject);
+            var dialog = new ImportIpc356Dialog(mainVm.CurrentProject);
             dialog.Owner = this;
 
             if (dialog.ShowDialog() == true)
