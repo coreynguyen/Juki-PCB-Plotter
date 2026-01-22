@@ -304,6 +304,9 @@ namespace PCBPlotter.Controls
             ClipToBounds = true;
             Focusable = true;
 
+            // Use NearestNeighbor scaling for fast, crisp bitmap zoom (no expensive bilinear filtering)
+            RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
+
             InitializeBrushesAndPens();
 
             Loaded += (s, e) => InvalidateVisual();
@@ -698,9 +701,10 @@ namespace PCBPlotter.Controls
         private Rect _worldBounds = Rect.Empty;
 
         // Render resolution (pixels per world unit, e.g., mm)
-        // Reduced to avoid GPU memory issues - 50 pixels/mm is still good quality
-        private const double WORLD_PIXELS_PER_UNIT = 50.0;
-        private const int MAX_LAYER_BITMAP_SIZE = 4096; // Reduced from 8192 for GPU compatibility
+        // Higher resolution = better zoom quality, but more memory
+        // 75 pixels/mm gives good detail; max 6144 stays under GPU memory limits
+        private const double WORLD_PIXELS_PER_UNIT = 75.0;
+        private const int MAX_LAYER_BITMAP_SIZE = 6144; // Safe limit (8192 caused GPU errors)
         private const int MIN_LAYER_BITMAP_SIZE = 64;
 
         // Active layer for selection (still vector-based)
