@@ -522,13 +522,17 @@ namespace PCBPlotter.Controls
                 newCollection.CollectionChanged += canvas.OnGerberLayersCollectionChanged;
             }
 
-            // Clear all caches when layers change - new layers will be rasterized on demand
-            canvas._layerMips.Clear();
+            // Clear all caches when layers change - tiles will be rendered on demand
+            canvas._tileCache.Clear();
+            canvas._tileCacheOrder.Clear();
+            canvas._layerInfoCache.Clear();
             canvas._renderCts?.Cancel();
             canvas._displayComposite = null;
             canvas._compositeBuffer = null;
             canvas._compositeNeedsUpdate = true;
             canvas._lastVisibilityState = "";
+            canvas._lastCompositeZoom = -1;
+            canvas._lastVisibleWorld = Rect.Empty;
             canvas._worldBounds = Rect.Empty;
             canvas._activeLayerQuadtree = null;
             canvas._activeGerberLayer = null;
@@ -685,130 +689,90 @@ namespace PCBPlotter.Controls
         }
 
         // ===================================================================================
-        // ASYNC MIP-BASED RENDERING ARCHITECTURE
-        // "Progressive Quality - Instant Response"
+        // TILE-BASED RENDERING ARCHITECTURE
+        // "Render Only What You See"
         //
-        // Key principles:
-        // 1. Multiple resolution levels (MIP) per layer - low-res for quick display, high-res for zoom
-        // 2. Background thread rendering - never block the UI
-        // 3. Progressive display - show low-res immediately, upgrade when high-res ready
-        // 4. Pre-computed lookup tables for fast screen blend compositing
-        // 5. Zoom-based LOD selection - pick appropriate resolution for current zoom
+        // Key principles (inspired by OpenStreetMap/Slippy Maps):
+        // 1. Divide layers into tiles (256x256 pixels each)
+        // 2. Only render tiles currently visible on screen
+        // 3. Cache rendered tiles by (layer, zoom_level, tile_x, tile_y)
+        // 4. Lazy rendering - render on demand, not upfront
+        // 5. Bounding box culling - skip primitives outside tile bounds
         // ===================================================================================
 
-        // MIP-mapped layer bitmaps - multiple resolutions per layer
-        private ConcurrentDictionary<string, LayerMipMap> _layerMips = new ConcurrentDictionary<string, LayerMipMap>();
+        // Tile constants
+        private const int TILE_SIZE = 256;           // Pixels per tile
+        private const int MAX_ZOOM_LEVEL = 8;        // 4^8 = 65536 tiles at max zoom
+        private const int MIN_ZOOM_LEVEL = 0;        // Single tile for whole layer
+        private const int TILE_CACHE_MAX = 256;      // Max tiles to keep in memory
 
-        // Composited display bitmap (all visible layers screen-blended)
+        // Tile cache: key = "layerId:zoomLevel:tileX:tileY"
+        private ConcurrentDictionary<string, TileData> _tileCache = new ConcurrentDictionary<string, TileData>();
+        private Queue<string> _tileCacheOrder = new Queue<string>(); // LRU eviction order
+
+        // Composited display bitmap (visible tiles composited)
         private WriteableBitmap _displayComposite;
-        private byte[] _compositeBuffer; // CPU-side buffer for fast compositing
+        private byte[] _compositeBuffer;
         private bool _compositeNeedsUpdate = true;
-        private string _lastVisibilityState = ""; // Cache key for visibility state
+        private string _lastVisibilityState = "";
+        private int _lastCompositeZoom = -1;
+        private Rect _lastVisibleWorld = Rect.Empty;
 
-        // Transform state - used for navigation without re-rendering
+        // Transform state
         private Matrix _viewTransform = Matrix.Identity;
 
         // World bounds of all layers combined
         private Rect _worldBounds = Rect.Empty;
 
-        // MIP level resolutions (pixels per world unit, e.g., mm)
-        private const double LOW_RES_PIXELS_PER_UNIT = 20.0;   // Quick preview (~256-512px typical)
-        private const double MID_RES_PIXELS_PER_UNIT = 50.0;   // Good quality (~1024-2048px typical)
-        private const double HIGH_RES_PIXELS_PER_UNIT = 100.0; // Detail view (~2048-4096px typical)
-        private const int MAX_LAYER_BITMAP_SIZE = 4096;        // Safe GPU limit
-        private const int MIN_LAYER_BITMAP_SIZE = 32;
-
-        // Screen blend lookup table - 256x256 = 64KB, avoids per-pixel float math
+        // Screen blend lookup table - 256x256 = 64KB
         private static byte[] _screenBlendLUT;
 
         // Background rendering state
         private CancellationTokenSource _renderCts;
-        private int _pendingHighResRenders = 0;
+        private ConcurrentDictionary<string, bool> _tilesInProgress = new ConcurrentDictionary<string, bool>();
 
-        // Active layer for selection (still vector-based)
+        // Active layer for selection (vector-based)
         private GerberLayer _activeGerberLayer;
         private GerberQuadtree _activeLayerQuadtree;
 
-        // Legacy cache tracking (for non-Gerber content)
+        // Legacy cache tracking
         private bool _gerberCacheDirty = true;
 
         /// <summary>
-        /// MIP-mapped layer storage - multiple resolutions for responsive zoom
+        /// Single tile data - rendered on demand
         /// </summary>
-        private class LayerMipMap
+        private class TileData
         {
-            // Multiple resolution bitmaps
-            public WriteableBitmap LowResBitmap { get; set; }   // Quick preview
-            public WriteableBitmap MidResBitmap { get; set; }   // Medium detail
-            public WriteableBitmap HighResBitmap { get; set; }  // Full detail
-
-            // 1-bit storage at each level (for memory efficiency)
-            public byte[] LowResMono { get; set; }
-            public byte[] MidResMono { get; set; }
-            public byte[] HighResMono { get; set; }
-
-            // Dimensions at each level
-            public int LowResWidth { get; set; }
-            public int LowResHeight { get; set; }
-            public int MidResWidth { get; set; }
-            public int MidResHeight { get; set; }
-            public int HighResWidth { get; set; }
-            public int HighResHeight { get; set; }
-
-            // Shared properties
-            public Rect WorldBounds { get; set; }
+            public WriteableBitmap Bitmap { get; set; }     // BGRA tile image
+            public byte[] MonoPixels { get; set; }          // 1-bit source data
+            public int ZoomLevel { get; set; }
+            public int TileX { get; set; }
+            public int TileY { get; set; }
+            public Rect WorldBounds { get; set; }           // World area this tile covers
             public Color LayerColor { get; set; }
             public double Opacity { get; set; }
-
-            // Rendering state
-            public bool LowResReady { get; set; }
-            public bool MidResReady { get; set; }
-            public bool HighResReady { get; set; }
-            public bool IsRendering { get; set; }
-
-            /// <summary>
-            /// Get the best available bitmap for the given zoom level
-            /// </summary>
-            public WriteableBitmap GetBestBitmap(double zoom)
-            {
-                // Calculate effective DPI needed
-                double neededPPU = zoom * 0.5; // Rough heuristic
-
-                if (neededPPU > MID_RES_PIXELS_PER_UNIT && HighResReady && HighResBitmap != null)
-                    return HighResBitmap;
-                if (neededPPU > LOW_RES_PIXELS_PER_UNIT && MidResReady && MidResBitmap != null)
-                    return MidResBitmap;
-                if (LowResReady && LowResBitmap != null)
-                    return LowResBitmap;
-
-                // Return whatever is available
-                return HighResBitmap ?? MidResBitmap ?? LowResBitmap;
-            }
-
-            /// <summary>
-            /// Get dimensions for the best available bitmap
-            /// </summary>
-            public (int width, int height) GetBestDimensions(double zoom)
-            {
-                double neededPPU = zoom * 0.5;
-
-                if (neededPPU > MID_RES_PIXELS_PER_UNIT && HighResReady)
-                    return (HighResWidth, HighResHeight);
-                if (neededPPU > LOW_RES_PIXELS_PER_UNIT && MidResReady)
-                    return (MidResWidth, MidResHeight);
-                if (LowResReady)
-                    return (LowResWidth, LowResHeight);
-
-                // Return highest available
-                if (HighResWidth > 0) return (HighResWidth, HighResHeight);
-                if (MidResWidth > 0) return (MidResWidth, MidResHeight);
-                return (LowResWidth, LowResHeight);
-            }
+            public bool IsReady { get; set; }
+            public long LastAccessTime { get; set; }
         }
 
         /// <summary>
-        /// Initialize screen blend lookup table for fast compositing
-        /// Screen blend: result = 1 - (1-a)(1-b) = a + b - ab
+        /// Layer metadata for tile calculation
+        /// </summary>
+        private class LayerTileInfo
+        {
+            public string LayerId { get; set; }
+            public Rect WorldBounds { get; set; }
+            public Color LayerColor { get; set; }
+            public double Opacity { get; set; }
+            public List<GerberPrimitive> Primitives { get; set; }
+            // Spatial index for fast primitive lookup
+            public Dictionary<string, List<int>> TilePrimitiveIndex { get; set; }
+        }
+
+        private ConcurrentDictionary<string, LayerTileInfo> _layerInfoCache = new ConcurrentDictionary<string, LayerTileInfo>();
+
+        /// <summary>
+        /// Initialize screen blend lookup table
         /// </summary>
         private static void EnsureScreenBlendLUT()
         {
@@ -819,21 +783,383 @@ namespace PCBPlotter.Controls
             {
                 for (int b = 0; b < 256; b++)
                 {
-                    // Screen blend formula: 1 - (1-a/255)(1-b/255)
-                    // = a/255 + b/255 - (a*b)/(255*255)
-                    // = (a*255 + b*255 - a*b) / (255*255)
                     int result = a + b - (a * b) / 255;
                     _screenBlendLUT[a * 256 + b] = (byte)Math.Min(255, Math.Max(0, result));
                 }
             }
         }
 
-        /// <summary>
-        /// Fast screen blend using lookup table
-        /// </summary>
         private static byte ScreenBlend(byte a, byte b)
         {
             return _screenBlendLUT[a * 256 + b];
+        }
+
+        /// <summary>
+        /// Calculate which zoom level to use based on current view zoom
+        /// </summary>
+        private int CalculateTileZoomLevel(double viewZoom)
+        {
+            // At viewZoom=1, we want zoom level 0 (1 tile covers everything)
+            // As viewZoom increases, we need more detail (higher zoom level)
+            // Each zoom level doubles resolution
+            int level = (int)Math.Floor(Math.Log(viewZoom / 5.0) / Math.Log(2));
+            return Math.Max(MIN_ZOOM_LEVEL, Math.Min(MAX_ZOOM_LEVEL, level));
+        }
+
+        /// <summary>
+        /// Calculate tile coordinates that cover a world rectangle at a given zoom level
+        /// </summary>
+        private (int minTileX, int minTileY, int maxTileX, int maxTileY) GetTilesForWorldRect(
+            Rect worldRect, Rect layerBounds, int zoomLevel)
+        {
+            if (layerBounds.IsEmpty || layerBounds.Width <= 0 || layerBounds.Height <= 0)
+                return (0, 0, 0, 0);
+
+            // Number of tiles at this zoom level (2^zoom x 2^zoom grid)
+            int tilesPerSide = 1 << zoomLevel;
+
+            // World units per tile
+            double tileWorldWidth = layerBounds.Width / tilesPerSide;
+            double tileWorldHeight = layerBounds.Height / tilesPerSide;
+
+            if (tileWorldWidth <= 0 || tileWorldHeight <= 0)
+                return (0, 0, 0, 0);
+
+            // Convert world rect to tile coordinates
+            int minTileX = (int)Math.Floor((worldRect.Left - layerBounds.Left) / tileWorldWidth);
+            int minTileY = (int)Math.Floor((worldRect.Top - layerBounds.Top) / tileWorldHeight);
+            int maxTileX = (int)Math.Ceiling((worldRect.Right - layerBounds.Left) / tileWorldWidth);
+            int maxTileY = (int)Math.Ceiling((worldRect.Bottom - layerBounds.Top) / tileWorldHeight);
+
+            // Clamp to valid range
+            minTileX = Math.Max(0, minTileX);
+            minTileY = Math.Max(0, minTileY);
+            maxTileX = Math.Min(tilesPerSide - 1, maxTileX);
+            maxTileY = Math.Min(tilesPerSide - 1, maxTileY);
+
+            return (minTileX, minTileY, maxTileX, maxTileY);
+        }
+
+        /// <summary>
+        /// Get world bounds for a specific tile
+        /// </summary>
+        private Rect GetTileWorldBounds(Rect layerBounds, int zoomLevel, int tileX, int tileY)
+        {
+            int tilesPerSide = 1 << zoomLevel;
+            double tileWorldWidth = layerBounds.Width / tilesPerSide;
+            double tileWorldHeight = layerBounds.Height / tilesPerSide;
+
+            return new Rect(
+                layerBounds.Left + tileX * tileWorldWidth,
+                layerBounds.Top + tileY * tileWorldHeight,
+                tileWorldWidth,
+                tileWorldHeight);
+        }
+
+        /// <summary>
+        /// Generate cache key for a tile
+        /// </summary>
+        private string GetTileCacheKey(string layerId, int zoomLevel, int tileX, int tileY)
+        {
+            return $"{layerId}:{zoomLevel}:{tileX}:{tileY}";
+        }
+
+        /// <summary>
+        /// Get or render a tile (lazy rendering)
+        /// </summary>
+        private TileData GetOrRenderTile(GerberLayer layer, int zoomLevel, int tileX, int tileY)
+        {
+            string cacheKey = GetTileCacheKey(layer.Id, zoomLevel, tileX, tileY);
+
+            // Check cache first
+            if (_tileCache.TryGetValue(cacheKey, out var cached))
+            {
+                cached.LastAccessTime = DateTime.Now.Ticks;
+                // Check if color/opacity changed
+                if (cached.LayerColor != layer.Color || Math.Abs(cached.Opacity - layer.Opacity) > 0.01)
+                {
+                    // Rebuild colored bitmap from mono data
+                    RebuildTileColors(cached, layer.Color, layer.Opacity);
+                }
+                return cached;
+            }
+
+            // Not in cache - render it now (on UI thread for immediate display)
+            // For large tiles, could dispatch to background thread
+            var tile = RenderTile(layer, zoomLevel, tileX, tileY);
+            if (tile != null)
+            {
+                // Add to cache with LRU eviction
+                AddTileToCache(cacheKey, tile);
+            }
+            return tile;
+        }
+
+        /// <summary>
+        /// Add tile to cache with LRU eviction
+        /// </summary>
+        private void AddTileToCache(string cacheKey, TileData tile)
+        {
+            _tileCache[cacheKey] = tile;
+            _tileCacheOrder.Enqueue(cacheKey);
+
+            // Evict oldest tiles if over limit
+            while (_tileCache.Count > TILE_CACHE_MAX && _tileCacheOrder.Count > 0)
+            {
+                var oldKey = _tileCacheOrder.Dequeue();
+                _tileCache.TryRemove(oldKey, out _);
+            }
+        }
+
+        /// <summary>
+        /// Render a single tile - with bounding box culling
+        /// </summary>
+        private TileData RenderTile(GerberLayer layer, int zoomLevel, int tileX, int tileY)
+        {
+            try
+            {
+                if (layer.Primitives == null || layer.Primitives.Count == 0)
+                    return null;
+
+                Rect layerBounds = layer.Bounds;
+                if (layerBounds.IsEmpty)
+                    return null;
+
+                // Add margin to layer bounds
+                layerBounds.Inflate(layerBounds.Width * 0.02, layerBounds.Height * 0.02);
+
+                Rect tileWorldBounds = GetTileWorldBounds(layerBounds, zoomLevel, tileX, tileY);
+
+                // Calculate pixels per world unit for this zoom level
+                int tilesPerSide = 1 << zoomLevel;
+                double pixelsPerUnit = (TILE_SIZE * tilesPerSide) / Math.Max(layerBounds.Width, layerBounds.Height);
+
+                // Create 1-bit storage for tile
+                int bytesPerRow = (TILE_SIZE + 7) / 8;
+                byte[] monoPixels = new byte[bytesPerRow * TILE_SIZE];
+
+                // Rasterize only primitives that intersect this tile (BOUNDING BOX CULLING)
+                int primitivesRendered = 0;
+                foreach (var prim in layer.Primitives)
+                {
+                    // Get primitive bounds
+                    Rect primBounds = GetPrimitiveBounds(prim);
+
+                    // CULLING: Skip if primitive doesn't intersect tile
+                    if (!primBounds.IntersectsWith(tileWorldBounds))
+                        continue;
+
+                    // Render primitive to tile
+                    RasterizePrimitiveToTile(monoPixels, TILE_SIZE, TILE_SIZE, bytesPerRow,
+                        prim, tileWorldBounds, pixelsPerUnit);
+                    primitivesRendered++;
+                }
+
+                // Create tile data
+                var tile = new TileData
+                {
+                    MonoPixels = monoPixels,
+                    ZoomLevel = zoomLevel,
+                    TileX = tileX,
+                    TileY = tileY,
+                    WorldBounds = tileWorldBounds,
+                    LayerColor = layer.Color,
+                    Opacity = layer.Opacity,
+                    LastAccessTime = DateTime.Now.Ticks,
+                    IsReady = false
+                };
+
+                // Convert to colored bitmap
+                tile.Bitmap = CreateColoredTileBitmap(tile);
+                tile.IsReady = tile.Bitmap != null;
+
+                if (primitivesRendered > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Tile {layer.Name}[z{zoomLevel}:{tileX},{tileY}] rendered {primitivesRendered} primitives");
+                }
+
+                return tile;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error rendering tile: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Get bounding box of a primitive in world coordinates
+        /// </summary>
+        private Rect GetPrimitiveBounds(GerberPrimitive prim)
+        {
+            double halfW = prim.Width / 2;
+            double halfH = prim.Height / 2;
+
+            switch (prim.Type)
+            {
+                case GerberPrimitiveType.Circle:
+                case GerberPrimitiveType.Flash:
+                    return new Rect(prim.X - halfW, prim.Y - halfW, prim.Width, prim.Width);
+
+                case GerberPrimitiveType.Rectangle:
+                case GerberPrimitiveType.Obround:
+                    return new Rect(prim.X - halfW, prim.Y - halfH, prim.Width, prim.Height);
+
+                case GerberPrimitiveType.Line:
+                    double minX = Math.Min(prim.X, prim.EndX) - halfW;
+                    double maxX = Math.Max(prim.X, prim.EndX) + halfW;
+                    double minY = Math.Min(prim.Y, prim.EndY) - halfW;
+                    double maxY = Math.Max(prim.Y, prim.EndY) + halfW;
+                    return new Rect(minX, minY, maxX - minX, maxY - minY);
+
+                case GerberPrimitiveType.Polygon:
+                case GerberPrimitiveType.Contour:
+                    if (prim.Points != null && prim.Points.Count > 0)
+                    {
+                        double pMinX = prim.Points.Min(p => p.X);
+                        double pMaxX = prim.Points.Max(p => p.X);
+                        double pMinY = prim.Points.Min(p => p.Y);
+                        double pMaxY = prim.Points.Max(p => p.Y);
+                        return new Rect(pMinX, pMinY, pMaxX - pMinX, pMaxY - pMinY);
+                    }
+                    return new Rect(prim.X - halfW, prim.Y - halfH, prim.Width, prim.Height);
+
+                default:
+                    return new Rect(prim.X - halfW, prim.Y - halfH,
+                        Math.Max(prim.Width, 0.1), Math.Max(prim.Height, 0.1));
+            }
+        }
+
+        /// <summary>
+        /// Rasterize primitive to tile coordinates
+        /// </summary>
+        private void RasterizePrimitiveToTile(byte[] pixels, int width, int height, int bytesPerRow,
+            GerberPrimitive prim, Rect tileBounds, double pixelsPerUnit)
+        {
+            // Convert world to tile-local coordinates
+            double bx = (prim.X - tileBounds.Left) * pixelsPerUnit;
+            double by = (tileBounds.Top + tileBounds.Height - prim.Y) * pixelsPerUnit;
+            double sw = prim.Width * pixelsPerUnit;
+            double sh = prim.Height * pixelsPerUnit;
+
+            switch (prim.Type)
+            {
+                case GerberPrimitiveType.Circle:
+                case GerberPrimitiveType.Flash:
+                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
+                    break;
+
+                case GerberPrimitiveType.Rectangle:
+                    Fill1BitRectangle(pixels, width, height, bytesPerRow, bx, by, sw, sh);
+                    break;
+
+                case GerberPrimitiveType.Obround:
+                    Fill1BitObround(pixels, width, height, bytesPerRow, bx, by, sw, sh);
+                    break;
+
+                case GerberPrimitiveType.Line:
+                    double ex = (prim.EndX - tileBounds.Left) * pixelsPerUnit;
+                    double ey = (tileBounds.Top + tileBounds.Height - prim.EndY) * pixelsPerUnit;
+                    Fill1BitLine(pixels, width, height, bytesPerRow, bx, by, ex, ey, sw);
+                    break;
+
+                case GerberPrimitiveType.Polygon:
+                case GerberPrimitiveType.Contour:
+                    if (prim.Points != null && prim.Points.Count >= 3)
+                    {
+                        var scaledPoints = prim.Points.Select(p => new Point(
+                            (p.X - tileBounds.Left) * pixelsPerUnit,
+                            (tileBounds.Top + tileBounds.Height - p.Y) * pixelsPerUnit)).ToList();
+                        Fill1BitPolygon(pixels, width, height, bytesPerRow, scaledPoints);
+                    }
+                    break;
+
+                case GerberPrimitiveType.Arc:
+                    // Simplified arc as circle
+                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Create colored BGRA bitmap from tile mono data
+        /// </summary>
+        private WriteableBitmap CreateColoredTileBitmap(TileData tile)
+        {
+            try
+            {
+                if (tile.MonoPixels == null)
+                    return null;
+
+                var bitmap = new WriteableBitmap(TILE_SIZE, TILE_SIZE, 96, 96, PixelFormats.Bgra32, null);
+                int bytesPerRow = (TILE_SIZE + 7) / 8;
+
+                byte r = tile.LayerColor.R;
+                byte g = tile.LayerColor.G;
+                byte b = tile.LayerColor.B;
+                byte a = (byte)(tile.Opacity * 255);
+
+                bitmap.Lock();
+                try
+                {
+                    unsafe
+                    {
+                        byte* ptr = (byte*)bitmap.BackBuffer;
+                        int stride = bitmap.BackBufferStride;
+
+                        for (int y = 0; y < TILE_SIZE; y++)
+                        {
+                            for (int x = 0; x < TILE_SIZE; x++)
+                            {
+                                int byteIdx = y * bytesPerRow + (x / 8);
+                                int bitIdx = 7 - (x % 8);
+                                bool isSet = (tile.MonoPixels[byteIdx] & (1 << bitIdx)) != 0;
+
+                                int offset = y * stride + x * 4;
+                                if (isSet)
+                                {
+                                    ptr[offset + 0] = b;
+                                    ptr[offset + 1] = g;
+                                    ptr[offset + 2] = r;
+                                    ptr[offset + 3] = a;
+                                }
+                                else
+                                {
+                                    ptr[offset + 0] = 0;
+                                    ptr[offset + 1] = 0;
+                                    ptr[offset + 2] = 0;
+                                    ptr[offset + 3] = 0;
+                                }
+                            }
+                        }
+                    }
+                    bitmap.AddDirtyRect(new Int32Rect(0, 0, TILE_SIZE, TILE_SIZE));
+                }
+                finally
+                {
+                    bitmap.Unlock();
+                }
+
+                bitmap.Freeze();
+                return bitmap;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error creating tile bitmap: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Rebuild tile colors when layer color changes
+        /// </summary>
+        private void RebuildTileColors(TileData tile, Color newColor, double newOpacity)
+        {
+            tile.LayerColor = newColor;
+            tile.Opacity = newOpacity;
+            tile.Bitmap = CreateColoredTileBitmap(tile);
+            tile.IsReady = tile.Bitmap != null;
         }
 
         /// <summary>
@@ -940,27 +1266,41 @@ namespace PCBPlotter.Controls
             if (GerberLayers == null || GerberLayers.Count == 0)
                 return;
 
-            // Ensure we have an active layer set (default to first visible layer)
+            EnsureScreenBlendLUT();
             EnsureActiveLayerSet();
+            UpdateWorldBoundsFromLayers();
 
-            // Ensure all layers have MIP maps (low-res immediate, high-res background)
-            EnsureLayerMipsBuilt();
+            if (_worldBounds.IsEmpty)
+                return;
 
-            // Check if visibility state changed
+            // Calculate visible world area from current viewport
+            Rect visibleWorld = GetVisibleWorldRect();
+            if (visibleWorld.IsEmpty)
+                return;
+
+            // Determine tile zoom level based on current view zoom
+            int tileZoom = CalculateTileZoomLevel(Zoom);
+
+            // Check if we need to rebuild composite
             string visState = GetVisibilityStateKey();
-            if (_compositeNeedsUpdate || visState != _lastVisibilityState)
+            bool needsRebuild = _compositeNeedsUpdate ||
+                                visState != _lastVisibilityState ||
+                                tileZoom != _lastCompositeZoom ||
+                                !RectsEqual(_lastVisibleWorld, visibleWorld);
+
+            if (needsRebuild)
             {
                 _lastVisibilityState = visState;
-                RebuildDisplayComposite();
+                _lastCompositeZoom = tileZoom;
+                _lastVisibleWorld = visibleWorld;
+                RenderVisibleTilesToComposite(dc, visibleWorld, tileZoom);
             }
 
-            // Draw the composite using world-to-screen transform
-            // This is instant - no rasterization, just bitmap transform
-            if (_displayComposite != null && !_worldBounds.IsEmpty)
+            // Draw cached composite
+            if (_displayComposite != null)
             {
-                // Calculate where the world bounds map to screen coordinates
-                Point screenTL = WorldToScreen(new Point(_worldBounds.Left, _worldBounds.Top + _worldBounds.Height));
-                Point screenBR = WorldToScreen(new Point(_worldBounds.Right, _worldBounds.Top));
+                Point screenTL = WorldToScreen(new Point(_lastVisibleWorld.Left, _lastVisibleWorld.Bottom));
+                Point screenBR = WorldToScreen(new Point(_lastVisibleWorld.Right, _lastVisibleWorld.Top));
 
                 Rect screenRect = new Rect(
                     Math.Min(screenTL.X, screenBR.X),
@@ -977,684 +1317,106 @@ namespace PCBPlotter.Controls
                 RenderActiveLayerHighlight(dc);
             }
 
-            // Draw selection highlights on top
             RenderGerberSelectionHighlights(dc);
         }
 
-        /// <summary>
-        /// Generate a key representing current layer visibility state
-        /// Used to detect when composite needs rebuilding
-        /// </summary>
-        private string GetVisibilityStateKey()
+        private bool RectsEqual(Rect a, Rect b)
         {
-            if (GerberLayers == null) return "";
-            return string.Join(",", GerberLayers.Select(l => l.IsVisible ? "1" : "0"));
+            const double epsilon = 0.001;
+            return Math.Abs(a.X - b.X) < epsilon &&
+                   Math.Abs(a.Y - b.Y) < epsilon &&
+                   Math.Abs(a.Width - b.Width) < epsilon &&
+                   Math.Abs(a.Height - b.Height) < epsilon;
         }
 
         /// <summary>
-        /// Ensure all Gerber layers have MIP maps initialized
-        /// Low-res renders immediately on UI thread for instant display
-        /// High-res renders in background for quality when zoomed
+        /// Get visible world rectangle from current viewport
         /// </summary>
-        private void EnsureLayerMipsBuilt()
+        private Rect GetVisibleWorldRect()
         {
-            EnsureScreenBlendLUT();
-            bool anyNewLayers = false;
-            var layersNeedingHighRes = new List<GerberLayer>();
+            if (ActualWidth <= 0 || ActualHeight <= 0)
+                return Rect.Empty;
 
-            foreach (var layer in GerberLayers)
-            {
-                if (!_layerMips.ContainsKey(layer.Id))
-                {
-                    // New layer - render low-res immediately on UI thread for instant display
-                    var mip = RasterizeLayerLowRes(layer);
-                    if (mip != null)
-                    {
-                        _layerMips[layer.Id] = mip;
-                        anyNewLayers = true;
+            // Convert screen corners to world coordinates
+            Point worldTL = ScreenToWorld(new Point(0, 0));
+            Point worldBR = ScreenToWorld(new Point(ActualWidth, ActualHeight));
 
-                        // Queue high-res rendering in background
-                        layersNeedingHighRes.Add(layer);
-                    }
-                }
-                else
-                {
-                    // Check if layer properties changed
-                    var cached = _layerMips[layer.Id];
-                    if (cached.LayerColor != layer.Color || Math.Abs(cached.Opacity - layer.Opacity) > 0.01)
-                    {
-                        // Color changed - rebuild colored bitmaps from 1-bit data
-                        RebuildMipColors(layer, cached);
-                        _compositeNeedsUpdate = true;
-                    }
-
-                    // Check if high-res still needs rendering
-                    if (!cached.HighResReady && !cached.IsRendering)
-                    {
-                        layersNeedingHighRes.Add(layer);
-                    }
-                }
-            }
-
-            // Remove cached MIPs for layers that no longer exist
-            var layerIds = new HashSet<string>(GerberLayers.Select(l => l.Id));
-            var toRemove = _layerMips.Keys.Where(k => !layerIds.Contains(k)).ToList();
-            foreach (var id in toRemove)
-            {
-                _layerMips.TryRemove(id, out _);
-                _compositeNeedsUpdate = true;
-            }
-
-            if (anyNewLayers)
-            {
-                UpdateWorldBounds();
-                _compositeNeedsUpdate = true;
-            }
-
-            // Start background rendering for high-res versions
-            if (layersNeedingHighRes.Count > 0)
-            {
-                StartBackgroundHighResRender(layersNeedingHighRes);
-            }
+            return new Rect(
+                Math.Min(worldTL.X, worldBR.X),
+                Math.Min(worldTL.Y, worldBR.Y),
+                Math.Abs(worldBR.X - worldTL.X),
+                Math.Abs(worldBR.Y - worldTL.Y));
         }
 
         /// <summary>
-        /// Render layer at low resolution - fast, runs on UI thread for immediate display
+        /// Render only visible tiles to the composite bitmap
         /// </summary>
-        private LayerMipMap RasterizeLayerLowRes(GerberLayer layer)
+        private void RenderVisibleTilesToComposite(DrawingContext dc, Rect visibleWorld, int tileZoom)
         {
             try
             {
-                if (layer.Primitives == null || layer.Primitives.Count == 0)
-                    return null;
+                // Calculate composite size based on visible area
+                int compositeWidth = (int)Math.Min(ActualWidth * 1.5, 2048);
+                int compositeHeight = (int)Math.Min(ActualHeight * 1.5, 2048);
 
-                Rect bounds = layer.Bounds;
-                if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0)
-                    return null;
-
-                if (double.IsNaN(bounds.Width) || double.IsNaN(bounds.Height) ||
-                    double.IsInfinity(bounds.Width) || double.IsInfinity(bounds.Height))
-                    return null;
-
-                bounds.Inflate(bounds.Width * 0.02, bounds.Height * 0.02);
-
-                // Calculate low-res dimensions (quick preview)
-                double pixelsPerUnit = LOW_RES_PIXELS_PER_UNIT;
-                int width = (int)Math.Ceiling(bounds.Width * pixelsPerUnit);
-                int height = (int)Math.Ceiling(bounds.Height * pixelsPerUnit);
-
-                // Clamp low-res to reasonable size (typically 256-1024)
-                int maxLowRes = 1024;
-                if (width > maxLowRes || height > maxLowRes)
-                {
-                    double scale = Math.Min((double)maxLowRes / width, (double)maxLowRes / height);
-                    width = (int)(width * scale);
-                    height = (int)(height * scale);
-                    pixelsPerUnit *= scale;
-                }
-
-                width = Math.Max(MIN_LAYER_BITMAP_SIZE, width);
-                height = Math.Max(MIN_LAYER_BITMAP_SIZE, height);
-
-                // Create 1-bit storage
-                int bytesPerRow = (width + 7) / 8;
-                byte[] monoPixels = new byte[bytesPerRow * height];
-
-                // Rasterize all primitives
-                foreach (var prim in layer.Primitives)
-                {
-                    RasterizePrimitiveToMono(monoPixels, width, height, bytesPerRow, prim, bounds, pixelsPerUnit);
-                }
-
-                var mip = new LayerMipMap
-                {
-                    LowResMono = monoPixels,
-                    LowResWidth = width,
-                    LowResHeight = height,
-                    WorldBounds = bounds,
-                    LayerColor = layer.Color,
-                    Opacity = layer.Opacity,
-                    LowResReady = false,
-                    MidResReady = false,
-                    HighResReady = false,
-                    IsRendering = false
-                };
-
-                // Convert to colored bitmap on UI thread
-                mip.LowResBitmap = CreateColoredBitmapFromMip(mip, MipLevel.Low);
-                mip.LowResReady = mip.LowResBitmap != null;
-
-                System.Diagnostics.Debug.WriteLine($"Low-res rasterized '{layer.Name}': {width}x{height}");
-                return mip;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error rasterizing low-res '{layer.Name}': {ex.Message}");
-                return null;
-            }
-        }
-
-        private enum MipLevel { Low, Mid, High }
-
-        /// <summary>
-        /// Start background rendering of high-res MIP levels
-        /// </summary>
-        private void StartBackgroundHighResRender(List<GerberLayer> layers)
-        {
-            // Cancel any previous background render
-            _renderCts?.Cancel();
-            _renderCts = new CancellationTokenSource();
-            var ct = _renderCts.Token;
-
-            foreach (var layer in layers)
-            {
-                if (!_layerMips.TryGetValue(layer.Id, out var mip) || mip.IsRendering)
-                    continue;
-
-                mip.IsRendering = true;
-                Interlocked.Increment(ref _pendingHighResRenders);
-
-                // Capture layer data for background thread
-                var primitives = layer.Primitives.ToList();
-                var bounds = mip.WorldBounds;
-                var color = layer.Color;
-                var opacity = layer.Opacity;
-                var layerId = layer.Id;
-                var layerName = layer.Name;
-
-                Task.Run(() =>
-                {
-                    try
-                    {
-                        if (ct.IsCancellationRequested) return;
-
-                        // Render mid-res first (faster, good quality)
-                        var midRes = RasterizeMipLevel(primitives, bounds, MID_RES_PIXELS_PER_UNIT, 2048, ct);
-                        if (midRes.mono != null && !ct.IsCancellationRequested)
-                        {
-                            // Update MIP on UI thread
-                            Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                if (_layerMips.TryGetValue(layerId, out var m))
-                                {
-                                    m.MidResMono = midRes.mono;
-                                    m.MidResWidth = midRes.width;
-                                    m.MidResHeight = midRes.height;
-                                    m.MidResBitmap = CreateColoredBitmapFromMip(m, MipLevel.Mid);
-                                    m.MidResReady = m.MidResBitmap != null;
-                                    _compositeNeedsUpdate = true;
-                                    InvalidateVisual();
-                                    System.Diagnostics.Debug.WriteLine($"Mid-res ready '{layerName}': {midRes.width}x{midRes.height}");
-                                }
-                            }), DispatcherPriority.Background);
-                        }
-
-                        if (ct.IsCancellationRequested) return;
-
-                        // Then render high-res (slower, best quality)
-                        var highRes = RasterizeMipLevel(primitives, bounds, HIGH_RES_PIXELS_PER_UNIT, MAX_LAYER_BITMAP_SIZE, ct);
-                        if (highRes.mono != null && !ct.IsCancellationRequested)
-                        {
-                            Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                if (_layerMips.TryGetValue(layerId, out var m))
-                                {
-                                    m.HighResMono = highRes.mono;
-                                    m.HighResWidth = highRes.width;
-                                    m.HighResHeight = highRes.height;
-                                    m.HighResBitmap = CreateColoredBitmapFromMip(m, MipLevel.High);
-                                    m.HighResReady = m.HighResBitmap != null;
-                                    m.IsRendering = false;
-                                    _compositeNeedsUpdate = true;
-                                    InvalidateVisual();
-                                    System.Diagnostics.Debug.WriteLine($"High-res ready '{layerName}': {highRes.width}x{highRes.height}");
-                                }
-                            }), DispatcherPriority.Background);
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // Normal cancellation
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Background render error '{layerName}': {ex.Message}");
-                    }
-                    finally
-                    {
-                        Interlocked.Decrement(ref _pendingHighResRenders);
-                        if (_layerMips.TryGetValue(layerId, out var m))
-                            m.IsRendering = false;
-                    }
-                }, ct);
-            }
-        }
-
-        /// <summary>
-        /// Rasterize primitives to a specific MIP level (runs on background thread)
-        /// </summary>
-        private (byte[] mono, int width, int height) RasterizeMipLevel(
-            List<GerberPrimitive> primitives, Rect bounds, double targetPPU, int maxSize, CancellationToken ct)
-        {
-            try
-            {
-                double pixelsPerUnit = targetPPU;
-                int width = (int)Math.Ceiling(bounds.Width * pixelsPerUnit);
-                int height = (int)Math.Ceiling(bounds.Height * pixelsPerUnit);
-
-                if (width > maxSize || height > maxSize)
-                {
-                    double scale = Math.Min((double)maxSize / width, (double)maxSize / height);
-                    width = (int)(width * scale);
-                    height = (int)(height * scale);
-                    pixelsPerUnit *= scale;
-                }
-
-                width = Math.Max(MIN_LAYER_BITMAP_SIZE, Math.Min(width, maxSize));
-                height = Math.Max(MIN_LAYER_BITMAP_SIZE, Math.Min(height, maxSize));
-
-                int bytesPerRow = (width + 7) / 8;
-                byte[] monoPixels = new byte[bytesPerRow * height];
-
-                // Rasterize with periodic cancellation checks
-                int checkInterval = Math.Max(1, primitives.Count / 100);
-                for (int i = 0; i < primitives.Count; i++)
-                {
-                    if (i % checkInterval == 0 && ct.IsCancellationRequested)
-                        return (null, 0, 0);
-
-                    RasterizePrimitiveToMonoThreadSafe(monoPixels, width, height, bytesPerRow,
-                        primitives[i], bounds, pixelsPerUnit);
-                }
-
-                return (monoPixels, width, height);
-            }
-            catch
-            {
-                return (null, 0, 0);
-            }
-        }
-
-        /// <summary>
-        /// Thread-safe version of primitive rasterization (no shared state)
-        /// </summary>
-        private void RasterizePrimitiveToMonoThreadSafe(byte[] pixels, int width, int height, int bytesPerRow,
-            GerberPrimitive prim, Rect worldBounds, double pixelsPerUnit)
-        {
-            // Same logic as RasterizePrimitiveToMono but safe for background threads
-            double bx = (prim.X - worldBounds.Left) * pixelsPerUnit;
-            double by = (worldBounds.Top + worldBounds.Height - prim.Y) * pixelsPerUnit;
-            double sw = prim.Width * pixelsPerUnit;
-            double sh = prim.Height * pixelsPerUnit;
-
-            switch (prim.Type)
-            {
-                case GerberPrimitiveType.Circle:
-                case GerberPrimitiveType.Flash:
-                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
-                    break;
-                case GerberPrimitiveType.Rectangle:
-                    Fill1BitRectangle(pixels, width, height, bytesPerRow, bx, by, sw, sh);
-                    break;
-                case GerberPrimitiveType.Line:
-                    double ex = (prim.EndX - worldBounds.Left) * pixelsPerUnit;
-                    double ey = (worldBounds.Top + worldBounds.Height - prim.EndY) * pixelsPerUnit;
-                    Fill1BitLine(pixels, width, height, bytesPerRow, bx, by, ex, ey, sw);
-                    break;
-                case GerberPrimitiveType.Arc:
-                    // Simplified arc rendering
-                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
-                    break;
-                case GerberPrimitiveType.Polygon:
-                    if (prim.Points != null && prim.Points.Count >= 3)
-                    {
-                        var scaledPoints = prim.Points.Select(p => new Point(
-                            (p.X - worldBounds.Left) * pixelsPerUnit,
-                            (worldBounds.Top + worldBounds.Height - p.Y) * pixelsPerUnit)).ToList();
-                        Fill1BitPolygon(pixels, width, height, bytesPerRow, scaledPoints);
-                    }
-                    break;
-                case GerberPrimitiveType.Obround:
-                    Fill1BitObround(pixels, width, height, bytesPerRow, bx, by, sw, sh);
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// Create colored BGRA bitmap from MIP mono data
-        /// </summary>
-        private WriteableBitmap CreateColoredBitmapFromMip(LayerMipMap mip, MipLevel level)
-        {
-            try
-            {
-                byte[] mono;
-                int width, height;
-
-                switch (level)
-                {
-                    case MipLevel.Low:
-                        mono = mip.LowResMono;
-                        width = mip.LowResWidth;
-                        height = mip.LowResHeight;
-                        break;
-                    case MipLevel.Mid:
-                        mono = mip.MidResMono;
-                        width = mip.MidResWidth;
-                        height = mip.MidResHeight;
-                        break;
-                    case MipLevel.High:
-                        mono = mip.HighResMono;
-                        width = mip.HighResWidth;
-                        height = mip.HighResHeight;
-                        break;
-                    default:
-                        return null;
-                }
-
-                if (mono == null || width <= 0 || height <= 0)
-                    return null;
-
-                var bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
-                int bytesPerRow = (width + 7) / 8;
-
-                byte r = mip.LayerColor.R;
-                byte g = mip.LayerColor.G;
-                byte b = mip.LayerColor.B;
-                byte a = (byte)(mip.Opacity * 255);
-
-                bitmap.Lock();
-                try
-                {
-                    unsafe
-                    {
-                        byte* ptr = (byte*)bitmap.BackBuffer;
-                        int stride = bitmap.BackBufferStride;
-
-                        Parallel.For(0, height, y =>
-                        {
-                            for (int x = 0; x < width; x++)
-                            {
-                                int byteIdx = y * bytesPerRow + (x / 8);
-                                int bitIdx = 7 - (x % 8);
-                                bool isSet = (mono[byteIdx] & (1 << bitIdx)) != 0;
-
-                                int offset = y * stride + x * 4;
-                                if (isSet)
-                                {
-                                    ptr[offset + 0] = b;
-                                    ptr[offset + 1] = g;
-                                    ptr[offset + 2] = r;
-                                    ptr[offset + 3] = a;
-                                }
-                                else
-                                {
-                                    ptr[offset + 0] = 0;
-                                    ptr[offset + 1] = 0;
-                                    ptr[offset + 2] = 0;
-                                    ptr[offset + 3] = 0;
-                                }
-                            }
-                        });
-                    }
-                    bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
-                }
-                finally
-                {
-                    bitmap.Unlock();
-                }
-
-                bitmap.Freeze(); // Allow cross-thread access
-                return bitmap;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error creating colored bitmap: {ex.Message}");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Rebuild colored bitmaps when layer color changes
-        /// </summary>
-        private void RebuildMipColors(GerberLayer layer, LayerMipMap mip)
-        {
-            mip.LayerColor = layer.Color;
-            mip.Opacity = layer.Opacity;
-
-            if (mip.LowResMono != null)
-                mip.LowResBitmap = CreateColoredBitmapFromMip(mip, MipLevel.Low);
-            if (mip.MidResMono != null)
-                mip.MidResBitmap = CreateColoredBitmapFromMip(mip, MipLevel.Mid);
-            if (mip.HighResMono != null)
-                mip.HighResBitmap = CreateColoredBitmapFromMip(mip, MipLevel.High);
-        }
-
-        /// <summary>
-        /// Rasterize a single primitive to the 1-bit bitmap
-        /// </summary>
-        private void RasterizePrimitiveToMono(byte[] pixels, int width, int height, int bytesPerRow,
-            GerberPrimitive prim, Rect worldBounds, double pixelsPerUnit)
-        {
-            // Convert world coordinates to bitmap coordinates
-            double bx = (prim.X - worldBounds.Left) * pixelsPerUnit;
-            double by = (worldBounds.Top + worldBounds.Height - prim.Y) * pixelsPerUnit;
-            double sw = prim.Width * pixelsPerUnit;
-            double sh = prim.Height * pixelsPerUnit;
-
-            switch (prim.Type)
-            {
-                case GerberPrimitiveType.Circle:
-                case GerberPrimitiveType.Flash:
-                    FillMonoCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
-                    break;
-
-                case GerberPrimitiveType.Rectangle:
-                    FillMonoRectangle(pixels, width, height, bytesPerRow, bx, by, sw, sh);
-                    break;
-
-                case GerberPrimitiveType.Obround:
-                    FillMonoRectangle(pixels, width, height, bytesPerRow, bx, by, sw, sh);
-                    double r = Math.Min(sw, sh) / 2;
-                    if (sw > sh)
-                    {
-                        FillMonoCircle(pixels, width, height, bytesPerRow, bx - sw / 2 + r, by, r);
-                        FillMonoCircle(pixels, width, height, bytesPerRow, bx + sw / 2 - r, by, r);
-                    }
-                    else
-                    {
-                        FillMonoCircle(pixels, width, height, bytesPerRow, bx, by - sh / 2 + r, r);
-                        FillMonoCircle(pixels, width, height, bytesPerRow, bx, by + sh / 2 - r, r);
-                    }
-                    break;
-
-                case GerberPrimitiveType.Line:
-                case GerberPrimitiveType.Arc:
-                    if (prim.Points != null && prim.Points.Count >= 2)
-                    {
-                        double lineWidth = Math.Max(1, prim.Width * pixelsPerUnit);
-                        for (int i = 1; i < prim.Points.Count; i++)
-                        {
-                            double x1 = (prim.Points[i - 1].X - worldBounds.Left) * pixelsPerUnit;
-                            double y1 = (worldBounds.Top + worldBounds.Height - prim.Points[i - 1].Y) * pixelsPerUnit;
-                            double x2 = (prim.Points[i].X - worldBounds.Left) * pixelsPerUnit;
-                            double y2 = (worldBounds.Top + worldBounds.Height - prim.Points[i].Y) * pixelsPerUnit;
-                            FillMonoLine(pixels, width, height, bytesPerRow, x1, y1, x2, y2, lineWidth);
-                        }
-                    }
-                    break;
-
-                case GerberPrimitiveType.Contour:
-                    if (prim.Points != null && prim.Points.Count >= 3)
-                    {
-                        var pts = new List<Point>();
-                        foreach (var pt in prim.Points)
-                        {
-                            pts.Add(new Point(
-                                (pt.X - worldBounds.Left) * pixelsPerUnit,
-                                (worldBounds.Top + worldBounds.Height - pt.Y) * pixelsPerUnit));
-                        }
-                        FillMonoPolygon(pixels, width, height, bytesPerRow, pts);
-                    }
-                    break;
-
-                case GerberPrimitiveType.Polygon:
-                    FillMonoRegularPolygon(pixels, width, height, bytesPerRow, bx, by, sw / 2, 6, prim.Rotation);
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// Update the combined world bounds of all layers
-        /// </summary>
-        private void UpdateWorldBounds()
-        {
-            _worldBounds = Rect.Empty;
-
-            foreach (var layer in GerberLayers)
-            {
-                if (_layerMips.TryGetValue(layer.Id, out var mip))
-                {
-                    if (_worldBounds.IsEmpty)
-                        _worldBounds = mip.WorldBounds;
-                    else
-                        _worldBounds.Union(mip.WorldBounds);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Rebuild the display composite from visible layer MIP bitmaps
-        /// Uses fast LUT-based screen blend for X-ray effect
-        /// Selects appropriate MIP level based on current zoom
-        /// </summary>
-        private void RebuildDisplayComposite()
-        {
-            try
-            {
-                if (_worldBounds.IsEmpty || _layerMips.Count == 0)
-                {
-                    _displayComposite = null;
-                    _compositeNeedsUpdate = false;
+                if (compositeWidth <= 0 || compositeHeight <= 0)
                     return;
-                }
 
-                // Get current zoom for LOD selection
-                double currentZoom = Zoom;
-
-                // Find best resolution to use based on zoom and what's available
-                int targetWidth = 0, targetHeight = 0;
-                foreach (var kvp in _layerMips)
-                {
-                    var mip = kvp.Value;
-                    var (w, h) = mip.GetBestDimensions(currentZoom);
-                    targetWidth = Math.Max(targetWidth, w);
-                    targetHeight = Math.Max(targetHeight, h);
-                }
-
-                // Clamp to safe size
-                targetWidth = Math.Min(targetWidth, MAX_LAYER_BITMAP_SIZE);
-                targetHeight = Math.Min(targetHeight, MAX_LAYER_BITMAP_SIZE);
-
-                if (targetWidth <= 0 || targetHeight <= 0)
-                {
-                    _displayComposite = null;
-                    _compositeNeedsUpdate = false;
-                    return;
-                }
-
-                // Ensure composite buffer is correct size
-                int bufferSize = targetWidth * targetHeight * 4;
+                // Ensure buffer is correct size
+                int bufferSize = compositeWidth * compositeHeight * 4;
                 if (_compositeBuffer == null || _compositeBuffer.Length != bufferSize)
                 {
                     _compositeBuffer = new byte[bufferSize];
                 }
 
-                // Clear buffer to transparent
+                // Clear buffer
                 Array.Clear(_compositeBuffer, 0, bufferSize);
 
-                // Composite each visible layer using fast LUT-based screen blend
+                // Composite tiles from each visible layer
                 foreach (var layer in GerberLayers)
                 {
                     if (!layer.IsVisible)
                         continue;
 
-                    if (!_layerMips.TryGetValue(layer.Id, out var mip))
+                    Rect layerBounds = layer.Bounds;
+                    if (layerBounds.IsEmpty)
                         continue;
 
-                    // Get best available bitmap for current zoom
-                    var srcBitmap = mip.GetBestBitmap(currentZoom);
-                    if (srcBitmap == null)
-                        continue;
+                    layerBounds.Inflate(layerBounds.Width * 0.02, layerBounds.Height * 0.02);
 
-                    // Copy pixel data from frozen bitmap
-                    int srcWidth = srcBitmap.PixelWidth;
-                    int srcHeight = srcBitmap.PixelHeight;
-                    int srcStride = srcBitmap.BackBufferStride;
-                    byte[] srcPixels = new byte[srcHeight * srcStride];
-                    srcBitmap.CopyPixels(srcPixels, srcStride, 0);
+                    // Get tiles that intersect visible area
+                    var (minTX, minTY, maxTX, maxTY) = GetTilesForWorldRect(visibleWorld, layerBounds, tileZoom);
 
-                    // Calculate scaling if source and target differ
-                    double scaleX = (double)srcWidth / targetWidth;
-                    double scaleY = (double)srcHeight / targetHeight;
-
-                    int destStride = targetWidth * 4;
-
-                    // Fast screen blend with LUT
-                    Parallel.For(0, targetHeight, y =>
+                    // Render each visible tile
+                    for (int ty = minTY; ty <= maxTY; ty++)
                     {
-                        int srcY = (int)(y * scaleY);
-                        if (srcY >= srcHeight) srcY = srcHeight - 1;
-
-                        for (int x = 0; x < targetWidth; x++)
+                        for (int tx = minTX; tx <= maxTX; tx++)
                         {
-                            int srcX = (int)(x * scaleX);
-                            if (srcX >= srcWidth) srcX = srcWidth - 1;
-
-                            int srcOffset = srcY * srcStride + srcX * 4;
-                            int destOffset = y * destStride + x * 4;
-
-                            byte srcB = srcPixels[srcOffset + 0];
-                            byte srcG = srcPixels[srcOffset + 1];
-                            byte srcR = srcPixels[srcOffset + 2];
-                            byte srcA = srcPixels[srcOffset + 3];
-
-                            if (srcA == 0)
+                            var tile = GetOrRenderTile(layer, tileZoom, tx, ty);
+                            if (tile == null || !tile.IsReady || tile.Bitmap == null)
                                 continue;
 
-                            byte destB = _compositeBuffer[destOffset + 0];
-                            byte destG = _compositeBuffer[destOffset + 1];
-                            byte destR = _compositeBuffer[destOffset + 2];
-
-                            // Fast screen blend using LUT - pre-multiply source by alpha
-                            byte sR = (byte)((srcR * srcA) / 255);
-                            byte sG = (byte)((srcG * srcA) / 255);
-                            byte sB = (byte)((srcB * srcA) / 255);
-
-                            // Screen blend via LUT
-                            _compositeBuffer[destOffset + 0] = ScreenBlend(destB, sB);
-                            _compositeBuffer[destOffset + 1] = ScreenBlend(destG, sG);
-                            _compositeBuffer[destOffset + 2] = ScreenBlend(destR, sR);
-                            _compositeBuffer[destOffset + 3] = 255;
+                            // Calculate where this tile goes in the composite
+                            CompositeTileToBuffer(tile, visibleWorld, compositeWidth, compositeHeight);
                         }
-                    });
+                    }
                 }
 
-                // Create or update display composite bitmap
+                // Create display composite from buffer
                 if (_displayComposite == null ||
-                    _displayComposite.PixelWidth != targetWidth ||
-                    _displayComposite.PixelHeight != targetHeight)
+                    _displayComposite.PixelWidth != compositeWidth ||
+                    _displayComposite.PixelHeight != compositeHeight)
                 {
-                    _displayComposite = new WriteableBitmap(targetWidth, targetHeight, 96, 96, PixelFormats.Bgra32, null);
+                    _displayComposite = new WriteableBitmap(compositeWidth, compositeHeight, 96, 96, PixelFormats.Bgra32, null);
                 }
 
-                // Copy buffer to bitmap
                 _displayComposite.Lock();
                 try
                 {
                     _displayComposite.WritePixels(
-                        new Int32Rect(0, 0, targetWidth, targetHeight),
+                        new Int32Rect(0, 0, compositeWidth, compositeHeight),
                         _compositeBuffer,
-                        targetWidth * 4,
+                        compositeWidth * 4,
                         0);
                 }
                 finally
@@ -1666,11 +1428,110 @@ namespace PCBPlotter.Controls
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error rebuilding display composite: {ex.Message}");
-                _displayComposite = null;
-                _compositeNeedsUpdate = false;
+                System.Diagnostics.Debug.WriteLine($"Error rendering tiles to composite: {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Composite a single tile into the buffer with screen blending
+        /// </summary>
+        private void CompositeTileToBuffer(TileData tile, Rect visibleWorld, int compositeWidth, int compositeHeight)
+        {
+            try
+            {
+                // Calculate where tile maps to composite coordinates
+                double scaleX = compositeWidth / visibleWorld.Width;
+                double scaleY = compositeHeight / visibleWorld.Height;
+
+                int destX = (int)((tile.WorldBounds.Left - visibleWorld.Left) * scaleX);
+                int destY = (int)((visibleWorld.Bottom - tile.WorldBounds.Bottom) * scaleY);
+                int destW = (int)(tile.WorldBounds.Width * scaleX);
+                int destH = (int)(tile.WorldBounds.Height * scaleY);
+
+                if (destX >= compositeWidth || destY >= compositeHeight ||
+                    destX + destW <= 0 || destY + destH <= 0)
+                    return;
+
+                // Copy tile pixels to buffer with screen blend
+                byte[] tilePixels = new byte[TILE_SIZE * TILE_SIZE * 4];
+                tile.Bitmap.CopyPixels(tilePixels, TILE_SIZE * 4, 0);
+
+                int destStride = compositeWidth * 4;
+
+                for (int sy = 0; sy < TILE_SIZE; sy++)
+                {
+                    int dy = destY + (sy * destH / TILE_SIZE);
+                    if (dy < 0 || dy >= compositeHeight)
+                        continue;
+
+                    for (int sx = 0; sx < TILE_SIZE; sx++)
+                    {
+                        int dx = destX + (sx * destW / TILE_SIZE);
+                        if (dx < 0 || dx >= compositeWidth)
+                            continue;
+
+                        int srcOff = (sy * TILE_SIZE + sx) * 4;
+                        int dstOff = dy * destStride + dx * 4;
+
+                        byte srcB = tilePixels[srcOff + 0];
+                        byte srcG = tilePixels[srcOff + 1];
+                        byte srcR = tilePixels[srcOff + 2];
+                        byte srcA = tilePixels[srcOff + 3];
+
+                        if (srcA == 0)
+                            continue;
+
+                        // Pre-multiply by alpha
+                        byte sR = (byte)((srcR * srcA) / 255);
+                        byte sG = (byte)((srcG * srcA) / 255);
+                        byte sB = (byte)((srcB * srcA) / 255);
+
+                        // Screen blend
+                        _compositeBuffer[dstOff + 0] = ScreenBlend(_compositeBuffer[dstOff + 0], sB);
+                        _compositeBuffer[dstOff + 1] = ScreenBlend(_compositeBuffer[dstOff + 1], sG);
+                        _compositeBuffer[dstOff + 2] = ScreenBlend(_compositeBuffer[dstOff + 2], sR);
+                        _compositeBuffer[dstOff + 3] = 255;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error compositing tile: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Update world bounds from all layers
+        /// </summary>
+        private void UpdateWorldBoundsFromLayers()
+        {
+            _worldBounds = Rect.Empty;
+            foreach (var layer in GerberLayers)
+            {
+                if (layer.Bounds.IsEmpty)
+                    continue;
+
+                if (_worldBounds.IsEmpty)
+                    _worldBounds = layer.Bounds;
+                else
+                    _worldBounds.Union(layer.Bounds);
+            }
+
+            if (!_worldBounds.IsEmpty)
+            {
+                _worldBounds.Inflate(_worldBounds.Width * 0.02, _worldBounds.Height * 0.02);
+            }
+        }
+
+        /// <summary>
+        /// Generate visibility state key for cache invalidation
+        /// </summary>
+        private string GetVisibilityStateKey()
+        {
+            if (GerberLayers == null) return "";
+            return string.Join(",", GerberLayers.Select(l => l.IsVisible ? "1" : "0"));
+        }
+
 
         /// <summary>
         /// Ensure an active layer is set (default to first visible layer)
@@ -2171,7 +2032,7 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Invalidates all Gerber layer MIP caches, forcing re-rasterization
+        /// Invalidates all Gerber layer tile caches, forcing re-rendering
         /// Call this when layer geometry changes (not for visibility/color changes)
         /// </summary>
         public void InvalidateGerberCache()
@@ -2179,12 +2040,16 @@ namespace PCBPlotter.Controls
             // Cancel any pending background renders
             _renderCts?.Cancel();
 
-            // Clear all layer MIPs - they will be rebuilt on next render
-            _layerMips.Clear();
+            // Clear tile caches - they will be re-rendered on demand
+            _tileCache.Clear();
+            _tileCacheOrder.Clear();
+            _layerInfoCache.Clear();
             _displayComposite = null;
             _compositeBuffer = null;
             _compositeNeedsUpdate = true;
             _lastVisibilityState = "";
+            _lastCompositeZoom = -1;
+            _lastVisibleWorld = Rect.Empty;
             _worldBounds = Rect.Empty;
             _activeLayerQuadtree = null;
             _gerberCacheDirty = true;
