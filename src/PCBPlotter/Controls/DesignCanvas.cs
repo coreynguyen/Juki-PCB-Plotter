@@ -285,6 +285,7 @@ namespace PCBPlotter.Controls
         public event EventHandler<Rect> SelectionRectCompleted;
         public event EventHandler<Point> PointClicked;
         public event EventHandler<List<Placement>> SelectionChanged;
+        public event EventHandler<List<GerberPrimitive>> GerberSelectionChanged;
         public event EventHandler<int> GraphicSelectionChanged;
         public event EventHandler<int> PinSelectionChanged;
         public event EventHandler<Point> GraphicMoved;
@@ -307,8 +308,8 @@ namespace PCBPlotter.Controls
             ClipToBounds = true;
             Focusable = true;
 
-            // Use NearestNeighbor scaling for fast, crisp bitmap zoom (no expensive bilinear filtering)
-            RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
+            // Use HighQuality scaling for smooth zoom (anti-aliased bilinear filtering)
+            RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
 
             InitializeBrushesAndPens();
 
@@ -524,10 +525,6 @@ namespace PCBPlotter.Controls
 
             // Clear all caches when layers change - bitmaps will be rendered on demand
             canvas._layerBitmaps.Clear();
-            canvas._displayComposite = null;
-            canvas._compositeBuffer = null;
-            canvas._compositeNeedsUpdate = true;
-            canvas._lastVisibilityState = "";
             canvas._worldBounds = Rect.Empty;
             canvas._activeLayerQuadtree = null;
             canvas._activeGerberLayer = null;
@@ -539,7 +536,6 @@ namespace PCBPlotter.Controls
         {
             // New layers added - they will be rasterized on demand
             // Removed layers - their bitmaps will be cleaned up in EnsureLayerBitmapsBuilt
-            _compositeNeedsUpdate = true;
             _gerberCacheDirty = true;
             InvalidateVisual();
         }
@@ -694,26 +690,19 @@ namespace PCBPlotter.Controls
         // Layer bitmap cache: layerId -> bitmap data
         private Dictionary<string, LayerBitmapCache> _layerBitmaps = new Dictionary<string, LayerBitmapCache>();
 
-        // Composited display bitmap
-        private WriteableBitmap _displayComposite;
-        private byte[] _compositeBuffer;
-        private bool _compositeNeedsUpdate = true;
-        private string _lastVisibilityState = "";
-
         // World bounds of all layers combined
         private Rect _worldBounds = Rect.Empty;
 
-        // Screen blend lookup table - 256x256 = 64KB
-        private static byte[] _screenBlendLUT;
-
         // Rendering constants
-        private const int MAX_BITMAP_SIZE = 4096;
-        private const double TARGET_PIXELS_PER_UNIT = 50.0; // 50 pixels per mm
+        private const int MAX_BITMAP_SIZE = 8192;  // Increased for better zoom quality
+        private const double BASE_PIXELS_PER_UNIT = 100.0; // 100 pixels per mm at zoom=1
+        private const double MIN_SCREEN_PIXELS_PER_UNIT = 2.0; // Re-render when less than 2 screen pixels per world unit
 
         // Active layer for selection
         private GerberLayer _activeGerberLayer;
         private GerberQuadtree _activeLayerQuadtree;
         private bool _gerberCacheDirty = true;
+        private double _lastRenderZoom = 0;
 
         /// <summary>
         /// Cached bitmap for a single layer
@@ -729,25 +718,7 @@ namespace PCBPlotter.Controls
             public double Opacity { get; set; }
             public double PixelsPerUnitX { get; set; }
             public double PixelsPerUnitY { get; set; }
-        }
-
-        private static void EnsureScreenBlendLUT()
-        {
-            if (_screenBlendLUT != null) return;
-            _screenBlendLUT = new byte[256 * 256];
-            for (int a = 0; a < 256; a++)
-            {
-                for (int b = 0; b < 256; b++)
-                {
-                    int result = a + b - (a * b) / 255;
-                    _screenBlendLUT[a * 256 + b] = (byte)Math.Min(255, Math.Max(0, result));
-                }
-            }
-        }
-
-        private static byte ScreenBlend(byte a, byte b)
-        {
-            return _screenBlendLUT[a * 256 + b];
+            public double RenderZoom { get; set; }  // Zoom level when this bitmap was rendered
         }
 
         /// <summary>
@@ -888,15 +859,15 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Render Gerber layers using direct layer-to-bitmap approach
+        /// Render Gerber layers using direct layer-to-bitmap approach with GPU compositing.
         /// Each layer is rendered once and cached. Pan/zoom just transforms the cached bitmaps.
+        /// WPF's GPU handles blending - no CPU-based pixel compositing needed.
         /// </summary>
         private void RenderGerberLayers(DrawingContext dc)
         {
             if (GerberLayers == null || GerberLayers.Count == 0)
                 return;
 
-            EnsureScreenBlendLUT();
             EnsureActiveLayerSet();
             UpdateWorldBoundsFromLayers();
 
@@ -906,22 +877,19 @@ namespace PCBPlotter.Controls
             // Ensure each layer has a cached bitmap
             EnsureLayerBitmapsBuilt();
 
-            // Check if we need to rebuild composite
-            string visState = GetVisibilityStateKey();
-            bool needsRebuild = _compositeNeedsUpdate || visState != _lastVisibilityState;
-
-            if (needsRebuild)
+            // Draw each visible layer directly - let GPU handle compositing
+            // This is MUCH faster than CPU-based pixel blending
+            foreach (var layer in GerberLayers)
             {
-                _lastVisibilityState = visState;
-                RebuildDisplayComposite();
-            }
+                if (!layer.IsVisible)
+                    continue;
 
-            // Draw cached composite at correct screen position
-            if (_displayComposite != null && !_worldBounds.IsEmpty)
-            {
-                // Convert world bounds to screen coordinates
-                Point screenTL = WorldToScreen(new Point(_worldBounds.Left, _worldBounds.Bottom));
-                Point screenBR = WorldToScreen(new Point(_worldBounds.Right, _worldBounds.Top));
+                if (!_layerBitmaps.TryGetValue(layer.Id, out var cache) || cache.Bitmap == null)
+                    continue;
+
+                // Convert layer world bounds to screen coordinates
+                Point screenTL = WorldToScreen(new Point(cache.WorldBounds.Left, cache.WorldBounds.Top + cache.WorldBounds.Height));
+                Point screenBR = WorldToScreen(new Point(cache.WorldBounds.Right, cache.WorldBounds.Top));
 
                 Rect screenRect = new Rect(
                     Math.Min(screenTL.X, screenBR.X),
@@ -929,7 +897,17 @@ namespace PCBPlotter.Controls
                     Math.Abs(screenBR.X - screenTL.X),
                     Math.Abs(screenBR.Y - screenTL.Y));
 
-                dc.DrawImage(_displayComposite, screenRect);
+                // Use opacity for layer blending - GPU handles this efficiently
+                if (layer.Opacity < 1.0)
+                {
+                    dc.PushOpacity(layer.Opacity);
+                    dc.DrawImage(cache.Bitmap, screenRect);
+                    dc.Pop();
+                }
+                else
+                {
+                    dc.DrawImage(cache.Bitmap, screenRect);
+                }
             }
 
             // Draw active layer highlight
@@ -942,7 +920,7 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Ensure all layers have their bitmaps built
+        /// Ensure all layers have their bitmaps built at appropriate resolution for current zoom
         /// </summary>
         private void EnsureLayerBitmapsBuilt()
         {
@@ -955,14 +933,21 @@ namespace PCBPlotter.Controls
                     if (newCache != null)
                     {
                         _layerBitmaps[layer.Id] = newCache;
-                        _compositeNeedsUpdate = true;
                     }
                 }
-                else if (cache.LayerColor != layer.Color || Math.Abs(cache.Opacity - layer.Opacity) > 0.01)
+                else if (cache.LayerColor != layer.Color)
                 {
-                    // Color/opacity changed - rebuild just the colored bitmap
+                    // Color changed - rebuild just the colored bitmap
                     RebuildLayerColoredBitmap(cache, layer.Color, layer.Opacity);
-                    _compositeNeedsUpdate = true;
+                }
+                else if (NeedsHigherResolution(cache, layer))
+                {
+                    // Zoom level requires higher resolution - rebuild entire bitmap
+                    var newCache = BuildLayerBitmap(layer);
+                    if (newCache != null)
+                    {
+                        _layerBitmaps[layer.Id] = newCache;
+                    }
                 }
             }
 
@@ -976,7 +961,35 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Build a single layer's bitmap
+        /// Check if the cached bitmap needs to be re-rendered at higher resolution
+        /// </summary>
+        private bool NeedsHigherResolution(LayerBitmapCache cache, GerberLayer layer)
+        {
+            if (!layer.IsVisible) return false;
+
+            // Calculate current screen pixels per world unit
+            double screenPixelsPerUnit = Zoom;
+
+            // Calculate cached bitmap pixels per world unit
+            double cachedPixelsPerUnit = Math.Min(cache.PixelsPerUnitX, cache.PixelsPerUnitY);
+
+            // If we're zoomed in and the bitmap resolution is less than screen resolution,
+            // we need to re-render at higher resolution
+            // Use a threshold to avoid constant re-rendering
+            double ratio = cachedPixelsPerUnit / screenPixelsPerUnit;
+
+            // Re-render if bitmap has less than MIN_SCREEN_PIXELS_PER_UNIT pixels per screen pixel
+            // and we haven't already hit the max bitmap size
+            if (ratio < MIN_SCREEN_PIXELS_PER_UNIT && cache.Width < MAX_BITMAP_SIZE && cache.Height < MAX_BITMAP_SIZE)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Build a single layer's bitmap at resolution appropriate for current zoom
         /// </summary>
         private LayerBitmapCache BuildLayerBitmap(GerberLayer layer)
         {
@@ -992,27 +1005,34 @@ namespace PCBPlotter.Controls
                 // Add small margin to layer bounds
                 layerBounds.Inflate(layerBounds.Width * 0.02, layerBounds.Height * 0.02);
 
-                // Calculate bitmap size - aim for good resolution but limit max size
-                double maxDim = Math.Max(layerBounds.Width, layerBounds.Height);
-                double targetPixels = Math.Min(maxDim * TARGET_PIXELS_PER_UNIT, MAX_BITMAP_SIZE);
-                double scale = targetPixels / maxDim;
+                // Calculate target resolution based on current zoom
+                // We want enough pixels that zooming in doesn't show pixelation
+                double currentZoom = Math.Max(1.0, Zoom);
 
-                int bitmapWidth = Math.Max(1, (int)Math.Ceiling(layerBounds.Width * scale));
-                int bitmapHeight = Math.Max(1, (int)Math.Ceiling(layerBounds.Height * scale));
+                // Target: at least MIN_SCREEN_PIXELS_PER_UNIT * 2 bitmap pixels per screen pixel
+                // This provides some headroom before needing to re-render
+                double targetPPU = Math.Max(BASE_PIXELS_PER_UNIT, currentZoom * MIN_SCREEN_PIXELS_PER_UNIT * 2);
+
+                int bitmapWidth = Math.Max(1, (int)Math.Ceiling(layerBounds.Width * targetPPU));
+                int bitmapHeight = Math.Max(1, (int)Math.Ceiling(layerBounds.Height * targetPPU));
 
                 // Clamp to max size
                 if (bitmapWidth > MAX_BITMAP_SIZE)
                 {
-                    scale = scale * MAX_BITMAP_SIZE / bitmapWidth;
+                    double ratio = (double)MAX_BITMAP_SIZE / bitmapWidth;
                     bitmapWidth = MAX_BITMAP_SIZE;
-                    bitmapHeight = Math.Max(1, (int)Math.Ceiling(layerBounds.Height * scale));
+                    bitmapHeight = Math.Max(1, (int)Math.Ceiling(bitmapHeight * ratio));
                 }
                 if (bitmapHeight > MAX_BITMAP_SIZE)
                 {
-                    scale = scale * MAX_BITMAP_SIZE / bitmapHeight;
+                    double ratio = (double)MAX_BITMAP_SIZE / bitmapHeight;
                     bitmapHeight = MAX_BITMAP_SIZE;
-                    bitmapWidth = Math.Max(1, (int)Math.Ceiling(layerBounds.Width * scale));
+                    bitmapWidth = Math.Max(1, (int)Math.Ceiling(bitmapWidth * ratio));
                 }
+
+                // Final clamp
+                bitmapWidth = Math.Min(bitmapWidth, MAX_BITMAP_SIZE);
+                bitmapHeight = Math.Min(bitmapHeight, MAX_BITMAP_SIZE);
 
                 double ppuX = bitmapWidth / layerBounds.Width;
                 double ppuY = bitmapHeight / layerBounds.Height;
@@ -1038,7 +1058,8 @@ namespace PCBPlotter.Controls
                     LayerColor = layer.Color,
                     Opacity = layer.Opacity,
                     PixelsPerUnitX = ppuX,
-                    PixelsPerUnitY = ppuY
+                    PixelsPerUnitY = ppuY,
+                    RenderZoom = currentZoom
                 };
 
                 // Build colored bitmap
@@ -1113,7 +1134,8 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Rebuild colored bitmap from mono data when color/opacity changes
+        /// Rebuild colored bitmap from mono data when color changes.
+        /// Opacity is handled by the GPU via PushOpacity during rendering.
         /// </summary>
         private void RebuildLayerColoredBitmap(LayerBitmapCache cache, Color color, double opacity)
         {
@@ -1128,7 +1150,8 @@ namespace PCBPlotter.Controls
                 byte r = color.R;
                 byte g = color.G;
                 byte b = color.B;
-                byte a = (byte)(opacity * 255);
+                // Use full alpha - opacity is applied by GPU during rendering
+                byte a = 255;
 
                 bitmap.Lock();
                 try
@@ -1181,157 +1204,6 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Rebuild the display composite from all visible layer bitmaps
-        /// </summary>
-        private void RebuildDisplayComposite()
-        {
-            try
-            {
-                if (_worldBounds.IsEmpty || _worldBounds.Width <= 0 || _worldBounds.Height <= 0)
-                    return;
-
-                // Calculate composite size to match max layer resolution
-                int compositeWidth = 0;
-                int compositeHeight = 0;
-                foreach (var layer in GerberLayers)
-                {
-                    if (layer.IsVisible && _layerBitmaps.TryGetValue(layer.Id, out var cache))
-                    {
-                        compositeWidth = Math.Max(compositeWidth, cache.Width);
-                        compositeHeight = Math.Max(compositeHeight, cache.Height);
-                    }
-                }
-
-                if (compositeWidth <= 0 || compositeHeight <= 0)
-                    return;
-
-                // Ensure buffer is correct size
-                int bufferSize = compositeWidth * compositeHeight * 4;
-                if (_compositeBuffer == null || _compositeBuffer.Length != bufferSize)
-                {
-                    _compositeBuffer = new byte[bufferSize];
-                }
-
-                // Clear buffer
-                Array.Clear(_compositeBuffer, 0, bufferSize);
-
-                // Composite each visible layer
-                foreach (var layer in GerberLayers)
-                {
-                    if (!layer.IsVisible)
-                        continue;
-
-                    if (!_layerBitmaps.TryGetValue(layer.Id, out var cache) || cache.Bitmap == null)
-                        continue;
-
-                    CompositeLayerToBuffer(cache, compositeWidth, compositeHeight);
-                }
-
-                // Create display composite from buffer
-                if (_displayComposite == null ||
-                    _displayComposite.PixelWidth != compositeWidth ||
-                    _displayComposite.PixelHeight != compositeHeight)
-                {
-                    _displayComposite = new WriteableBitmap(compositeWidth, compositeHeight, 96, 96, PixelFormats.Bgra32, null);
-                }
-
-                _displayComposite.Lock();
-                try
-                {
-                    _displayComposite.WritePixels(
-                        new Int32Rect(0, 0, compositeWidth, compositeHeight),
-                        _compositeBuffer,
-                        compositeWidth * 4,
-                        0);
-                }
-                finally
-                {
-                    _displayComposite.Unlock();
-                }
-
-                _compositeNeedsUpdate = false;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error rebuilding display composite: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Composite a layer bitmap into the buffer with screen blending
-        /// </summary>
-        private void CompositeLayerToBuffer(LayerBitmapCache cache, int compositeWidth, int compositeHeight)
-        {
-            try
-            {
-                if (cache.Bitmap == null)
-                    return;
-
-                // Calculate scaling from layer bitmap to composite
-                double scaleX = (double)compositeWidth / _worldBounds.Width;
-                double scaleY = (double)compositeHeight / _worldBounds.Height;
-
-                int destX = (int)((cache.WorldBounds.Left - _worldBounds.Left) * scaleX);
-                int destY = (int)((_worldBounds.Top + _worldBounds.Height - cache.WorldBounds.Top - cache.WorldBounds.Height) * scaleY);
-                int destW = (int)(cache.WorldBounds.Width * scaleX);
-                int destH = (int)(cache.WorldBounds.Height * scaleY);
-
-                // Get source pixels
-                byte[] srcPixels = new byte[cache.Width * cache.Height * 4];
-                cache.Bitmap.CopyPixels(srcPixels, cache.Width * 4, 0);
-
-                int destStride = compositeWidth * 4;
-
-                // Sample source and composite with screen blend
-                for (int dy = 0; dy < destH; dy++)
-                {
-                    int py = destY + dy;
-                    if (py < 0 || py >= compositeHeight)
-                        continue;
-
-                    int sy = dy * cache.Height / destH;
-                    if (sy >= cache.Height) sy = cache.Height - 1;
-
-                    for (int dx = 0; dx < destW; dx++)
-                    {
-                        int px = destX + dx;
-                        if (px < 0 || px >= compositeWidth)
-                            continue;
-
-                        int sx = dx * cache.Width / destW;
-                        if (sx >= cache.Width) sx = cache.Width - 1;
-
-                        int srcOff = (sy * cache.Width + sx) * 4;
-                        int dstOff = py * destStride + px * 4;
-
-                        byte srcA = srcPixels[srcOff + 3];
-                        if (srcA == 0)
-                            continue;
-
-                        byte srcB = srcPixels[srcOff + 0];
-                        byte srcG = srcPixels[srcOff + 1];
-                        byte srcR = srcPixels[srcOff + 2];
-
-                        // Pre-multiply by alpha
-                        byte sR = (byte)((srcR * srcA) / 255);
-                        byte sG = (byte)((srcG * srcA) / 255);
-                        byte sB = (byte)((srcB * srcA) / 255);
-
-                        // Screen blend
-                        _compositeBuffer[dstOff + 0] = ScreenBlend(_compositeBuffer[dstOff + 0], sB);
-                        _compositeBuffer[dstOff + 1] = ScreenBlend(_compositeBuffer[dstOff + 1], sG);
-                        _compositeBuffer[dstOff + 2] = ScreenBlend(_compositeBuffer[dstOff + 2], sR);
-                        _compositeBuffer[dstOff + 3] = 255;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error compositing layer: {ex.Message}");
-            }
-        }
-
-        /// <summary>
         /// Update world bounds from all layers
         /// </summary>
         private void UpdateWorldBoundsFromLayers()
@@ -1353,16 +1225,6 @@ namespace PCBPlotter.Controls
                 _worldBounds.Inflate(_worldBounds.Width * 0.02, _worldBounds.Height * 0.02);
             }
         }
-
-        /// <summary>
-        /// Generate visibility state key for cache invalidation
-        /// </summary>
-        private string GetVisibilityStateKey()
-        {
-            if (GerberLayers == null) return "";
-            return string.Join(",", GerberLayers.Select(l => l.IsVisible ? "1" : "0"));
-        }
-
 
         /// <summary>
         /// Ensure an active layer is set (default to first visible layer)
@@ -1870,10 +1732,6 @@ namespace PCBPlotter.Controls
         {
             // Clear layer bitmap caches - they will be re-rendered on demand
             _layerBitmaps.Clear();
-            _displayComposite = null;
-            _compositeBuffer = null;
-            _compositeNeedsUpdate = true;
-            _lastVisibilityState = "";
             _worldBounds = Rect.Empty;
             _activeLayerQuadtree = null;
             _gerberCacheDirty = true;
@@ -1881,11 +1739,10 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Mark composite as needing update (for visibility/color changes, not geometry)
+        /// Mark layers as needing redraw (for visibility/color changes, not geometry)
         /// </summary>
         public void InvalidateComposite()
         {
-            _compositeNeedsUpdate = true;
             InvalidateVisual();
         }
 
@@ -2564,13 +2421,34 @@ namespace PCBPlotter.Controls
                 return;
             }
 
+            bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+
+            // First, try to hit test a Gerber primitive on the active layer
+            GerberPrimitive hitPrimitive = HitTestGerberPrimitive(mousePos);
+            if (hitPrimitive != null)
+            {
+                if (isCtrlPressed)
+                {
+                    // Toggle selection
+                    hitPrimitive.IsSelected = !hitPrimitive.IsSelected;
+                }
+                else
+                {
+                    // Clear other selections and select this one
+                    ClearSelection();
+                    hitPrimitive.IsSelected = true;
+                }
+
+                InvalidateVisual();
+                RaiseGerberSelectionChanged();
+                return;
+            }
+
             // Try to hit test a placement
             Placement hitPlacement = HitTestPlacement(mousePos);
 
             if (hitPlacement != null)
             {
-                bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
-
                 if (isCtrlPressed)
                 {
                     // Toggle selection
@@ -2588,8 +2466,8 @@ namespace PCBPlotter.Controls
             }
             else
             {
-                // No placement hit - will start rectangle select on drag
-                if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+                // No hit - will start rectangle select on drag
+                if (!isCtrlPressed)
                 {
                     ClearSelection();
                     InvalidateVisual();
@@ -2616,7 +2494,6 @@ namespace PCBPlotter.Controls
 
                 if (_selectionRect.Width > 5 && _selectionRect.Height > 5)
                 {
-                    // Select all placements in the rectangle
                     bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
 
                     if (!isCtrlPressed)
@@ -2624,6 +2501,18 @@ namespace PCBPlotter.Controls
                         ClearSelection();
                     }
 
+                    // Select Gerber primitives in rectangle (from active layer only)
+                    var selectedPrimitives = SelectGerberPrimitivesInRect(_selectionRect);
+                    if (selectedPrimitives.Count > 0)
+                    {
+                        foreach (var prim in selectedPrimitives)
+                        {
+                            prim.IsSelected = true;
+                        }
+                        RaiseGerberSelectionChanged();
+                    }
+
+                    // Also select placements in the rectangle
                     SelectPlacementsInRect(_selectionRect);
                     RaiseSelectionChanged();
                 }
@@ -2698,10 +2587,29 @@ namespace PCBPlotter.Controls
 
         private void ClearSelection()
         {
-            if (Placements == null) return;
-            foreach (var p in Placements)
+            // Clear placement selections
+            if (Placements != null)
             {
-                p.IsSelected = false;
+                foreach (var p in Placements)
+                {
+                    p.IsSelected = false;
+                }
+            }
+
+            // Clear Gerber primitive selections
+            ClearGerberSelection();
+        }
+
+        private void ClearGerberSelection()
+        {
+            if (GerberLayers == null) return;
+            foreach (var layer in GerberLayers)
+            {
+                if (layer.Primitives == null) continue;
+                foreach (var prim in layer.Primitives)
+                {
+                    prim.IsSelected = false;
+                }
             }
         }
 
@@ -2734,6 +2642,24 @@ namespace PCBPlotter.Controls
                 }
                 SelectionChanged?.Invoke(this, selected);
             }
+        }
+
+        private void RaiseGerberSelectionChanged()
+        {
+            // Raise event for Gerber primitive selection changes
+            var selected = new List<GerberPrimitive>();
+            if (GerberLayers != null)
+            {
+                foreach (var layer in GerberLayers)
+                {
+                    if (layer.Primitives == null) continue;
+                    foreach (var prim in layer.Primitives)
+                    {
+                        if (prim.IsSelected) selected.Add(prim);
+                    }
+                }
+            }
+            GerberSelectionChanged?.Invoke(this, selected);
         }
 
         #endregion
