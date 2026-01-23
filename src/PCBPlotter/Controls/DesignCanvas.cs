@@ -1007,20 +1007,15 @@ namespace PCBPlotter.Controls
                     return new Rect(prim.X - halfW, prim.Y - halfH, prim.Width, prim.Height);
 
                 case GerberPrimitiveType.Line:
-                    double minX = Math.Min(prim.X, prim.EndX) - halfW;
-                    double maxX = Math.Max(prim.X, prim.EndX) + halfW;
-                    double minY = Math.Min(prim.Y, prim.EndY) - halfW;
-                    double maxY = Math.Max(prim.Y, prim.EndY) + halfW;
-                    return new Rect(minX, minY, maxX - minX, maxY - minY);
-
+                case GerberPrimitiveType.Arc:
                 case GerberPrimitiveType.Polygon:
                 case GerberPrimitiveType.Contour:
                     if (prim.Points != null && prim.Points.Count > 0)
                     {
-                        double pMinX = prim.Points.Min(p => p.X);
-                        double pMaxX = prim.Points.Max(p => p.X);
-                        double pMinY = prim.Points.Min(p => p.Y);
-                        double pMaxY = prim.Points.Max(p => p.Y);
+                        double pMinX = prim.Points.Min(p => p.X) - halfW;
+                        double pMaxX = prim.Points.Max(p => p.X) + halfW;
+                        double pMinY = prim.Points.Min(p => p.Y) - halfW;
+                        double pMaxY = prim.Points.Max(p => p.Y) + halfW;
                         return new Rect(pMinX, pMinY, pMaxX - pMinX, pMaxY - pMinY);
                     }
                     return new Rect(prim.X - halfW, prim.Y - halfH, prim.Width, prim.Height);
@@ -1059,9 +1054,19 @@ namespace PCBPlotter.Controls
                     break;
 
                 case GerberPrimitiveType.Line:
-                    double ex = (prim.EndX - tileBounds.Left) * pixelsPerUnit;
-                    double ey = (tileBounds.Top + tileBounds.Height - prim.EndY) * pixelsPerUnit;
-                    Fill1BitLine(pixels, width, height, bytesPerRow, bx, by, ex, ey, sw);
+                case GerberPrimitiveType.Arc:
+                    // Lines use Points collection for segments
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        for (int i = 1; i < prim.Points.Count; i++)
+                        {
+                            double x1 = (prim.Points[i - 1].X - tileBounds.Left) * pixelsPerUnit;
+                            double y1 = (tileBounds.Top + tileBounds.Height - prim.Points[i - 1].Y) * pixelsPerUnit;
+                            double x2 = (prim.Points[i].X - tileBounds.Left) * pixelsPerUnit;
+                            double y2 = (tileBounds.Top + tileBounds.Height - prim.Points[i].Y) * pixelsPerUnit;
+                            Fill1BitLine(pixels, width, height, bytesPerRow, x1, y1, x2, y2, sw);
+                        }
+                    }
                     break;
 
                 case GerberPrimitiveType.Polygon:
@@ -1073,11 +1078,6 @@ namespace PCBPlotter.Controls
                             (tileBounds.Top + tileBounds.Height - p.Y) * pixelsPerUnit)).ToList();
                         Fill1BitPolygon(pixels, width, height, bytesPerRow, scaledPoints);
                     }
-                    break;
-
-                case GerberPrimitiveType.Arc:
-                    // Simplified arc as circle
-                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
                     break;
             }
         }
