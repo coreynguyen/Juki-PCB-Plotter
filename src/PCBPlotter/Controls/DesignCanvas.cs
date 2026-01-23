@@ -920,33 +920,61 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Ensure all layers have their bitmaps built at appropriate resolution for current zoom
+        /// Ensure all layers have their bitmaps built at appropriate resolution for current zoom.
+        /// Uses parallel processing for mono data rasterization.
         /// </summary>
         private void EnsureLayerBitmapsBuilt()
         {
+            // Identify layers that need full rebuild (new or need higher resolution)
+            var layersNeedingRebuild = new List<GerberLayer>();
+            var layersNeedingColorUpdate = new List<(GerberLayer layer, LayerBitmapCache cache)>();
+
             foreach (var layer in GerberLayers)
             {
                 if (!_layerBitmaps.TryGetValue(layer.Id, out var cache) || cache == null)
                 {
-                    // Build bitmap for this layer
-                    var newCache = BuildLayerBitmap(layer);
-                    if (newCache != null)
-                    {
-                        _layerBitmaps[layer.Id] = newCache;
-                    }
+                    layersNeedingRebuild.Add(layer);
                 }
                 else if (cache.LayerColor != layer.Color)
                 {
-                    // Color changed - rebuild just the colored bitmap
-                    RebuildLayerColoredBitmap(cache, layer.Color, layer.Opacity);
+                    layersNeedingColorUpdate.Add((layer, cache));
                 }
                 else if (NeedsHigherResolution(cache, layer))
                 {
-                    // Zoom level requires higher resolution - rebuild entire bitmap
-                    var newCache = BuildLayerBitmap(layer);
-                    if (newCache != null)
+                    layersNeedingRebuild.Add(layer);
+                }
+            }
+
+            // Process color updates (quick, no heavy CPU work)
+            foreach (var (layer, cache) in layersNeedingColorUpdate)
+            {
+                RebuildLayerColoredBitmap(cache, layer.Color, layer.Opacity);
+            }
+
+            // Build mono data in parallel for layers needing full rebuild
+            if (layersNeedingRebuild.Count > 0)
+            {
+                double currentZoom = Math.Max(1.0, Zoom);
+                var monoResults = new ConcurrentDictionary<string, LayerBitmapCache>();
+
+                // Parallel rasterization of mono data (CPU-intensive work)
+                Parallel.ForEach(layersNeedingRebuild, layer =>
+                {
+                    var cache = BuildLayerMonoData(layer, currentZoom);
+                    if (cache != null)
                     {
-                        _layerBitmaps[layer.Id] = newCache;
+                        monoResults[layer.Id] = cache;
+                    }
+                });
+
+                // Create colored bitmaps on UI thread (WriteableBitmap requires STA)
+                foreach (var kvp in monoResults)
+                {
+                    var layer = GerberLayers.FirstOrDefault(l => l.Id == kvp.Key);
+                    if (layer != null)
+                    {
+                        RebuildLayerColoredBitmap(kvp.Value, layer.Color, layer.Opacity);
+                        _layerBitmaps[kvp.Key] = kvp.Value;
                     }
                 }
             }
@@ -961,37 +989,9 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Check if the cached bitmap needs to be re-rendered at higher resolution
+        /// Build mono (1-bit) data for a layer - can run on background thread
         /// </summary>
-        private bool NeedsHigherResolution(LayerBitmapCache cache, GerberLayer layer)
-        {
-            if (!layer.IsVisible) return false;
-
-            // Calculate current screen pixels per world unit
-            double screenPixelsPerUnit = Zoom;
-
-            // Calculate cached bitmap pixels per world unit
-            double cachedPixelsPerUnit = Math.Min(cache.PixelsPerUnitX, cache.PixelsPerUnitY);
-
-            // If we're zoomed in and the bitmap resolution is less than screen resolution,
-            // we need to re-render at higher resolution
-            // Use a threshold to avoid constant re-rendering
-            double ratio = cachedPixelsPerUnit / screenPixelsPerUnit;
-
-            // Re-render if bitmap has less than MIN_SCREEN_PIXELS_PER_UNIT pixels per screen pixel
-            // and we haven't already hit the max bitmap size
-            if (ratio < MIN_SCREEN_PIXELS_PER_UNIT && cache.Width < MAX_BITMAP_SIZE && cache.Height < MAX_BITMAP_SIZE)
-            {
-                return true;
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Build a single layer's bitmap at resolution appropriate for current zoom
-        /// </summary>
-        private LayerBitmapCache BuildLayerBitmap(GerberLayer layer)
+        private LayerBitmapCache BuildLayerMonoData(GerberLayer layer, double currentZoom)
         {
             try
             {
@@ -1005,12 +1005,7 @@ namespace PCBPlotter.Controls
                 // Add small margin to layer bounds
                 layerBounds.Inflate(layerBounds.Width * 0.02, layerBounds.Height * 0.02);
 
-                // Calculate target resolution based on current zoom
-                // We want enough pixels that zooming in doesn't show pixelation
-                double currentZoom = Math.Max(1.0, Zoom);
-
                 // Target: at least MIN_SCREEN_PIXELS_PER_UNIT * 2 bitmap pixels per screen pixel
-                // This provides some headroom before needing to re-render
                 double targetPPU = Math.Max(BASE_PIXELS_PER_UNIT, currentZoom * MIN_SCREEN_PIXELS_PER_UNIT * 2);
 
                 int bitmapWidth = Math.Max(1, (int)Math.Ceiling(layerBounds.Width * targetPPU));
@@ -1048,8 +1043,7 @@ namespace PCBPlotter.Controls
                         prim, layerBounds, ppuX, ppuY);
                 }
 
-                // Create cache entry
-                var cache = new LayerBitmapCache
+                return new LayerBitmapCache
                 {
                     MonoPixels = monoPixels,
                     Width = bitmapWidth,
@@ -1061,17 +1055,55 @@ namespace PCBPlotter.Controls
                     PixelsPerUnitY = ppuY,
                     RenderZoom = currentZoom
                 };
-
-                // Build colored bitmap
-                RebuildLayerColoredBitmap(cache, layer.Color, layer.Opacity);
-
-                return cache;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error building layer bitmap for {layer.Name}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error building layer mono data for {layer.Name}: {ex.Message}");
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Check if the cached bitmap needs to be re-rendered at higher resolution
+        /// </summary>
+        private bool NeedsHigherResolution(LayerBitmapCache cache, GerberLayer layer)
+        {
+            if (!layer.IsVisible) return false;
+
+            // Calculate current screen pixels per world unit
+            double screenPixelsPerUnit = Zoom;
+
+            // Calculate cached bitmap pixels per world unit
+            double cachedPixelsPerUnit = Math.Min(cache.PixelsPerUnitX, cache.PixelsPerUnitY);
+
+            // If we're zoomed in and the bitmap resolution is less than screen resolution,
+            // we need to re-render at higher resolution
+            // Use a threshold to avoid constant re-rendering
+            double ratio = cachedPixelsPerUnit / screenPixelsPerUnit;
+
+            // Re-render if bitmap has less than MIN_SCREEN_PIXELS_PER_UNIT pixels per screen pixel
+            // and we haven't already hit the max bitmap size
+            if (ratio < MIN_SCREEN_PIXELS_PER_UNIT && cache.Width < MAX_BITMAP_SIZE && cache.Height < MAX_BITMAP_SIZE)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Build a single layer's bitmap at resolution appropriate for current zoom.
+        /// This is the synchronous version for single-layer builds.
+        /// </summary>
+        private LayerBitmapCache BuildLayerBitmap(GerberLayer layer)
+        {
+            double currentZoom = Math.Max(1.0, Zoom);
+            var cache = BuildLayerMonoData(layer, currentZoom);
+            if (cache != null)
+            {
+                RebuildLayerColoredBitmap(cache, layer.Color, layer.Opacity);
+            }
+            return cache;
         }
 
         /// <summary>
@@ -1080,6 +1112,14 @@ namespace PCBPlotter.Controls
         private void RasterizePrimitive(byte[] pixels, int width, int height, int bytesPerRow,
             GerberPrimitive prim, Rect worldBounds, double ppuX, double ppuY)
         {
+            // Early bounds check - skip primitives entirely outside bitmap
+            var primBounds = GetPrimitiveBounds(prim);
+            if (primBounds.Right < worldBounds.Left || primBounds.Left > worldBounds.Right ||
+                primBounds.Bottom < worldBounds.Top || primBounds.Top > worldBounds.Bottom)
+            {
+                return; // Primitive is entirely outside the bitmap area
+            }
+
             // Convert world to bitmap coordinates (Y is flipped)
             double bx = (prim.X - worldBounds.Left) * ppuX;
             double by = (worldBounds.Top + worldBounds.Height - prim.Y) * ppuY;
@@ -1136,6 +1176,7 @@ namespace PCBPlotter.Controls
         /// <summary>
         /// Rebuild colored bitmap from mono data when color changes.
         /// Opacity is handled by the GPU via PushOpacity during rendering.
+        /// Optimized to process bytes (8 pixels) at a time.
         /// </summary>
         private void RebuildLayerColoredBitmap(LayerBitmapCache cache, Color color, double opacity)
         {
@@ -1145,44 +1186,52 @@ namespace PCBPlotter.Controls
                 cache.Opacity = opacity;
 
                 var bitmap = new WriteableBitmap(cache.Width, cache.Height, 96, 96, PixelFormats.Bgra32, null);
-                int bytesPerRow = (cache.Width + 7) / 8;
+                int monoBytesPerRow = (cache.Width + 7) / 8;
 
-                byte r = color.R;
-                byte g = color.G;
-                byte b = color.B;
-                // Use full alpha - opacity is applied by GPU during rendering
-                byte a = 255;
+                // Pre-compute BGRA32 pixel value for set bits
+                uint colorPixel = (uint)((255 << 24) | (color.R << 16) | (color.G << 8) | color.B);
 
                 bitmap.Lock();
                 try
                 {
                     unsafe
                     {
-                        byte* ptr = (byte*)bitmap.BackBuffer;
-                        int stride = bitmap.BackBufferStride;
+                        uint* ptr = (uint*)bitmap.BackBuffer;
+                        int stride = bitmap.BackBufferStride / 4; // stride in uint (4 bytes)
 
                         for (int y = 0; y < cache.Height; y++)
                         {
-                            for (int x = 0; x < cache.Width; x++)
-                            {
-                                int byteIdx = y * bytesPerRow + (x / 8);
-                                int bitIdx = 7 - (x % 8);
-                                bool isSet = (cache.MonoPixels[byteIdx] & (1 << bitIdx)) != 0;
+                            int monoRowOffset = y * monoBytesPerRow;
+                            int colorRowOffset = y * stride;
+                            int x = 0;
 
-                                int offset = y * stride + x * 4;
-                                if (isSet)
+                            // Process full bytes (8 pixels at a time)
+                            int fullBytes = cache.Width / 8;
+                            for (int byteIdx = 0; byteIdx < fullBytes; byteIdx++)
+                            {
+                                byte monoByte = cache.MonoPixels[monoRowOffset + byteIdx];
+
+                                // Unroll 8 pixels from this byte
+                                // Bit 7 is leftmost pixel (x + 0), bit 0 is rightmost (x + 7)
+                                ptr[colorRowOffset + x + 0] = (monoByte & 0x80) != 0 ? colorPixel : 0;
+                                ptr[colorRowOffset + x + 1] = (monoByte & 0x40) != 0 ? colorPixel : 0;
+                                ptr[colorRowOffset + x + 2] = (monoByte & 0x20) != 0 ? colorPixel : 0;
+                                ptr[colorRowOffset + x + 3] = (monoByte & 0x10) != 0 ? colorPixel : 0;
+                                ptr[colorRowOffset + x + 4] = (monoByte & 0x08) != 0 ? colorPixel : 0;
+                                ptr[colorRowOffset + x + 5] = (monoByte & 0x04) != 0 ? colorPixel : 0;
+                                ptr[colorRowOffset + x + 6] = (monoByte & 0x02) != 0 ? colorPixel : 0;
+                                ptr[colorRowOffset + x + 7] = (monoByte & 0x01) != 0 ? colorPixel : 0;
+
+                                x += 8;
+                            }
+
+                            // Process remaining pixels in partial last byte
+                            if (x < cache.Width)
+                            {
+                                byte monoByte = cache.MonoPixels[monoRowOffset + fullBytes];
+                                for (int bit = 7; x < cache.Width; bit--, x++)
                                 {
-                                    ptr[offset + 0] = b;
-                                    ptr[offset + 1] = g;
-                                    ptr[offset + 2] = r;
-                                    ptr[offset + 3] = a;
-                                }
-                                else
-                                {
-                                    ptr[offset + 0] = 0;
-                                    ptr[offset + 1] = 0;
-                                    ptr[offset + 2] = 0;
-                                    ptr[offset + 3] = 0;
+                                    ptr[colorRowOffset + x] = (monoByte & (1 << bit)) != 0 ? colorPixel : 0;
                                 }
                             }
                         }
@@ -1318,20 +1367,29 @@ namespace PCBPlotter.Controls
 
         private void Fill1BitCircle(byte[] pixels, int width, int height, int bytesPerRow, double cx, double cy, double radius)
         {
-            int minX = Math.Max(0, (int)(cx - radius));
-            int maxX = Math.Min(width - 1, (int)(cx + radius));
+            if (radius < 0.5) return;
+
             int minY = Math.Max(0, (int)(cy - radius));
             int maxY = Math.Min(height - 1, (int)(cy + radius));
             double r2 = radius * radius;
 
+            // Use scanline approach - calculate horizontal span for each row
             for (int y = minY; y <= maxY; y++)
             {
-                for (int x = minX; x <= maxX; x++)
+                double dy = y - cy + 0.5;
+                double dy2 = dy * dy;
+
+                // Skip if this scanline doesn't intersect circle
+                if (dy2 > r2) continue;
+
+                // Calculate horizontal extent: x where dx^2 + dy^2 = r^2
+                double xExtent = Math.Sqrt(r2 - dy2);
+                int spanStart = Math.Max(0, (int)Math.Ceiling(cx - xExtent));
+                int spanEnd = Math.Min(width - 1, (int)(cx + xExtent));
+
+                if (spanEnd >= spanStart)
                 {
-                    double dx = x - cx + 0.5;
-                    double dy = y - cy + 0.5;
-                    if (dx * dx + dy * dy <= r2)
-                        Set1BitPixel(pixels, width, height, bytesPerRow, x, y);
+                    FillSpanFast(pixels, bytesPerRow, y, spanStart, spanEnd);
                 }
             }
         }
@@ -1343,12 +1401,12 @@ namespace PCBPlotter.Controls
             int minY = Math.Max(0, (int)(cy - h / 2));
             int maxY = Math.Min(height - 1, (int)(cy + h / 2));
 
+            if (minX > maxX || minY > maxY) return;
+
+            // Use fast span fill for each row
             for (int y = minY; y <= maxY; y++)
             {
-                for (int x = minX; x <= maxX; x++)
-                {
-                    Set1BitPixel(pixels, width, height, bytesPerRow, x, y);
-                }
+                FillSpanFast(pixels, bytesPerRow, y, minX, maxX);
             }
         }
 
@@ -1378,46 +1436,153 @@ namespace PCBPlotter.Controls
             Fill1BitCircle(pixels, width, height, bytesPerRow, x2, y2, lineWidth / 2);
         }
 
+        /// <summary>
+        /// Edge structure for Active Edge Table polygon fill algorithm
+        /// </summary>
+        private struct PolygonEdge
+        {
+            public int YMin;        // Top Y of edge
+            public int YMax;        // Bottom Y of edge
+            public double X;        // Current X intersection
+            public double DxPerScanline; // X increment per scanline (1/slope)
+        }
+
+        /// <summary>
+        /// Optimized polygon fill using Active Edge Table algorithm.
+        /// O(n + h*a) where n=vertices, h=height, a=avg active edges per scanline
+        /// Much faster than naive O(n*h) approach for large polygons.
+        /// </summary>
         private void Fill1BitPolygon(byte[] pixels, int width, int height, int bytesPerRow, List<Point> points)
         {
             if (points.Count < 3) return;
 
-            double minY = double.MaxValue, maxY = double.MinValue;
-            foreach (var p in points)
+            // Build edge table - only include non-horizontal edges
+            var edges = new List<PolygonEdge>(points.Count);
+            double globalMinY = double.MaxValue, globalMaxY = double.MinValue;
+
+            for (int i = 0; i < points.Count; i++)
             {
-                minY = Math.Min(minY, p.Y);
-                maxY = Math.Max(maxY, p.Y);
+                int j = (i + 1) % points.Count;
+                double y1 = points[i].Y, y2 = points[j].Y;
+                double x1 = points[i].X, x2 = points[j].X;
+
+                // Skip horizontal edges
+                if (Math.Abs(y2 - y1) < 0.001) continue;
+
+                globalMinY = Math.Min(globalMinY, Math.Min(y1, y2));
+                globalMaxY = Math.Max(globalMaxY, Math.Max(y1, y2));
+
+                // Ensure y1 is the top (smaller Y in screen coords)
+                if (y1 > y2)
+                {
+                    (y1, y2) = (y2, y1);
+                    (x1, x2) = (x2, x1);
+                }
+
+                edges.Add(new PolygonEdge
+                {
+                    YMin = (int)Math.Ceiling(y1),
+                    YMax = (int)y2,
+                    X = x1 + (Math.Ceiling(y1) - y1) * (x2 - x1) / (y2 - y1),
+                    DxPerScanline = (x2 - x1) / (y2 - y1)
+                });
             }
 
-            int iMinY = Math.Max(0, (int)minY);
-            int iMaxY = Math.Min(height - 1, (int)maxY);
+            if (edges.Count == 0) return;
+
+            // Sort edges by YMin
+            edges.Sort((a, b) => a.YMin.CompareTo(b.YMin));
+
+            int iMinY = Math.Max(0, (int)globalMinY);
+            int iMaxY = Math.Min(height - 1, (int)globalMaxY);
+
+            // Active edge list
+            var active = new List<PolygonEdge>(16);
+            int edgeIdx = 0;
+
+            // Reusable intersections list to avoid allocations
+            var intersections = new List<double>(16);
 
             for (int y = iMinY; y <= iMaxY; y++)
             {
-                var intersections = new List<double>();
-                for (int i = 0; i < points.Count; i++)
+                // Add new edges that start at this scanline
+                while (edgeIdx < edges.Count && edges[edgeIdx].YMin <= y)
                 {
-                    int j = (i + 1) % points.Count;
-                    double y1 = points[i].Y, y2 = points[j].Y;
-                    double x1 = points[i].X, x2 = points[j].X;
-
-                    if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y))
-                    {
-                        double t = (y - y1) / (y2 - y1);
-                        intersections.Add(x1 + t * (x2 - x1));
-                    }
+                    active.Add(edges[edgeIdx]);
+                    edgeIdx++;
                 }
 
+                // Remove edges that have ended
+                active.RemoveAll(e => e.YMax <= y);
+
+                if (active.Count < 2) continue;
+
+                // Collect X intersections
+                intersections.Clear();
+                for (int i = 0; i < active.Count; i++)
+                {
+                    intersections.Add(active[i].X);
+                }
                 intersections.Sort();
+
+                // Fill spans between pairs of intersections
                 for (int i = 0; i + 1 < intersections.Count; i += 2)
                 {
-                    int startX = Math.Max(0, (int)intersections[i]);
+                    int startX = Math.Max(0, (int)Math.Ceiling(intersections[i]));
                     int endX = Math.Min(width - 1, (int)intersections[i + 1]);
-                    for (int x = startX; x <= endX; x++)
+                    if (endX >= startX)
                     {
-                        Set1BitPixel(pixels, width, height, bytesPerRow, x, y);
+                        FillSpanFast(pixels, bytesPerRow, y, startX, endX);
                     }
                 }
+
+                // Update X coordinates for next scanline
+                for (int i = 0; i < active.Count; i++)
+                {
+                    var e = active[i];
+                    e.X += e.DxPerScanline;
+                    active[i] = e;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Fast span fill - fills entire bytes when possible (8 pixels at once)
+        /// </summary>
+        private void FillSpanFast(byte[] pixels, int bytesPerRow, int y, int x1, int x2)
+        {
+            if (x1 > x2) return;
+
+            int rowOffset = y * bytesPerRow;
+            int startByte = x1 / 8;
+            int endByte = x2 / 8;
+            int startBit = x1 % 8;
+            int endBit = x2 % 8;
+
+            if (startByte == endByte)
+            {
+                // All pixels in same byte - create mask for bits [startBit, endBit]
+                // Bit 7 is leftmost pixel (x % 8 == 0), bit 0 is rightmost (x % 8 == 7)
+                byte mask = (byte)((0xFF >> startBit) & (0xFF << (7 - endBit)));
+                pixels[rowOffset + startByte] |= mask;
+            }
+            else
+            {
+                // Fill start byte (partial)
+                if (startBit > 0)
+                {
+                    pixels[rowOffset + startByte] |= (byte)(0xFF >> startBit);
+                    startByte++;
+                }
+
+                // Fill middle bytes (all 0xFF - 8 pixels at once)
+                for (int b = startByte; b < endByte; b++)
+                {
+                    pixels[rowOffset + b] = 0xFF;
+                }
+
+                // Fill end byte (partial)
+                pixels[rowOffset + endByte] |= (byte)(0xFF << (7 - endBit));
             }
         }
 
