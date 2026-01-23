@@ -813,8 +813,20 @@ namespace PCBPlotter.Controls
             public bool Equals(TileKey other) =>
                 LayerId == other.LayerId && TileX == other.TileX && TileY == other.TileY && LodIndex == other.LodIndex;
 
-            public override int GetHashCode() =>
-                HashCode.Combine(LayerId, TileX, TileY, LodIndex);
+            public override bool Equals(object obj) => obj is TileKey other && Equals(other);
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = 17;
+                    hash = hash * 31 + (LayerId?.GetHashCode() ?? 0);
+                    hash = hash * 31 + TileX;
+                    hash = hash * 31 + TileY;
+                    hash = hash * 31 + LodIndex;
+                    return hash;
+                }
+            }
         }
 
         /// <summary>
