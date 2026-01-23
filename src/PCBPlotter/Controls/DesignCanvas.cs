@@ -930,9 +930,9 @@ namespace PCBPlotter.Controls
 
                 Rect tileWorldBounds = GetTileWorldBounds(layerBounds, zoomLevel, tileX, tileY);
 
-                // Calculate pixels per world unit for this zoom level
-                int tilesPerSide = 1 << zoomLevel;
-                double pixelsPerUnit = (TILE_SIZE * tilesPerSide) / Math.Max(layerBounds.Width, layerBounds.Height);
+                // Calculate pixels per world unit - separate X and Y for non-square tiles
+                double pixelsPerUnitX = TILE_SIZE / tileWorldBounds.Width;
+                double pixelsPerUnitY = TILE_SIZE / tileWorldBounds.Height;
 
                 // Create 1-bit storage for tile
                 int bytesPerRow = (TILE_SIZE + 7) / 8;
@@ -951,7 +951,7 @@ namespace PCBPlotter.Controls
 
                     // Render primitive to tile
                     RasterizePrimitiveToTile(monoPixels, TILE_SIZE, TILE_SIZE, bytesPerRow,
-                        prim, tileWorldBounds, pixelsPerUnit);
+                        prim, tileWorldBounds, pixelsPerUnitX, pixelsPerUnitY);
                     primitivesRendered++;
                 }
 
@@ -1030,19 +1030,24 @@ namespace PCBPlotter.Controls
         /// Rasterize primitive to tile coordinates
         /// </summary>
         private void RasterizePrimitiveToTile(byte[] pixels, int width, int height, int bytesPerRow,
-            GerberPrimitive prim, Rect tileBounds, double pixelsPerUnit)
+            GerberPrimitive prim, Rect tileBounds, double ppuX, double ppuY)
         {
-            // Convert world to tile-local coordinates
-            double bx = (prim.X - tileBounds.Left) * pixelsPerUnit;
-            double by = (tileBounds.Top + tileBounds.Height - prim.Y) * pixelsPerUnit;
-            double sw = prim.Width * pixelsPerUnit;
-            double sh = prim.Height * pixelsPerUnit;
+            // Convert world to tile-local coordinates (Y is flipped for screen coords)
+            double bx = (prim.X - tileBounds.Left) * ppuX;
+            double by = (tileBounds.Top + tileBounds.Height - prim.Y) * ppuY;
+            double sw = prim.Width * ppuX;  // Scale width by X
+            double sh = prim.Height * ppuY; // Scale height by Y
+
+            // For circles/flashes, use average scale for radius
+            double avgPpu = (ppuX + ppuY) / 2;
 
             switch (prim.Type)
             {
                 case GerberPrimitiveType.Circle:
                 case GerberPrimitiveType.Flash:
-                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, sw / 2);
+                    // Use average PPU for circles to maintain circularity
+                    double radius = prim.Width * avgPpu / 2;
+                    Fill1BitCircle(pixels, width, height, bytesPerRow, bx, by, radius);
                     break;
 
                 case GerberPrimitiveType.Rectangle:
@@ -1058,13 +1063,14 @@ namespace PCBPlotter.Controls
                     // Lines use Points collection for segments
                     if (prim.Points != null && prim.Points.Count >= 2)
                     {
+                        double lineWidth = prim.Width * avgPpu; // Use average for line width
                         for (int i = 1; i < prim.Points.Count; i++)
                         {
-                            double x1 = (prim.Points[i - 1].X - tileBounds.Left) * pixelsPerUnit;
-                            double y1 = (tileBounds.Top + tileBounds.Height - prim.Points[i - 1].Y) * pixelsPerUnit;
-                            double x2 = (prim.Points[i].X - tileBounds.Left) * pixelsPerUnit;
-                            double y2 = (tileBounds.Top + tileBounds.Height - prim.Points[i].Y) * pixelsPerUnit;
-                            Fill1BitLine(pixels, width, height, bytesPerRow, x1, y1, x2, y2, sw);
+                            double x1 = (prim.Points[i - 1].X - tileBounds.Left) * ppuX;
+                            double y1 = (tileBounds.Top + tileBounds.Height - prim.Points[i - 1].Y) * ppuY;
+                            double x2 = (prim.Points[i].X - tileBounds.Left) * ppuX;
+                            double y2 = (tileBounds.Top + tileBounds.Height - prim.Points[i].Y) * ppuY;
+                            Fill1BitLine(pixels, width, height, bytesPerRow, x1, y1, x2, y2, lineWidth);
                         }
                     }
                     break;
@@ -1074,8 +1080,8 @@ namespace PCBPlotter.Controls
                     if (prim.Points != null && prim.Points.Count >= 3)
                     {
                         var scaledPoints = prim.Points.Select(p => new Point(
-                            (p.X - tileBounds.Left) * pixelsPerUnit,
-                            (tileBounds.Top + tileBounds.Height - p.Y) * pixelsPerUnit)).ToList();
+                            (p.X - tileBounds.Left) * ppuX,
+                            (tileBounds.Top + tileBounds.Height - p.Y) * ppuY)).ToList();
                         Fill1BitPolygon(pixels, width, height, bytesPerRow, scaledPoints);
                     }
                     break;
