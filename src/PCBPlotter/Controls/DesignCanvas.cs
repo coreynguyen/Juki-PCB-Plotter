@@ -694,18 +694,18 @@ namespace PCBPlotter.Controls
         private Rect _worldBounds = Rect.Empty;
 
         // Rendering constants
-        private const int MAX_BITMAP_SIZE = 8192;  // Increased for better zoom quality
+        private const int MAX_BITMAP_SIZE = 4096;  // Reduced from 8192 to limit memory
         private const double BASE_PIXELS_PER_UNIT = 100.0; // 100 pixels per mm at zoom=1
         private const double MIN_SCREEN_PIXELS_PER_UNIT = 2.0; // Re-render when less than 2 screen pixels per world unit
 
-        // LOD system constants - only 2 levels to minimize memory usage
-        // Each BGRA32 bitmap at 2048x2048 = 16MB, so 2 LODs * 6 layers = ~192MB max
-        private static readonly double[] LOD_LEVELS = { 1.0, 8.0 };
-        private const int MAX_LOD_BITMAP_SIZE = 2048;  // Per-LOD bitmap size limit (16MB each)
+        // LOD system DISABLED - just use single bitmap per layer
+        // Each BGRA32 bitmap at 1024x1024 = 4MB, so 6 layers = ~24MB
+        private static readonly double[] LOD_LEVELS = { 1.0 };  // Single level only
+        private const int MAX_LOD_BITMAP_SIZE = 1024;  // 4MB per bitmap max
 
-        // Pixel buffer pooling to reduce GC pressure
+        // Pixel buffer pooling - keep it small
         private static readonly ConcurrentBag<byte[]> _pixelBufferPool = new ConcurrentBag<byte[]>();
-        private const int MAX_POOLED_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB max pooled buffer
+        private const int MAX_POOLED_BUFFER_SIZE = 512 * 1024; // 512KB max pooled buffer
 
         // Active layer for selection
         private GerberLayer _activeGerberLayer;
@@ -740,8 +740,8 @@ namespace PCBPlotter.Controls
             if (buffer == null || buffer.Length > MAX_POOLED_BUFFER_SIZE)
                 return;
 
-            // Only pool if we don't have too many buffers already
-            if (_pixelBufferPool.Count < 10)
+            // Only pool if we don't have too many buffers already (max 3)
+            if (_pixelBufferPool.Count < 3)
             {
                 _pixelBufferPool.Add(buffer);
             }
@@ -796,10 +796,11 @@ namespace PCBPlotter.Controls
 
         #region Tiled Rendering for Large Boards
 
-        // Tile rendering constants
-        private const int TILE_SIZE = 2048;  // Pixels per tile
-        private const double TILE_WORLD_SIZE_THRESHOLD = 200.0; // Use tiles for boards larger than 200mm
-        private const int MAX_CACHED_TILES = 64;  // Maximum number of tiles to keep in memory
+        // Tile rendering constants - DISABLED for now (threshold set very high)
+        // Tiled rendering was causing excessive memory usage
+        private const int TILE_SIZE = 512;  // Reduced from 2048
+        private const double TILE_WORLD_SIZE_THRESHOLD = 10000.0; // Effectively disabled - use whole bitmap
+        private const int MAX_CACHED_TILES = 8;  // Reduced from 64
 
         /// <summary>
         /// Tile cache key - identifies a specific tile by layer, position, and LOD
