@@ -698,9 +698,10 @@ namespace PCBPlotter.Controls
         private const double BASE_PIXELS_PER_UNIT = 100.0; // 100 pixels per mm at zoom=1
         private const double MIN_SCREEN_PIXELS_PER_UNIT = 2.0; // Re-render when less than 2 screen pixels per world unit
 
-        // LOD system constants - pre-render at these zoom multipliers
-        private static readonly double[] LOD_LEVELS = { 1.0, 4.0, 16.0, 64.0 };
-        private const int MAX_LOD_BITMAP_SIZE = 4096;  // Per-LOD bitmap size limit
+        // LOD system constants - only 2 levels to minimize memory usage
+        // Each BGRA32 bitmap at 2048x2048 = 16MB, so 2 LODs * 6 layers = ~192MB max
+        private static readonly double[] LOD_LEVELS = { 1.0, 8.0 };
+        private const int MAX_LOD_BITMAP_SIZE = 2048;  // Per-LOD bitmap size limit (16MB each)
 
         // Pixel buffer pooling to reduce GC pressure
         private static readonly ConcurrentBag<byte[]> _pixelBufferPool = new ConcurrentBag<byte[]>();
@@ -1385,26 +1386,30 @@ namespace PCBPlotter.Controls
                     LodBitmaps = new Dictionary<int, LodLevel>()
                 };
 
-                // Build LOD levels from lowest to target (or all if zoomed in)
-                int maxLodToBuild = Math.Min(targetLodIndex + 1, LOD_LEVELS.Length);
-                for (int lodIdx = 0; lodIdx < maxLodToBuild; lodIdx++)
+                // Only build the LOD level we actually need right now (saves memory)
+                // Mono data is tiny (1-bit), but BGRA32 bitmaps are huge (4 bytes/pixel)
+                var lodLevel = BuildLodLevel(layer, layerBounds, targetLodIndex);
+                if (lodLevel != null)
                 {
-                    var lodLevel = BuildLodLevel(layer, layerBounds, lodIdx);
-                    if (lodLevel != null)
-                    {
-                        cache.LodBitmaps[lodIdx] = lodLevel;
-                    }
+                    cache.LodBitmaps[targetLodIndex] = lodLevel;
                 }
 
-                // Set primary cache properties from best available LOD
-                if (cache.LodBitmaps.Count > 0)
+                // Also build LOD 0 as fallback if we're at a higher LOD (it's small)
+                if (targetLodIndex > 0)
                 {
-                    var bestLod = cache.LodBitmaps[cache.LodBitmaps.Keys.Max()];
-                    cache.MonoPixels = bestLod.MonoPixels;
-                    cache.Width = bestLod.Width;
-                    cache.Height = bestLod.Height;
-                    cache.PixelsPerUnitX = bestLod.PixelsPerUnitX;
-                    cache.PixelsPerUnitY = bestLod.PixelsPerUnitY;
+                    var lod0 = BuildLodLevel(layer, layerBounds, 0);
+                    if (lod0 != null)
+                        cache.LodBitmaps[0] = lod0;
+                }
+
+                // Set primary cache properties from the target LOD
+                if (lodLevel != null)
+                {
+                    cache.MonoPixels = lodLevel.MonoPixels;
+                    cache.Width = lodLevel.Width;
+                    cache.Height = lodLevel.Height;
+                    cache.PixelsPerUnitX = lodLevel.PixelsPerUnitX;
+                    cache.PixelsPerUnitY = lodLevel.PixelsPerUnitY;
                 }
 
                 return cache;
@@ -1617,19 +1622,36 @@ namespace PCBPlotter.Controls
                 // Pre-compute BGRA32 pixel value for set bits
                 uint colorPixel = (uint)((255 << 24) | (color.R << 16) | (color.G << 8) | color.B);
 
-                // Build colored bitmap for each LOD level
-                if (cache.LodBitmaps != null)
+                // Only build ONE colored bitmap - the one we need for current zoom
+                // BGRA32 bitmaps are huge (4 bytes/pixel), mono data is tiny (1 bit/pixel)
+                // Regenerating from mono is fast (~10ms), so we only keep one bitmap in memory
+                if (cache.LodBitmaps != null && cache.LodBitmaps.Count > 0)
                 {
-                    foreach (var kvp in cache.LodBitmaps)
+                    int neededLod = GetLodIndex(Zoom);
+
+                    // Find the LOD we need (or best available)
+                    LodLevel targetLod = null;
+                    if (cache.LodBitmaps.TryGetValue(neededLod, out targetLod) ||
+                        cache.LodBitmaps.TryGetValue(0, out targetLod))
                     {
-                        var lod = kvp.Value;
-                        lod.Bitmap = BuildColoredBitmapFromMono(lod.MonoPixels, lod.Width, lod.Height, colorPixel);
+                        // Null out other LOD bitmaps to free memory (keep mono data)
+                        foreach (var kvp in cache.LodBitmaps)
+                        {
+                            if (kvp.Value != targetLod)
+                                kvp.Value.Bitmap = null;
+                        }
+
+                        // Build only the needed bitmap
+                        if (targetLod.MonoPixels != null)
+                        {
+                            targetLod.Bitmap = BuildColoredBitmapFromMono(targetLod.MonoPixels, targetLod.Width, targetLod.Height, colorPixel);
+                            cache.Bitmap = targetLod.Bitmap;
+                        }
                     }
                 }
-
-                // Also build the primary bitmap for backwards compatibility
-                if (cache.MonoPixels != null && cache.Width > 0 && cache.Height > 0)
+                else if (cache.MonoPixels != null && cache.Width > 0 && cache.Height > 0)
                 {
+                    // Fallback for non-LOD cache
                     cache.Bitmap = BuildColoredBitmapFromMono(cache.MonoPixels, cache.Width, cache.Height, colorPixel);
                 }
             }
