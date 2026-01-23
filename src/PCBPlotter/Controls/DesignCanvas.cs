@@ -698,6 +698,14 @@ namespace PCBPlotter.Controls
         private const double BASE_PIXELS_PER_UNIT = 100.0; // 100 pixels per mm at zoom=1
         private const double MIN_SCREEN_PIXELS_PER_UNIT = 2.0; // Re-render when less than 2 screen pixels per world unit
 
+        // LOD system constants - pre-render at these zoom multipliers
+        private static readonly double[] LOD_LEVELS = { 1.0, 4.0, 16.0, 64.0 };
+        private const int MAX_LOD_BITMAP_SIZE = 4096;  // Per-LOD bitmap size limit
+
+        // Pixel buffer pooling to reduce GC pressure
+        private static readonly ConcurrentBag<byte[]> _pixelBufferPool = new ConcurrentBag<byte[]>();
+        private const int MAX_POOLED_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB max pooled buffer
+
         // Active layer for selection
         private GerberLayer _activeGerberLayer;
         private GerberQuadtree _activeLayerQuadtree;
@@ -705,7 +713,41 @@ namespace PCBPlotter.Controls
         private double _lastRenderZoom = 0;
 
         /// <summary>
-        /// Cached bitmap for a single layer
+        /// Acquire a pixel buffer from the pool or create a new one
+        /// </summary>
+        private static byte[] AcquirePixelBuffer(int size)
+        {
+            // Don't pool very large buffers
+            if (size > MAX_POOLED_BUFFER_SIZE)
+                return new byte[size];
+
+            // Try to get a buffer from the pool that's large enough
+            if (_pixelBufferPool.TryTake(out var buffer) && buffer.Length >= size)
+            {
+                Array.Clear(buffer, 0, size);
+                return buffer;
+            }
+
+            return new byte[size];
+        }
+
+        /// <summary>
+        /// Return a pixel buffer to the pool for reuse
+        /// </summary>
+        private static void ReleasePixelBuffer(byte[] buffer)
+        {
+            if (buffer == null || buffer.Length > MAX_POOLED_BUFFER_SIZE)
+                return;
+
+            // Only pool if we don't have too many buffers already
+            if (_pixelBufferPool.Count < 10)
+            {
+                _pixelBufferPool.Add(buffer);
+            }
+        }
+
+        /// <summary>
+        /// Cached bitmap for a single layer with LOD support
         /// </summary>
         private class LayerBitmapCache
         {
@@ -719,7 +761,206 @@ namespace PCBPlotter.Controls
             public double PixelsPerUnitX { get; set; }
             public double PixelsPerUnitY { get; set; }
             public double RenderZoom { get; set; }  // Zoom level when this bitmap was rendered
+
+            // LOD support - higher indices = higher detail
+            public Dictionary<int, LodLevel> LodBitmaps { get; set; }
         }
+
+        /// <summary>
+        /// A single LOD level for a layer
+        /// </summary>
+        private class LodLevel
+        {
+            public WriteableBitmap Bitmap { get; set; }
+            public byte[] MonoPixels { get; set; }
+            public int Width { get; set; }
+            public int Height { get; set; }
+            public double PixelsPerUnitX { get; set; }
+            public double PixelsPerUnitY { get; set; }
+            public double ZoomMultiplier { get; set; }
+        }
+
+        /// <summary>
+        /// Get the appropriate LOD index for the current zoom level
+        /// </summary>
+        private int GetLodIndex(double zoom)
+        {
+            for (int i = LOD_LEVELS.Length - 1; i >= 0; i--)
+            {
+                if (zoom >= LOD_LEVELS[i] * 0.5) // Use higher LOD when within 50% of its target
+                    return i;
+            }
+            return 0;
+        }
+
+        #region Tiled Rendering for Large Boards
+
+        // Tile rendering constants
+        private const int TILE_SIZE = 2048;  // Pixels per tile
+        private const double TILE_WORLD_SIZE_THRESHOLD = 200.0; // Use tiles for boards larger than 200mm
+        private const int MAX_CACHED_TILES = 64;  // Maximum number of tiles to keep in memory
+
+        /// <summary>
+        /// Tile cache key - identifies a specific tile by layer, position, and LOD
+        /// </summary>
+        private struct TileKey : IEquatable<TileKey>
+        {
+            public string LayerId;
+            public int TileX;
+            public int TileY;
+            public int LodIndex;
+
+            public bool Equals(TileKey other) =>
+                LayerId == other.LayerId && TileX == other.TileX && TileY == other.TileY && LodIndex == other.LodIndex;
+
+            public override int GetHashCode() =>
+                HashCode.Combine(LayerId, TileX, TileY, LodIndex);
+        }
+
+        /// <summary>
+        /// Cached tile data
+        /// </summary>
+        private class CachedTile
+        {
+            public WriteableBitmap Bitmap;
+            public byte[] MonoPixels;
+            public Rect WorldBounds;
+            public DateTime LastAccessed;
+        }
+
+        // Tile cache
+        private readonly Dictionary<TileKey, CachedTile> _tileCache = new Dictionary<TileKey, CachedTile>();
+
+        /// <summary>
+        /// Check if a layer should use tiled rendering (based on size)
+        /// </summary>
+        private bool ShouldUseTiledRendering(Rect layerBounds)
+        {
+            return layerBounds.Width > TILE_WORLD_SIZE_THRESHOLD ||
+                   layerBounds.Height > TILE_WORLD_SIZE_THRESHOLD;
+        }
+
+        /// <summary>
+        /// Calculate the tiles needed to cover the visible area
+        /// </summary>
+        private IEnumerable<(int tx, int ty)> GetVisibleTiles(Rect layerBounds, Rect visibleWorld, double tileWorldSize)
+        {
+            // Calculate tile grid boundaries
+            int minTileX = Math.Max(0, (int)((visibleWorld.Left - layerBounds.Left) / tileWorldSize));
+            int maxTileX = (int)Math.Ceiling((visibleWorld.Right - layerBounds.Left) / tileWorldSize);
+            int minTileY = Math.Max(0, (int)((visibleWorld.Top - layerBounds.Top) / tileWorldSize));
+            int maxTileY = (int)Math.Ceiling((visibleWorld.Bottom - layerBounds.Top) / tileWorldSize);
+
+            // Limit to actual layer extent
+            int tilesX = (int)Math.Ceiling(layerBounds.Width / tileWorldSize);
+            int tilesY = (int)Math.Ceiling(layerBounds.Height / tileWorldSize);
+            maxTileX = Math.Min(maxTileX, tilesX);
+            maxTileY = Math.Min(maxTileY, tilesY);
+
+            for (int ty = minTileY; ty < maxTileY; ty++)
+            {
+                for (int tx = minTileX; tx < maxTileX; tx++)
+                {
+                    yield return (tx, ty);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Get the world bounds for a specific tile
+        /// </summary>
+        private Rect GetTileWorldBounds(Rect layerBounds, int tileX, int tileY, double tileWorldSize)
+        {
+            double left = layerBounds.Left + tileX * tileWorldSize;
+            double top = layerBounds.Top + tileY * tileWorldSize;
+            double right = Math.Min(left + tileWorldSize, layerBounds.Right);
+            double bottom = Math.Min(top + tileWorldSize, layerBounds.Bottom);
+            return new Rect(left, top, right - left, bottom - top);
+        }
+
+        /// <summary>
+        /// Evict old tiles from cache when it gets too large
+        /// </summary>
+        private void EvictOldTiles()
+        {
+            if (_tileCache.Count <= MAX_CACHED_TILES)
+                return;
+
+            // Remove least recently accessed tiles
+            var tilesToRemove = _tileCache
+                .OrderBy(kvp => kvp.Value.LastAccessed)
+                .Take(_tileCache.Count - MAX_CACHED_TILES / 2)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var key in tilesToRemove)
+            {
+                if (_tileCache.TryGetValue(key, out var tile))
+                {
+                    // Return buffer to pool
+                    if (tile.MonoPixels != null)
+                        ReleasePixelBuffer(tile.MonoPixels);
+                }
+                _tileCache.Remove(key);
+            }
+        }
+
+        /// <summary>
+        /// Build a single tile for a layer
+        /// </summary>
+        private CachedTile BuildTile(GerberLayer layer, Rect tileWorldBounds, int lodIndex, uint colorPixel)
+        {
+            double zoomMultiplier = LOD_LEVELS[Math.Min(lodIndex, LOD_LEVELS.Length - 1)];
+            double targetPPU = BASE_PIXELS_PER_UNIT * zoomMultiplier;
+
+            int tileWidth = Math.Min(TILE_SIZE, (int)Math.Ceiling(tileWorldBounds.Width * targetPPU));
+            int tileHeight = Math.Min(TILE_SIZE, (int)Math.Ceiling(tileWorldBounds.Height * targetPPU));
+
+            if (tileWidth <= 0 || tileHeight <= 0)
+                return null;
+
+            double ppuX = tileWidth / tileWorldBounds.Width;
+            double ppuY = tileHeight / tileWorldBounds.Height;
+
+            int bytesPerRow = (tileWidth + 7) / 8;
+            byte[] monoPixels = AcquirePixelBuffer(bytesPerRow * tileHeight);
+
+            // Rasterize only primitives that intersect this tile
+            foreach (var prim in layer.Primitives)
+            {
+                var primBounds = GetPrimitiveBounds(prim);
+                if (!primBounds.IntersectsWith(tileWorldBounds))
+                    continue;
+
+                RasterizePrimitive(monoPixels, tileWidth, tileHeight, bytesPerRow,
+                    prim, tileWorldBounds, ppuX, ppuY);
+            }
+
+            var bitmap = BuildColoredBitmapFromMono(monoPixels, tileWidth, tileHeight, colorPixel);
+
+            return new CachedTile
+            {
+                Bitmap = bitmap,
+                MonoPixels = monoPixels,
+                WorldBounds = tileWorldBounds,
+                LastAccessed = DateTime.UtcNow
+            };
+        }
+
+        /// <summary>
+        /// Clear all cached tiles (call when layers change)
+        /// </summary>
+        private void ClearTileCache()
+        {
+            foreach (var tile in _tileCache.Values)
+            {
+                if (tile.MonoPixels != null)
+                    ReleasePixelBuffer(tile.MonoPixels);
+            }
+            _tileCache.Clear();
+        }
+
+        #endregion
 
         /// <summary>
         /// Get bounding box of a primitive in world coordinates
@@ -862,6 +1103,7 @@ namespace PCBPlotter.Controls
         /// Render Gerber layers using direct layer-to-bitmap approach with GPU compositing.
         /// Each layer is rendered once and cached. Pan/zoom just transforms the cached bitmaps.
         /// WPF's GPU handles blending - no CPU-based pixel compositing needed.
+        /// For large boards, uses tiled rendering to maintain quality while limiting memory.
         /// </summary>
         private void RenderGerberLayers(DrawingContext dc)
         {
@@ -874,39 +1116,27 @@ namespace PCBPlotter.Controls
             if (_worldBounds.IsEmpty)
                 return;
 
-            // Ensure each layer has a cached bitmap
-            EnsureLayerBitmapsBuilt();
+            double currentZoom = Zoom;
+            Rect visibleWorld = GetVisibleWorldBounds();
 
-            // Draw each visible layer directly - let GPU handle compositing
-            // This is MUCH faster than CPU-based pixel blending
+            // Draw each visible layer
             foreach (var layer in GerberLayers)
             {
                 if (!layer.IsVisible)
                     continue;
 
-                if (!_layerBitmaps.TryGetValue(layer.Id, out var cache) || cache.Bitmap == null)
+                var layerBounds = layer.Bounds;
+                if (layerBounds.IsEmpty)
                     continue;
 
-                // Convert layer world bounds to screen coordinates
-                Point screenTL = WorldToScreen(new Point(cache.WorldBounds.Left, cache.WorldBounds.Top + cache.WorldBounds.Height));
-                Point screenBR = WorldToScreen(new Point(cache.WorldBounds.Right, cache.WorldBounds.Top));
-
-                Rect screenRect = new Rect(
-                    Math.Min(screenTL.X, screenBR.X),
-                    Math.Min(screenTL.Y, screenBR.Y),
-                    Math.Abs(screenBR.X - screenTL.X),
-                    Math.Abs(screenBR.Y - screenTL.Y));
-
-                // Use opacity for layer blending - GPU handles this efficiently
-                if (layer.Opacity < 1.0)
+                // Use tiled rendering for large boards, otherwise use whole-layer caching
+                if (ShouldUseTiledRendering(layerBounds))
                 {
-                    dc.PushOpacity(layer.Opacity);
-                    dc.DrawImage(cache.Bitmap, screenRect);
-                    dc.Pop();
+                    RenderLayerTiled(dc, layer, layerBounds, visibleWorld, currentZoom);
                 }
                 else
                 {
-                    dc.DrawImage(cache.Bitmap, screenRect);
+                    RenderLayerWholeBitmap(dc, layer, currentZoom);
                 }
             }
 
@@ -920,8 +1150,130 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
+        /// Render a layer using whole-bitmap caching (for normal-sized boards)
+        /// </summary>
+        private void RenderLayerWholeBitmap(DrawingContext dc, GerberLayer layer, double currentZoom)
+        {
+            // Ensure bitmap is built
+            EnsureLayerBitmapsBuilt();
+
+            if (!_layerBitmaps.TryGetValue(layer.Id, out var cache))
+                return;
+
+            // Get the best LOD level for current zoom
+            WriteableBitmap bitmapToRender;
+            if (cache.LodBitmaps != null && cache.LodBitmaps.Count > 0)
+            {
+                var bestLod = GetBestLodForZoom(cache, currentZoom);
+                bitmapToRender = bestLod?.Bitmap ?? cache.Bitmap;
+            }
+            else
+            {
+                bitmapToRender = cache.Bitmap;
+            }
+
+            if (bitmapToRender == null)
+                return;
+
+            // Convert layer world bounds to screen coordinates
+            Point screenTL = WorldToScreen(new Point(cache.WorldBounds.Left, cache.WorldBounds.Top + cache.WorldBounds.Height));
+            Point screenBR = WorldToScreen(new Point(cache.WorldBounds.Right, cache.WorldBounds.Top));
+
+            Rect screenRect = new Rect(
+                Math.Min(screenTL.X, screenBR.X),
+                Math.Min(screenTL.Y, screenBR.Y),
+                Math.Abs(screenBR.X - screenTL.X),
+                Math.Abs(screenBR.Y - screenTL.Y));
+
+            // Use opacity for layer blending - GPU handles this efficiently
+            if (layer.Opacity < 1.0)
+            {
+                dc.PushOpacity(layer.Opacity);
+                dc.DrawImage(bitmapToRender, screenRect);
+                dc.Pop();
+            }
+            else
+            {
+                dc.DrawImage(bitmapToRender, screenRect);
+            }
+        }
+
+        /// <summary>
+        /// Render a layer using tiled rendering (for large boards > 200mm)
+        /// Only renders tiles that are visible on screen.
+        /// </summary>
+        private void RenderLayerTiled(DrawingContext dc, GerberLayer layer, Rect layerBounds, Rect visibleWorld, double currentZoom)
+        {
+            // Calculate tile size in world units based on current LOD
+            int lodIndex = GetLodIndex(currentZoom);
+            double zoomMultiplier = LOD_LEVELS[Math.Min(lodIndex, LOD_LEVELS.Length - 1)];
+            double tileWorldSize = TILE_SIZE / (BASE_PIXELS_PER_UNIT * zoomMultiplier);
+
+            // Pre-compute color pixel for this layer
+            uint colorPixel = (uint)((255 << 24) | (layer.Color.R << 16) | (layer.Color.G << 8) | layer.Color.B);
+
+            // Add margin to layer bounds
+            var marginedBounds = layerBounds;
+            marginedBounds.Inflate(layerBounds.Width * 0.02, layerBounds.Height * 0.02);
+
+            // Get visible tiles
+            var visibleTiles = GetVisibleTiles(marginedBounds, visibleWorld, tileWorldSize).ToList();
+
+            // Evict old tiles if cache is getting large
+            EvictOldTiles();
+
+            // Apply layer opacity
+            bool hasOpacity = layer.Opacity < 1.0;
+            if (hasOpacity)
+            {
+                dc.PushOpacity(layer.Opacity);
+            }
+
+            // Render each visible tile
+            foreach (var (tx, ty) in visibleTiles)
+            {
+                var tileKey = new TileKey { LayerId = layer.Id, TileX = tx, TileY = ty, LodIndex = lodIndex };
+                Rect tileWorldBounds = GetTileWorldBounds(marginedBounds, tx, ty, tileWorldSize);
+
+                // Get or create tile
+                if (!_tileCache.TryGetValue(tileKey, out var tile))
+                {
+                    tile = BuildTile(layer, tileWorldBounds, lodIndex, colorPixel);
+                    if (tile != null)
+                    {
+                        _tileCache[tileKey] = tile;
+                    }
+                }
+
+                if (tile?.Bitmap == null)
+                    continue;
+
+                // Update last accessed time
+                tile.LastAccessed = DateTime.UtcNow;
+
+                // Convert tile world bounds to screen coordinates
+                Point screenTL = WorldToScreen(new Point(tile.WorldBounds.Left, tile.WorldBounds.Top + tile.WorldBounds.Height));
+                Point screenBR = WorldToScreen(new Point(tile.WorldBounds.Right, tile.WorldBounds.Top));
+
+                Rect screenRect = new Rect(
+                    Math.Min(screenTL.X, screenBR.X),
+                    Math.Min(screenTL.Y, screenBR.Y),
+                    Math.Abs(screenBR.X - screenTL.X),
+                    Math.Abs(screenBR.Y - screenTL.Y));
+
+                dc.DrawImage(tile.Bitmap, screenRect);
+            }
+
+            if (hasOpacity)
+            {
+                dc.Pop();
+            }
+        }
+
+        /// <summary>
         /// Ensure all layers have their bitmaps built at appropriate resolution for current zoom.
         /// Uses parallel processing for mono data rasterization.
+        /// Skips layers that use tiled rendering (they build tiles on-demand).
         /// </summary>
         private void EnsureLayerBitmapsBuilt()
         {
@@ -931,6 +1283,10 @@ namespace PCBPlotter.Controls
 
             foreach (var layer in GerberLayers)
             {
+                // Skip layers that use tiled rendering - they build tiles on-demand
+                if (ShouldUseTiledRendering(layer.Bounds))
+                    continue;
+
                 if (!_layerBitmaps.TryGetValue(layer.Id, out var cache) || cache == null)
                 {
                     layersNeedingRebuild.Add(layer);
@@ -989,7 +1345,7 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Build mono (1-bit) data for a layer - can run on background thread
+        /// Build mono (1-bit) data for a layer with LOD support - can run on background thread
         /// </summary>
         private LayerBitmapCache BuildLayerMonoData(GerberLayer layer, double currentZoom)
         {
@@ -1005,56 +1361,41 @@ namespace PCBPlotter.Controls
                 // Add small margin to layer bounds
                 layerBounds.Inflate(layerBounds.Width * 0.02, layerBounds.Height * 0.02);
 
-                // Target: at least MIN_SCREEN_PIXELS_PER_UNIT * 2 bitmap pixels per screen pixel
-                double targetPPU = Math.Max(BASE_PIXELS_PER_UNIT, currentZoom * MIN_SCREEN_PIXELS_PER_UNIT * 2);
+                // Determine which LOD levels to build based on current zoom
+                int targetLodIndex = GetLodIndex(currentZoom);
 
-                int bitmapWidth = Math.Max(1, (int)Math.Ceiling(layerBounds.Width * targetPPU));
-                int bitmapHeight = Math.Max(1, (int)Math.Ceiling(layerBounds.Height * targetPPU));
-
-                // Clamp to max size
-                if (bitmapWidth > MAX_BITMAP_SIZE)
+                var cache = new LayerBitmapCache
                 {
-                    double ratio = (double)MAX_BITMAP_SIZE / bitmapWidth;
-                    bitmapWidth = MAX_BITMAP_SIZE;
-                    bitmapHeight = Math.Max(1, (int)Math.Ceiling(bitmapHeight * ratio));
-                }
-                if (bitmapHeight > MAX_BITMAP_SIZE)
-                {
-                    double ratio = (double)MAX_BITMAP_SIZE / bitmapHeight;
-                    bitmapHeight = MAX_BITMAP_SIZE;
-                    bitmapWidth = Math.Max(1, (int)Math.Ceiling(bitmapWidth * ratio));
-                }
-
-                // Final clamp
-                bitmapWidth = Math.Min(bitmapWidth, MAX_BITMAP_SIZE);
-                bitmapHeight = Math.Min(bitmapHeight, MAX_BITMAP_SIZE);
-
-                double ppuX = bitmapWidth / layerBounds.Width;
-                double ppuY = bitmapHeight / layerBounds.Height;
-
-                // Create 1-bit storage
-                int bytesPerRow = (bitmapWidth + 7) / 8;
-                byte[] monoPixels = new byte[bytesPerRow * bitmapHeight];
-
-                // Rasterize all primitives
-                foreach (var prim in layer.Primitives)
-                {
-                    RasterizePrimitive(monoPixels, bitmapWidth, bitmapHeight, bytesPerRow,
-                        prim, layerBounds, ppuX, ppuY);
-                }
-
-                return new LayerBitmapCache
-                {
-                    MonoPixels = monoPixels,
-                    Width = bitmapWidth,
-                    Height = bitmapHeight,
                     WorldBounds = layerBounds,
                     LayerColor = layer.Color,
                     Opacity = layer.Opacity,
-                    PixelsPerUnitX = ppuX,
-                    PixelsPerUnitY = ppuY,
-                    RenderZoom = currentZoom
+                    RenderZoom = currentZoom,
+                    LodBitmaps = new Dictionary<int, LodLevel>()
                 };
+
+                // Build LOD levels from lowest to target (or all if zoomed in)
+                int maxLodToBuild = Math.Min(targetLodIndex + 1, LOD_LEVELS.Length);
+                for (int lodIdx = 0; lodIdx < maxLodToBuild; lodIdx++)
+                {
+                    var lodLevel = BuildLodLevel(layer, layerBounds, lodIdx);
+                    if (lodLevel != null)
+                    {
+                        cache.LodBitmaps[lodIdx] = lodLevel;
+                    }
+                }
+
+                // Set primary cache properties from best available LOD
+                if (cache.LodBitmaps.Count > 0)
+                {
+                    var bestLod = cache.LodBitmaps[cache.LodBitmaps.Keys.Max()];
+                    cache.MonoPixels = bestLod.MonoPixels;
+                    cache.Width = bestLod.Width;
+                    cache.Height = bestLod.Height;
+                    cache.PixelsPerUnitX = bestLod.PixelsPerUnitX;
+                    cache.PixelsPerUnitY = bestLod.PixelsPerUnitY;
+                }
+
+                return cache;
             }
             catch (Exception ex)
             {
@@ -1064,31 +1405,107 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Check if the cached bitmap needs to be re-rendered at higher resolution
+        /// Build a single LOD level for a layer
+        /// </summary>
+        private LodLevel BuildLodLevel(GerberLayer layer, Rect layerBounds, int lodIndex)
+        {
+            double zoomMultiplier = LOD_LEVELS[lodIndex];
+            double targetPPU = BASE_PIXELS_PER_UNIT * zoomMultiplier;
+
+            int bitmapWidth = Math.Max(1, (int)Math.Ceiling(layerBounds.Width * targetPPU));
+            int bitmapHeight = Math.Max(1, (int)Math.Ceiling(layerBounds.Height * targetPPU));
+
+            // Clamp to max LOD bitmap size
+            if (bitmapWidth > MAX_LOD_BITMAP_SIZE)
+            {
+                double ratio = (double)MAX_LOD_BITMAP_SIZE / bitmapWidth;
+                bitmapWidth = MAX_LOD_BITMAP_SIZE;
+                bitmapHeight = Math.Max(1, (int)Math.Ceiling(bitmapHeight * ratio));
+            }
+            if (bitmapHeight > MAX_LOD_BITMAP_SIZE)
+            {
+                double ratio = (double)MAX_LOD_BITMAP_SIZE / bitmapHeight;
+                bitmapHeight = MAX_LOD_BITMAP_SIZE;
+                bitmapWidth = Math.Max(1, (int)Math.Ceiling(bitmapWidth * ratio));
+            }
+
+            double ppuX = bitmapWidth / layerBounds.Width;
+            double ppuY = bitmapHeight / layerBounds.Height;
+
+            // Use pooled buffer to reduce GC pressure
+            int bytesPerRow = (bitmapWidth + 7) / 8;
+            int bufferSize = bytesPerRow * bitmapHeight;
+            byte[] monoPixels = AcquirePixelBuffer(bufferSize);
+
+            // Ensure we only use the required portion (buffer might be larger)
+            if (monoPixels.Length > bufferSize)
+            {
+                Array.Clear(monoPixels, bufferSize, monoPixels.Length - bufferSize);
+            }
+
+            // Rasterize all primitives
+            foreach (var prim in layer.Primitives)
+            {
+                RasterizePrimitive(monoPixels, bitmapWidth, bitmapHeight, bytesPerRow,
+                    prim, layerBounds, ppuX, ppuY);
+            }
+
+            return new LodLevel
+            {
+                MonoPixels = monoPixels,
+                Width = bitmapWidth,
+                Height = bitmapHeight,
+                PixelsPerUnitX = ppuX,
+                PixelsPerUnitY = ppuY,
+                ZoomMultiplier = zoomMultiplier
+            };
+        }
+
+        /// <summary>
+        /// Check if the cached bitmap needs higher LOD level rendered.
+        /// With LOD system, we only rebuild when we need a LOD level that doesn't exist.
         /// </summary>
         private bool NeedsHigherResolution(LayerBitmapCache cache, GerberLayer layer)
         {
             if (!layer.IsVisible) return false;
+            if (cache.LodBitmaps == null) return true; // No LOD system initialized
 
-            // Calculate current screen pixels per world unit
-            double screenPixelsPerUnit = Zoom;
+            // Determine which LOD index we need for current zoom
+            int neededLodIndex = GetLodIndex(Zoom);
 
-            // Calculate cached bitmap pixels per world unit
-            double cachedPixelsPerUnit = Math.Min(cache.PixelsPerUnitX, cache.PixelsPerUnitY);
+            // Check if we have this LOD level or a higher one
+            int maxAvailableLod = cache.LodBitmaps.Count > 0 ? cache.LodBitmaps.Keys.Max() : -1;
 
-            // If we're zoomed in and the bitmap resolution is less than screen resolution,
-            // we need to re-render at higher resolution
-            // Use a threshold to avoid constant re-rendering
-            double ratio = cachedPixelsPerUnit / screenPixelsPerUnit;
-
-            // Re-render if bitmap has less than MIN_SCREEN_PIXELS_PER_UNIT pixels per screen pixel
-            // and we haven't already hit the max bitmap size
-            if (ratio < MIN_SCREEN_PIXELS_PER_UNIT && cache.Width < MAX_BITMAP_SIZE && cache.Height < MAX_BITMAP_SIZE)
+            // Need to rebuild if we don't have the required LOD level
+            // and we're not already at the maximum LOD
+            if (neededLodIndex > maxAvailableLod && maxAvailableLod < LOD_LEVELS.Length - 1)
             {
                 return true;
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Get the best available LOD level for the current zoom.
+        /// Returns the highest LOD that doesn't exceed current zoom needs.
+        /// </summary>
+        private LodLevel GetBestLodForZoom(LayerBitmapCache cache, double zoom)
+        {
+            if (cache.LodBitmaps == null || cache.LodBitmaps.Count == 0)
+                return null;
+
+            int targetLodIndex = GetLodIndex(zoom);
+
+            // Find the best available LOD (prefer higher detail if available)
+            for (int i = Math.Min(targetLodIndex, LOD_LEVELS.Length - 1); i >= 0; i--)
+            {
+                if (cache.LodBitmaps.TryGetValue(i, out var lod))
+                    return lod;
+            }
+
+            // Fallback to any available LOD
+            return cache.LodBitmaps.Values.FirstOrDefault();
         }
 
         /// <summary>
@@ -1176,7 +1593,7 @@ namespace PCBPlotter.Controls
         /// <summary>
         /// Rebuild colored bitmap from mono data when color changes.
         /// Opacity is handled by the GPU via PushOpacity during rendering.
-        /// Optimized to process bytes (8 pixels) at a time.
+        /// Builds colored bitmaps for all LOD levels.
         /// </summary>
         private void RebuildLayerColoredBitmap(LayerBitmapCache cache, Color color, double opacity)
         {
@@ -1185,71 +1602,94 @@ namespace PCBPlotter.Controls
                 cache.LayerColor = color;
                 cache.Opacity = opacity;
 
-                var bitmap = new WriteableBitmap(cache.Width, cache.Height, 96, 96, PixelFormats.Bgra32, null);
-                int monoBytesPerRow = (cache.Width + 7) / 8;
-
                 // Pre-compute BGRA32 pixel value for set bits
                 uint colorPixel = (uint)((255 << 24) | (color.R << 16) | (color.G << 8) | color.B);
 
-                bitmap.Lock();
-                try
+                // Build colored bitmap for each LOD level
+                if (cache.LodBitmaps != null)
                 {
-                    unsafe
+                    foreach (var kvp in cache.LodBitmaps)
                     {
-                        uint* ptr = (uint*)bitmap.BackBuffer;
-                        int stride = bitmap.BackBufferStride / 4; // stride in uint (4 bytes)
-
-                        for (int y = 0; y < cache.Height; y++)
-                        {
-                            int monoRowOffset = y * monoBytesPerRow;
-                            int colorRowOffset = y * stride;
-                            int x = 0;
-
-                            // Process full bytes (8 pixels at a time)
-                            int fullBytes = cache.Width / 8;
-                            for (int byteIdx = 0; byteIdx < fullBytes; byteIdx++)
-                            {
-                                byte monoByte = cache.MonoPixels[monoRowOffset + byteIdx];
-
-                                // Unroll 8 pixels from this byte
-                                // Bit 7 is leftmost pixel (x + 0), bit 0 is rightmost (x + 7)
-                                ptr[colorRowOffset + x + 0] = (monoByte & 0x80) != 0 ? colorPixel : 0;
-                                ptr[colorRowOffset + x + 1] = (monoByte & 0x40) != 0 ? colorPixel : 0;
-                                ptr[colorRowOffset + x + 2] = (monoByte & 0x20) != 0 ? colorPixel : 0;
-                                ptr[colorRowOffset + x + 3] = (monoByte & 0x10) != 0 ? colorPixel : 0;
-                                ptr[colorRowOffset + x + 4] = (monoByte & 0x08) != 0 ? colorPixel : 0;
-                                ptr[colorRowOffset + x + 5] = (monoByte & 0x04) != 0 ? colorPixel : 0;
-                                ptr[colorRowOffset + x + 6] = (monoByte & 0x02) != 0 ? colorPixel : 0;
-                                ptr[colorRowOffset + x + 7] = (monoByte & 0x01) != 0 ? colorPixel : 0;
-
-                                x += 8;
-                            }
-
-                            // Process remaining pixels in partial last byte
-                            if (x < cache.Width)
-                            {
-                                byte monoByte = cache.MonoPixels[monoRowOffset + fullBytes];
-                                for (int bit = 7; x < cache.Width; bit--, x++)
-                                {
-                                    ptr[colorRowOffset + x] = (monoByte & (1 << bit)) != 0 ? colorPixel : 0;
-                                }
-                            }
-                        }
+                        var lod = kvp.Value;
+                        lod.Bitmap = BuildColoredBitmapFromMono(lod.MonoPixels, lod.Width, lod.Height, colorPixel);
                     }
-                    bitmap.AddDirtyRect(new Int32Rect(0, 0, cache.Width, cache.Height));
-                }
-                finally
-                {
-                    bitmap.Unlock();
                 }
 
-                bitmap.Freeze();
-                cache.Bitmap = bitmap;
+                // Also build the primary bitmap for backwards compatibility
+                if (cache.MonoPixels != null && cache.Width > 0 && cache.Height > 0)
+                {
+                    cache.Bitmap = BuildColoredBitmapFromMono(cache.MonoPixels, cache.Width, cache.Height, colorPixel);
+                }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error rebuilding layer colored bitmap: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Build a colored BGRA32 WriteableBitmap from mono pixel data.
+        /// Optimized to process bytes (8 pixels) at a time.
+        /// </summary>
+        private WriteableBitmap BuildColoredBitmapFromMono(byte[] monoPixels, int width, int height, uint colorPixel)
+        {
+            var bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+            int monoBytesPerRow = (width + 7) / 8;
+
+            bitmap.Lock();
+            try
+            {
+                unsafe
+                {
+                    uint* ptr = (uint*)bitmap.BackBuffer;
+                    int stride = bitmap.BackBufferStride / 4; // stride in uint (4 bytes)
+
+                    for (int y = 0; y < height; y++)
+                    {
+                        int monoRowOffset = y * monoBytesPerRow;
+                        int colorRowOffset = y * stride;
+                        int x = 0;
+
+                        // Process full bytes (8 pixels at a time)
+                        int fullBytes = width / 8;
+                        for (int byteIdx = 0; byteIdx < fullBytes; byteIdx++)
+                        {
+                            byte monoByte = monoPixels[monoRowOffset + byteIdx];
+
+                            // Unroll 8 pixels from this byte
+                            // Bit 7 is leftmost pixel (x + 0), bit 0 is rightmost (x + 7)
+                            ptr[colorRowOffset + x + 0] = (monoByte & 0x80) != 0 ? colorPixel : 0;
+                            ptr[colorRowOffset + x + 1] = (monoByte & 0x40) != 0 ? colorPixel : 0;
+                            ptr[colorRowOffset + x + 2] = (monoByte & 0x20) != 0 ? colorPixel : 0;
+                            ptr[colorRowOffset + x + 3] = (monoByte & 0x10) != 0 ? colorPixel : 0;
+                            ptr[colorRowOffset + x + 4] = (monoByte & 0x08) != 0 ? colorPixel : 0;
+                            ptr[colorRowOffset + x + 5] = (monoByte & 0x04) != 0 ? colorPixel : 0;
+                            ptr[colorRowOffset + x + 6] = (monoByte & 0x02) != 0 ? colorPixel : 0;
+                            ptr[colorRowOffset + x + 7] = (monoByte & 0x01) != 0 ? colorPixel : 0;
+
+                            x += 8;
+                        }
+
+                        // Process remaining pixels in partial last byte
+                        if (x < width)
+                        {
+                            byte monoByte = monoPixels[monoRowOffset + fullBytes];
+                            for (int bit = 7; x < width; bit--, x++)
+                            {
+                                ptr[colorRowOffset + x] = (monoByte & (1 << bit)) != 0 ? colorPixel : 0;
+                            }
+                        }
+                    }
+                }
+                bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
+            }
+            finally
+            {
+                bitmap.Unlock();
+            }
+
+            bitmap.Freeze();
+            return bitmap;
         }
 
         /// <summary>
@@ -1417,6 +1857,16 @@ namespace PCBPlotter.Controls
             double length = Math.Sqrt(dx * dx + dy * dy);
             if (length < 0.1) return;
 
+            // For thin lines (< 3 pixels), use optimized Bresenham algorithm
+            if (lineWidth < 3.0)
+            {
+                DrawThickLineBresenham(pixels, width, height, bytesPerRow,
+                    (int)Math.Round(x1), (int)Math.Round(y1),
+                    (int)Math.Round(x2), (int)Math.Round(y2),
+                    Math.Max(1, (int)Math.Round(lineWidth)));
+                return;
+            }
+
             dx /= length;
             dy /= length;
             double px = -dy * lineWidth / 2;
@@ -1434,6 +1884,61 @@ namespace PCBPlotter.Controls
             // Round caps
             Fill1BitCircle(pixels, width, height, bytesPerRow, x1, y1, lineWidth / 2);
             Fill1BitCircle(pixels, width, height, bytesPerRow, x2, y2, lineWidth / 2);
+        }
+
+        /// <summary>
+        /// Draw a thick line using Bresenham's algorithm with perpendicular offset.
+        /// More efficient than polygon conversion for thin lines.
+        /// </summary>
+        private void DrawThickLineBresenham(byte[] pixels, int width, int height, int bytesPerRow,
+            int x1, int y1, int x2, int y2, int thickness)
+        {
+            int dx = Math.Abs(x2 - x1);
+            int dy = Math.Abs(y2 - y1);
+            int sx = x1 < x2 ? 1 : -1;
+            int sy = y1 < y2 ? 1 : -1;
+            int err = dx - dy;
+
+            int halfThick = thickness / 2;
+
+            while (true)
+            {
+                // Draw a filled circle/square at each point for thickness
+                if (thickness <= 1)
+                {
+                    Set1BitPixel(pixels, width, height, bytesPerRow, x1, y1);
+                }
+                else
+                {
+                    // Draw a small filled area for thickness
+                    for (int ty = -halfThick; ty <= halfThick; ty++)
+                    {
+                        int py = y1 + ty;
+                        if (py < 0 || py >= height) continue;
+
+                        int xStart = Math.Max(0, x1 - halfThick);
+                        int xEnd = Math.Min(width - 1, x1 + halfThick);
+                        if (xEnd >= xStart)
+                        {
+                            FillSpanFast(pixels, bytesPerRow, py, xStart, xEnd);
+                        }
+                    }
+                }
+
+                if (x1 == x2 && y1 == y2) break;
+
+                int e2 = 2 * err;
+                if (e2 > -dy)
+                {
+                    err -= dy;
+                    x1 += sx;
+                }
+                if (e2 < dx)
+                {
+                    err += dx;
+                    y1 += sy;
+                }
+            }
         }
 
         /// <summary>
@@ -1897,10 +2402,25 @@ namespace PCBPlotter.Controls
         {
             // Clear layer bitmap caches - they will be re-rendered on demand
             _layerBitmaps.Clear();
+            ClearTileCache();  // Also clear tile cache
             _worldBounds = Rect.Empty;
             _activeLayerQuadtree = null;
             _gerberCacheDirty = true;
             InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Get the visible world bounds based on current viewport
+        /// </summary>
+        private Rect GetVisibleWorldBounds()
+        {
+            Point worldTL = ScreenToWorld(new Point(0, 0));
+            Point worldBR = ScreenToWorld(new Point(ActualWidth, ActualHeight));
+            return new Rect(
+                Math.Min(worldTL.X, worldBR.X),
+                Math.Min(worldTL.Y, worldBR.Y),
+                Math.Abs(worldBR.X - worldTL.X),
+                Math.Abs(worldBR.Y - worldTL.Y));
         }
 
         /// <summary>
