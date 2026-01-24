@@ -303,8 +303,11 @@ namespace PCBPlotter.Controls
             ClipToBounds = true;
             Focusable = true;
 
-            // Use aliased edge mode for crisp vector rendering (no bilinear blur)
+            // Crisp vector rendering settings - prevent any bitmap scaling or anti-aliasing blur
             RenderOptions.SetEdgeMode(this, EdgeMode.Aliased);
+            RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
+            SnapsToDevicePixels = true;
+            UseLayoutRounding = true;
 
             InitializeBrushesAndPens();
 
@@ -676,14 +679,13 @@ namespace PCBPlotter.Controls
         }
 
         // ===================================================================================
-        // SIMPLE LAYER BITMAP ARCHITECTURE
-        // "Render Once Per Layer, Transform Forever"
+        // DIRECT VECTOR RENDERING ARCHITECTURE
         //
-        // Each layer is rendered ONCE to a bitmap when loaded/changed.
-        // Pan/zoom just transforms the cached bitmaps - no re-rendering.
+        // All Gerber primitives are rendered as vectors directly to the DrawingContext.
+        // No bitmaps are created - shapes are drawn at full resolution for any zoom level.
+        // Uses quadtree spatial indexing for O(log n) viewport culling.
         // ===================================================================================
 
-        // ============= VECTOR RENDERING (replaces bitmap rasterization) =============
         // Quadtree per layer for viewport culling - O(log n) lookup of visible primitives
         private Dictionary<string, GerberQuadtree> _layerQuadtrees = new Dictionary<string, GerberQuadtree>();
 
@@ -1338,6 +1340,97 @@ namespace PCBPlotter.Controls
         public void InvalidateComposite()
         {
             InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Calculate combined world bounds from all layers
+        /// </summary>
+        private void UpdateWorldBoundsFromLayers()
+        {
+            _worldBounds = Rect.Empty;
+            if (GerberLayers == null)
+                return;
+
+            foreach (var layer in GerberLayers)
+            {
+                if (layer.Bounds.IsEmpty)
+                    continue;
+
+                if (_worldBounds.IsEmpty)
+                    _worldBounds = layer.Bounds;
+                else
+                    _worldBounds.Union(layer.Bounds);
+            }
+
+            if (!_worldBounds.IsEmpty)
+            {
+                _worldBounds.Inflate(_worldBounds.Width * 0.02, _worldBounds.Height * 0.02);
+            }
+        }
+
+        /// <summary>
+        /// Ensure an active layer is set (default to first visible layer)
+        /// </summary>
+        private void EnsureActiveLayerSet()
+        {
+            if (GerberLayers == null || GerberLayers.Count == 0)
+                return;
+
+            // Check if current active layer is still valid
+            if (_activeGerberLayer != null && GerberLayers.Contains(_activeGerberLayer))
+                return;
+
+            // Find first active layer
+            _activeGerberLayer = GerberLayers.FirstOrDefault(l => l.IsActive && l.IsVisible);
+
+            // If none marked active, pick first visible layer
+            if (_activeGerberLayer == null)
+            {
+                _activeGerberLayer = GerberLayers.FirstOrDefault(l => l.IsVisible);
+                if (_activeGerberLayer != null)
+                {
+                    _activeGerberLayer.IsActive = true;
+                }
+            }
+
+            // Rebuild quadtree for the new active layer
+            if (_activeGerberLayer != null)
+            {
+                RebuildActiveLayerQuadtree();
+            }
+        }
+
+        /// <summary>
+        /// Set the active layer for selection/editing
+        /// </summary>
+        public void SetActiveGerberLayer(GerberLayer layer)
+        {
+            if (layer == _activeGerberLayer)
+                return;
+
+            // Update active state on old layer
+            if (_activeGerberLayer != null)
+            {
+                _activeGerberLayer.IsActive = false;
+            }
+
+            // Set new active layer
+            _activeGerberLayer = layer;
+            if (_activeGerberLayer != null)
+            {
+                _activeGerberLayer.IsActive = true;
+                RebuildActiveLayerQuadtree();
+            }
+
+            InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Get the currently active Gerber layer
+        /// </summary>
+        public GerberLayer GetActiveGerberLayer()
+        {
+            return _activeGerberLayer;
         }
 
         private void RenderBoardArea(DrawingContext dc)
