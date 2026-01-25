@@ -20,6 +20,10 @@ namespace PCBPlotter.Core.Models
         private uint _color = 0xFF00FF00; // Green
         private List<GerberPrimitive> _primitives;
 
+        // Cached bounds - computed once on first access or when invalidated
+        private Rect _cachedBounds = Rect.Empty;
+        private bool _boundsDirty = true;
+
         /// <summary>
         /// Unique identifier
         /// </summary>
@@ -105,11 +109,23 @@ namespace PCBPlotter.Core.Models
         public List<GerberPrimitive> Primitives
         {
             get { return _primitives; }
-            set { SetProperty(ref _primitives, value); }
+            set
+            {
+                SetProperty(ref _primitives, value);
+                _boundsDirty = true; // Invalidate cached bounds
+            }
         }
 
         /// <summary>
-        /// Bounding box of all primitives
+        /// Invalidate cached bounds (call after modifying primitives list)
+        /// </summary>
+        public void InvalidateBounds()
+        {
+            _boundsDirty = true;
+        }
+
+        /// <summary>
+        /// Bounding box of all primitives (cached for performance)
         /// </summary>
         public Rect Bounds
         {
@@ -118,6 +134,11 @@ namespace PCBPlotter.Core.Models
                 if (_primitives == null || _primitives.Count == 0)
                     return Rect.Empty;
 
+                // Return cached bounds if valid
+                if (!_boundsDirty)
+                    return _cachedBounds;
+
+                // Recompute bounds
                 double minX = double.MaxValue, minY = double.MaxValue;
                 double maxX = double.MinValue, maxY = double.MinValue;
 
@@ -130,7 +151,9 @@ namespace PCBPlotter.Core.Models
                     if (bounds.Bottom > maxY) maxY = bounds.Bottom;
                 }
 
-                return new Rect(minX, minY, maxX - minX, maxY - minY);
+                _cachedBounds = new Rect(minX, minY, maxX - minX, maxY - minY);
+                _boundsDirty = false;
+                return _cachedBounds;
             }
         }
 

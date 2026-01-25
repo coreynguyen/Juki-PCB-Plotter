@@ -754,7 +754,14 @@ namespace PCBPlotter.Controls
                 return;
 
             EnsureActiveLayerSet();
-            UpdateWorldBoundsFromLayers();
+
+            // Only update world bounds when cache is dirty (layers changed)
+            // This prevents O(n) iteration every frame
+            if (_gerberCacheDirty || _worldBounds.IsEmpty)
+            {
+                UpdateWorldBoundsFromLayers();
+                _gerberCacheDirty = false;
+            }
 
             if (_worldBounds.IsEmpty)
                 return;
@@ -915,9 +922,13 @@ namespace PCBPlotter.Controls
             return pen;
         }
 
+        // CHUNK_SIZE: WPF StreamGeometry can't handle huge numbers of figures (>15-20k).
+        // Split batches into chunks to prevent render thread freezes and memory issues.
+        private const int CHUNK_SIZE = 5000;
+
         /// <summary>
         /// Render a layer using direct vector rendering (no bitmaps).
-        /// Uses geometry batching for 10x-50x speedup vs individual draw calls.
+        /// Uses geometry batching with chunking for performance and stability.
         /// Renders only visible primitives using quadtree culling.
         /// Skips primitives that are too small to see at current zoom (LOD).
         /// </summary>
@@ -966,120 +977,150 @@ namespace PCBPlotter.Controls
             // Minimum world-space size to render (LOD filtering)
             double minWorldSize = MIN_PRIMITIVE_SCREEN_PIXELS / currentZoom;
 
-            // BATCHING: Collect all filled shapes into a single StreamGeometry
-            // This reduces thousands of WPF draw calls to just 1-2 calls
-            var batchGeometry = new StreamGeometry();
-            batchGeometry.FillRule = FillRule.Nonzero;
-            bool hasBatchedShapes = false;
+            // CHUNKED BATCHING: Collect shapes into StreamGeometry chunks
+            // This prevents WPF render thread hangs with huge geometry objects
+            StreamGeometry chunkGeometry = new StreamGeometry();
+            chunkGeometry.FillRule = FillRule.Nonzero;
+            StreamGeometryContext ctx = chunkGeometry.Open();
+            int figureCount = 0;
+            bool hasShapesInChunk = false;
 
-            using (var ctx = batchGeometry.Open())
+            foreach (var prim in visiblePrimitives)
             {
-                foreach (var prim in visiblePrimitives)
+                // LOD: Skip primitives that are too small to see
+                double primSize = Math.Max(prim.Width, prim.Height);
+                if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
+                    continue;
+
+                // Safety: Filter out invalid coordinates that cause rendering glitches
+                if (double.IsNaN(prim.X) || double.IsInfinity(prim.X) ||
+                    double.IsNaN(prim.Y) || double.IsInfinity(prim.Y))
+                    continue;
+
+                Point screenPos = WorldToScreen(new Point(prim.X, prim.Y));
+                double screenWidth = prim.Width * currentZoom;
+                double screenHeight = prim.Height * currentZoom;
+
+                switch (prim.Type)
                 {
-                    // LOD: Skip primitives that are too small to see
-                    double primSize = Math.Max(prim.Width, prim.Height);
-                    if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
-                        continue;
+                    case GerberPrimitiveType.Rectangle:
+                        // Batch rectangles as quads
+                        {
+                            double w = Math.Max(screenWidth, 0.5) / 2;
+                            double h = Math.Max(screenHeight, 0.5) / 2;
+                            ctx.BeginFigure(new Point(screenPos.X - w, screenPos.Y - h), true, true);
+                            ctx.LineTo(new Point(screenPos.X + w, screenPos.Y - h), false, false);
+                            ctx.LineTo(new Point(screenPos.X + w, screenPos.Y + h), false, false);
+                            ctx.LineTo(new Point(screenPos.X - w, screenPos.Y + h), false, false);
+                            hasShapesInChunk = true;
+                            figureCount++;
+                        }
+                        break;
 
-                    Point screenPos = WorldToScreen(new Point(prim.X, prim.Y));
-                    double screenWidth = prim.Width * currentZoom;
-                    double screenHeight = prim.Height * currentZoom;
+                    case GerberPrimitiveType.Line:
+                    case GerberPrimitiveType.Arc:
+                        // Expand lines to quads to handle variable widths in one batch
+                        if (prim.Points != null && prim.Points.Count >= 2)
+                        {
+                            double halfWidth = Math.Max(screenWidth, 0.5) / 2;
+                            for (int i = 0; i < prim.Points.Count - 1; i++)
+                            {
+                                Point p1 = WorldToScreen(prim.Points[i]);
+                                Point p2 = WorldToScreen(prim.Points[i + 1]);
 
-                    switch (prim.Type)
+                                // Calculate line direction and perpendicular for thickness
+                                Vector v = p2 - p1;
+                                double len = v.Length;
+                                if (len < 0.1) continue;
+
+                                // Normal perpendicular to line direction, scaled by half-width
+                                Vector n = new Vector(-v.Y, v.X) / len * halfWidth;
+
+                                // Draw quad (4 corners of the thick line segment)
+                                ctx.BeginFigure(new Point(p1.X - n.X, p1.Y - n.Y), true, true);
+                                ctx.LineTo(new Point(p1.X + n.X, p1.Y + n.Y), false, false);
+                                ctx.LineTo(new Point(p2.X + n.X, p2.Y + n.Y), false, false);
+                                ctx.LineTo(new Point(p2.X - n.X, p2.Y - n.Y), false, false);
+                                hasShapesInChunk = true;
+                                figureCount++;
+                            }
+
+                            // Draw round caps at endpoints using small circles (approximated as octagon)
+                            if (prim.Points.Count >= 2)
+                            {
+                                AddCircleToContext(ctx, WorldToScreen(prim.Points[0]), halfWidth);
+                                AddCircleToContext(ctx, WorldToScreen(prim.Points[prim.Points.Count - 1]), halfWidth);
+                                hasShapesInChunk = true;
+                                figureCount += 2;
+                            }
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Polygon:
+                    case GerberPrimitiveType.Contour:
+                        // Batch polygons directly
+                        if (prim.Points != null && prim.Points.Count >= 3)
+                        {
+                            ctx.BeginFigure(WorldToScreen(prim.Points[0]), true, true);
+                            for (int i = 1; i < prim.Points.Count; i++)
+                            {
+                                ctx.LineTo(WorldToScreen(prim.Points[i]), false, false);
+                            }
+                            hasShapesInChunk = true;
+                            figureCount++;
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Obround:
+                        // Obrounds: draw as rectangle + two semicircles (approximated)
+                        {
+                            double w = Math.Max(screenWidth, 0.5) / 2;
+                            double h = Math.Max(screenHeight, 0.5) / 2;
+                            double r = Math.Min(w, h);
+                            // For simplicity, approximate as rounded rect using multiple segments
+                            AddRoundedRectToContext(ctx, screenPos, w, h, r);
+                            hasShapesInChunk = true;
+                            figureCount++;
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Circle:
+                    case GerberPrimitiveType.Flash:
+                        // Circles: batch as octagons instead of individual DrawEllipse calls
+                        {
+                            double r = Math.Max(screenWidth / 2, 0.25);
+                            AddCircleToContext(ctx, screenPos, r);
+                            hasShapesInChunk = true;
+                            figureCount++;
+                        }
+                        break;
+                }
+
+                // CHUNK FLUSH: When we hit the limit, draw this chunk and start a new one
+                if (figureCount >= CHUNK_SIZE)
+                {
+                    ctx.Close();
+                    if (hasShapesInChunk)
                     {
-                        case GerberPrimitiveType.Rectangle:
-                            // Batch rectangles as quads
-                            {
-                                double w = Math.Max(screenWidth, 0.5) / 2;
-                                double h = Math.Max(screenHeight, 0.5) / 2;
-                                ctx.BeginFigure(new Point(screenPos.X - w, screenPos.Y - h), true, true);
-                                ctx.LineTo(new Point(screenPos.X + w, screenPos.Y - h), false, false);
-                                ctx.LineTo(new Point(screenPos.X + w, screenPos.Y + h), false, false);
-                                ctx.LineTo(new Point(screenPos.X - w, screenPos.Y + h), false, false);
-                                hasBatchedShapes = true;
-                            }
-                            break;
-
-                        case GerberPrimitiveType.Line:
-                        case GerberPrimitiveType.Arc:
-                            // Expand lines to quads to handle variable widths in one batch
-                            if (prim.Points != null && prim.Points.Count >= 2)
-                            {
-                                double halfWidth = Math.Max(screenWidth, 0.5) / 2;
-                                for (int i = 0; i < prim.Points.Count - 1; i++)
-                                {
-                                    Point p1 = WorldToScreen(prim.Points[i]);
-                                    Point p2 = WorldToScreen(prim.Points[i + 1]);
-
-                                    // Calculate line direction and perpendicular for thickness
-                                    Vector v = p2 - p1;
-                                    double len = v.Length;
-                                    if (len < 0.1) continue;
-
-                                    // Normal perpendicular to line direction, scaled by half-width
-                                    Vector n = new Vector(-v.Y, v.X) / len * halfWidth;
-
-                                    // Draw quad (4 corners of the thick line segment)
-                                    ctx.BeginFigure(new Point(p1.X - n.X, p1.Y - n.Y), true, true);
-                                    ctx.LineTo(new Point(p1.X + n.X, p1.Y + n.Y), false, false);
-                                    ctx.LineTo(new Point(p2.X + n.X, p2.Y + n.Y), false, false);
-                                    ctx.LineTo(new Point(p2.X - n.X, p2.Y - n.Y), false, false);
-                                    hasBatchedShapes = true;
-                                }
-
-                                // Draw round caps at endpoints using small circles (approximated as octagon)
-                                if (prim.Points.Count >= 2)
-                                {
-                                    AddCircleToContext(ctx, WorldToScreen(prim.Points[0]), halfWidth);
-                                    AddCircleToContext(ctx, WorldToScreen(prim.Points[prim.Points.Count - 1]), halfWidth);
-                                    hasBatchedShapes = true;
-                                }
-                            }
-                            break;
-
-                        case GerberPrimitiveType.Polygon:
-                        case GerberPrimitiveType.Contour:
-                            // Batch polygons directly
-                            if (prim.Points != null && prim.Points.Count >= 3)
-                            {
-                                ctx.BeginFigure(WorldToScreen(prim.Points[0]), true, true);
-                                for (int i = 1; i < prim.Points.Count; i++)
-                                {
-                                    ctx.LineTo(WorldToScreen(prim.Points[i]), false, false);
-                                }
-                                hasBatchedShapes = true;
-                            }
-                            break;
-
-                        case GerberPrimitiveType.Obround:
-                            // Obrounds: draw as rectangle + two semicircles (approximated)
-                            {
-                                double w = Math.Max(screenWidth, 0.5) / 2;
-                                double h = Math.Max(screenHeight, 0.5) / 2;
-                                double r = Math.Min(w, h);
-                                // For simplicity, approximate as rounded rect using multiple segments
-                                AddRoundedRectToContext(ctx, screenPos, w, h, r);
-                                hasBatchedShapes = true;
-                            }
-                            break;
-
-                        case GerberPrimitiveType.Circle:
-                        case GerberPrimitiveType.Flash:
-                            // Circles are rendered individually (efficient as single DrawEllipse call)
-                            {
-                                double r = Math.Max(screenWidth / 2, 0.25);
-                                dc.DrawEllipse(brush, null, screenPos, r, r);
-                            }
-                            break;
+                        chunkGeometry.Freeze();
+                        dc.DrawGeometry(brush, null, chunkGeometry);
                     }
+
+                    // Start new chunk
+                    chunkGeometry = new StreamGeometry();
+                    chunkGeometry.FillRule = FillRule.Nonzero;
+                    ctx = chunkGeometry.Open();
+                    figureCount = 0;
+                    hasShapesInChunk = false;
                 }
             }
 
-            // Draw the batched geometry in ONE call
-            if (hasBatchedShapes)
+            // Draw remaining shapes in the final chunk
+            ctx.Close();
+            if (hasShapesInChunk)
             {
-                batchGeometry.Freeze();
-                dc.DrawGeometry(brush, null, batchGeometry);
+                chunkGeometry.Freeze();
+                dc.DrawGeometry(brush, null, chunkGeometry);
             }
 
             if (hasOpacity)
