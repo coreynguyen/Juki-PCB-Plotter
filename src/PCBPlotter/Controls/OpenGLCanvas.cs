@@ -377,6 +377,9 @@ namespace PCBPlotter.Controls
             {
                 _batchRenderer = new BatchRenderer();
                 _batchRenderer.Initialize();
+                // Disable frustum culling in BatchRenderer since quadtree already does spatial filtering
+                // and RenderLayerBatched already does LOD filtering - avoids redundant double-culling
+                _batchRenderer.UseFrustumCulling = false;
                 System.Diagnostics.Debug.WriteLine("BatchRenderer initialized successfully");
             }
             catch (Exception ex)

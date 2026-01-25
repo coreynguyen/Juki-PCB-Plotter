@@ -23,6 +23,11 @@ namespace PCBPlotter.Controls
         private int _indexCapacity;
         private int _instanceCapacity;
 
+        // Track actual GPU buffer capacities separately from CPU array capacities
+        private int _gpuVertexCapacity;
+        private int _gpuIndexCapacity;
+        private int _gpuInstanceCapacity;
+
         private int _vertexCount;
         private int _indexCount;
         private int _instanceCount;
@@ -111,6 +116,11 @@ namespace PCBPlotter.Controls
 
             GL.BindVertexArray(0);
 
+            // Track actual GPU buffer capacities
+            _gpuVertexCapacity = _vertexCapacity;
+            _gpuIndexCapacity = _indexCapacity;
+            _gpuInstanceCapacity = _instanceCapacity;
+
             _isInitialized = true;
         }
 
@@ -121,6 +131,16 @@ namespace PCBPlotter.Controls
         {
             _vertexCount = 0;
             _indexCount = 0;
+            _instanceCount = 0;
+            _isDirty = true;
+        }
+
+        /// <summary>
+        /// Clears only instance data, preserving vertex and index data.
+        /// Use this for instanced geometry where base geometry is static.
+        /// </summary>
+        public void ClearInstancesOnly()
+        {
             _instanceCount = 0;
             _isDirty = true;
         }
@@ -243,10 +263,12 @@ namespace PCBPlotter.Controls
             {
                 GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
 
-                // Check if we need to reallocate
-                if (_vertexCount * VERTEX_SIZE > _vertexCapacity * VERTEX_SIZE)
+                // Check if we need to reallocate GPU buffer (compare against actual GPU buffer capacity)
+                if (_vertexCount > _gpuVertexCapacity)
                 {
-                    GL.BufferData(BufferTarget.ArrayBuffer, _vertices.Length * sizeof(float), _vertices, _usageHint);
+                    int newGpuCapacity = Math.Max(_vertexCount, _gpuVertexCapacity * 2);
+                    GL.BufferData(BufferTarget.ArrayBuffer, newGpuCapacity * VERTEX_SIZE * sizeof(float), _vertices, _usageHint);
+                    _gpuVertexCapacity = newGpuCapacity;
                 }
                 else
                 {
@@ -259,9 +281,12 @@ namespace PCBPlotter.Controls
             {
                 GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
 
-                if (_indexCount > _indexCapacity)
+                // Check if we need to reallocate GPU buffer
+                if (_indexCount > _gpuIndexCapacity)
                 {
-                    GL.BufferData(BufferTarget.ElementArrayBuffer, _indices.Length * sizeof(uint), _indices, _usageHint);
+                    int newGpuCapacity = Math.Max(_indexCount, _gpuIndexCapacity * 2);
+                    GL.BufferData(BufferTarget.ElementArrayBuffer, newGpuCapacity * sizeof(uint), _indices, _usageHint);
+                    _gpuIndexCapacity = newGpuCapacity;
                 }
                 else
                 {
@@ -274,9 +299,12 @@ namespace PCBPlotter.Controls
             {
                 GL.BindBuffer(BufferTarget.ArrayBuffer, _instanceVbo);
 
-                if (_instanceCount * INSTANCE_SIZE > _instanceCapacity * INSTANCE_SIZE)
+                // Check if we need to reallocate GPU buffer (compare against actual GPU buffer capacity)
+                if (_instanceCount > _gpuInstanceCapacity)
                 {
-                    GL.BufferData(BufferTarget.ArrayBuffer, _instances.Length * sizeof(float), _instances, BufferUsageHint.StreamDraw);
+                    int newGpuCapacity = Math.Max(_instanceCount, _gpuInstanceCapacity * 2);
+                    GL.BufferData(BufferTarget.ArrayBuffer, newGpuCapacity * INSTANCE_SIZE * sizeof(float), _instances, BufferUsageHint.StreamDraw);
+                    _gpuInstanceCapacity = newGpuCapacity;
                 }
                 else
                 {
@@ -385,6 +413,7 @@ namespace PCBPlotter.Controls
         // Stub implementation when OpenGL is not available
         public void Initialize() { }
         public void Clear() { }
+        public void ClearInstancesOnly() { }
         public int AddVertex(float x, float y, float u = 0, float v = 0) => 0;
         public int AddVertices(float[] vertices, int vertexCount) => 0;
         public void AddTriangle(uint v0, uint v1, uint v2) { }
@@ -435,10 +464,11 @@ namespace PCBPlotter.Controls
             if (_isInitialized) return;
 
             // Build unit circle geometry (radius 1, centered at origin)
+            // Use larger initial capacity to avoid frequent reallocations for PCB files
             _circleBuffer = new GeometryBuffer(
                 vertexCapacity: _circleSegments + 1,
                 indexCapacity: _circleSegments * 3,
-                instanceCapacity: 4096,
+                instanceCapacity: 65536,
                 usageHint: BufferUsageHint.StaticDraw);
             _circleBuffer.Initialize();
 
@@ -448,7 +478,7 @@ namespace PCBPlotter.Controls
             _rectangleBuffer = new GeometryBuffer(
                 vertexCapacity: 4,
                 indexCapacity: 6,
-                instanceCapacity: 4096,
+                instanceCapacity: 65536,
                 usageHint: BufferUsageHint.StaticDraw);
             _rectangleBuffer.Initialize();
 
@@ -458,7 +488,7 @@ namespace PCBPlotter.Controls
             _lineCapBuffer = new GeometryBuffer(
                 vertexCapacity: _circleSegments / 2 + 2,
                 indexCapacity: _circleSegments / 2 * 3,
-                instanceCapacity: 8192,
+                instanceCapacity: 65536,
                 usageHint: BufferUsageHint.StaticDraw);
             _lineCapBuffer.Initialize();
 
@@ -529,17 +559,14 @@ namespace PCBPlotter.Controls
 
         /// <summary>
         /// Clears instance data for a new frame.
+        /// Base geometry (unit circle, unit rectangle) is preserved.
         /// </summary>
         public void ClearInstances()
         {
-            _circleBuffer.Clear();
-            BuildCircleGeometry(); // Rebuild base geometry
-
-            _rectangleBuffer.Clear();
-            BuildRectangleGeometry();
-
-            _lineCapBuffer.Clear();
-            BuildLineCapGeometry();
+            // Only clear instance data, don't rebuild base geometry
+            _circleBuffer.ClearInstancesOnly();
+            _rectangleBuffer.ClearInstancesOnly();
+            _lineCapBuffer.ClearInstancesOnly();
         }
 
         /// <summary>
