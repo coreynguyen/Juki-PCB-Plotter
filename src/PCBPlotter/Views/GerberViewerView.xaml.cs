@@ -252,13 +252,16 @@ namespace PCBPlotter.Views
 
             bool useScreenBlend = checkBox.IsChecked ?? true;
 
+            // Guard against null during InitializeComponent
             if (_useOpenGL)
             {
-                OpenGLCanvas.UseScreenBlend = useScreenBlend;
+                if (OpenGLCanvas != null)
+                    OpenGLCanvas.UseScreenBlend = useScreenBlend;
             }
             else
             {
-                GerberCanvas.UseScreenBlend = useScreenBlend;
+                if (GerberCanvas != null)
+                    GerberCanvas.UseScreenBlend = useScreenBlend;
             }
         }
 
