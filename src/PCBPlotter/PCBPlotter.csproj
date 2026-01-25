@@ -224,6 +224,11 @@
     <Compile Include="Controls\OpenGLCanvas.cs" />
     <Compile Include="Controls\GerberQuadtree.cs" />
     <Compile Include="Controls\CoordinateDisplay.cs" />
+    <Compile Include="Controls\BatchRenderer.cs" />
+    <Compile Include="Controls\FrustumCuller.cs" />
+    <Compile Include="Controls\RenderStateCache.cs" />
+    <Compile Include="Controls\GeometryBuffer.cs" />
+    <Compile Include="Controls\GeometryCache.cs" />
     <Compile Include="Behaviors\DataGridZoomBehavior.cs" />
     <Compile Include="Converters\BoolToVisibilityConverter.cs" />
     <Compile Include="Converters\EnumToBoolConverter.cs" />
