@@ -811,7 +811,13 @@ void main()
             GL.ClearColor(bg.R / 255f, bg.G / 255f, bg.B / 255f, 1.0f);
             GL.Clear(ClearBufferMask.ColorBufferBit);
 
-            // Render layers
+            // Render grid FIRST (behind layers)
+            if (ShowGrid)
+            {
+                RenderGrid();
+            }
+
+            // Render layers on top of grid
             if (GerberLayers != null && GerberLayers.Count > 0)
             {
                 // Use fast path (no screen blend) for better performance during interaction
@@ -824,12 +830,6 @@ void main()
                     // Fast path: simple alpha blending, much faster
                     RenderLayersNormal();
                 }
-            }
-
-            // Render grid
-            if (ShowGrid)
-            {
-                RenderGrid();
             }
 
             // Render selection rectangle if active
@@ -1580,7 +1580,8 @@ void main()
                     case GerberPrimitiveType.Polygon:
                         if (prim.Points != null && prim.Points.Count >= 3)
                         {
-                            cache.Polygons.Add(new CachedPolygon { Points = prim.Points });
+                            // Copy points to avoid potential reference issues
+                            cache.Polygons.Add(new CachedPolygon { Points = new List<System.Windows.Point>(prim.Points) });
                         }
                         break;
                 }
@@ -1884,47 +1885,30 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                // FIX: For massive polygons, render as OUTLINE instead of broken triangle fan
-                // Triangle fans only work for convex shapes - concave shapes like ground planes
-                // with cutouts would render incorrectly ("pulling towards origin" artifacts).
-                // Outlines show the shape boundary correctly and avoid memory/CPU spikes.
+                // For massive polygons (>2000 vertices), ear-clipping is O(n³) and will freeze the app.
+                // Use a simple triangle fan which is O(n) - it works correctly for convex shapes
+                // and provides approximate fill for concave shapes (better than nothing).
                 bool isMassive = poly.Points.Count > MAX_EAR_CLIP_VERTICES;
 
                 if (isMassive)
                 {
-                    // OUTLINE MODE: Generate thick line strip around polygon perimeter
-                    // This creates quads for each edge segment
-                    float lineWidth = 0.15f; // Visible outline thickness
+                    // TRIANGLE FAN MODE: Fast O(n) fallback for massive polygons
+                    // May have visual artifacts on deeply concave shapes, but won't freeze
+                    uint baseVertex = (uint)(allVertices.Count / 2);
 
-                    for (int i = 0; i < poly.Points.Count; i++)
+                    // Add all vertices
+                    foreach (var pt in poly.Points)
                     {
-                        var p1 = poly.Points[i];
-                        var p2 = poly.Points[(i + 1) % poly.Points.Count];
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
 
-                        float dx = (float)(p2.X - p1.X);
-                        float dy = (float)(p2.Y - p1.Y);
-                        float len = (float)Math.Sqrt(dx * dx + dy * dy);
-                        if (len < 0.0001f) continue;
-
-                        // Perpendicular normal for line width
-                        float nx = -dy / len * lineWidth / 2;
-                        float ny = dx / len * lineWidth / 2;
-
-                        uint vStart = (uint)(allVertices.Count / 2);
-
-                        // Add 4 vertices for this line segment (quad)
-                        allVertices.Add((float)p1.X - nx); allVertices.Add((float)p1.Y - ny);
-                        allVertices.Add((float)p1.X + nx); allVertices.Add((float)p1.Y + ny);
-                        allVertices.Add((float)p2.X + nx); allVertices.Add((float)p2.Y + ny);
-                        allVertices.Add((float)p2.X - nx); allVertices.Add((float)p2.Y - ny);
-
-                        // Add 2 triangles for the quad
-                        allIndices.Add(vStart);
-                        allIndices.Add(vStart + 1);
-                        allIndices.Add(vStart + 2);
-                        allIndices.Add(vStart);
-                        allIndices.Add(vStart + 2);
-                        allIndices.Add(vStart + 3);
+                    // Create triangle fan from first vertex
+                    for (int i = 1; i < poly.Points.Count - 1; i++)
+                    {
+                        allIndices.Add(baseVertex);
+                        allIndices.Add(baseVertex + (uint)i);
+                        allIndices.Add(baseVertex + (uint)(i + 1));
                     }
                 }
                 else

@@ -63,6 +63,17 @@ namespace PCBPlotter.Controls
                 {
                     // Failed to find an ear (degenerate polygon or self-intersecting)
                     // Fallback: use triangle fan for remaining vertices
+                    // This may look wrong for concave shapes but ensures SOMETHING renders
+                    if (vertList.Count >= 3)
+                    {
+                        int firstVert = vertList[0];
+                        for (int i = 1; i < vertList.Count - 1; i++)
+                        {
+                            indices.Add(firstVert);
+                            indices.Add(vertList[i]);
+                            indices.Add(vertList[i + 1]);
+                        }
+                    }
                     break;
                 }
             }
