@@ -126,7 +126,7 @@ namespace PCBPlotter.Controls
         {
             var results = new List<GerberPrimitive>();
             var queryRect = new Rect(worldPoint.X - radius, worldPoint.Y - radius, radius * 2, radius * 2);
-            QueryRect(queryRect, results);
+            QueryRectInternal(queryRect, results);
             return results;
         }
 
@@ -136,31 +136,40 @@ namespace PCBPlotter.Controls
         public List<GerberPrimitive> QueryRect(Rect rect)
         {
             var results = new List<GerberPrimitive>();
-            QueryRect(rect, results);
+            QueryRectInternal(rect, results);
             return results;
         }
 
-        private void QueryRect(Rect rect, List<GerberPrimitive> results)
+        /// <summary>
+        /// Query all primitives that intersect a rectangle, reusing an existing buffer.
+        /// This overload avoids allocation by clearing and reusing the provided list.
+        /// </summary>
+        public void QueryRect(Rect rect, List<GerberPrimitive> resultsBuffer)
+        {
+            resultsBuffer.Clear();
+            QueryRectInternal(rect, resultsBuffer);
+        }
+
+        private void QueryRectInternal(Rect rect, List<GerberPrimitive> results)
         {
             if (!_bounds.IntersectsWith(rect))
                 return;
 
             lock (_lock)
             {
-                // Always check items at this node (loose quadtree stores spanning items here)
                 foreach (var item in _items)
                 {
                     if (rect.IntersectsWith(item.GetBounds()))
                         results.Add(item);
                 }
 
-                // If subdivided, recurse into children
                 if (_children != null)
                 {
                     foreach (var child in _children)
-                        child.QueryRect(rect, results);
+                        child.QueryRectInternal(rect, results);
                 }
             }
         }
+
     }
 }

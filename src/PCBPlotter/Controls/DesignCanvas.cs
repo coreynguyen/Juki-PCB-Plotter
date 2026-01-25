@@ -739,6 +739,9 @@ namespace PCBPlotter.Controls
         // LOD threshold: skip primitives smaller than this many screen pixels
         private const double MIN_PRIMITIVE_SCREEN_PIXELS = 0.5;
 
+        // Reusable list for quadtree queries to avoid GC allocations during panning/zooming
+        private List<GerberPrimitive> _reusableVisibleList = new List<GerberPrimitive>(10000);
+
         // World bounds of all layers combined
         private Rect _worldBounds = Rect.Empty;
 
@@ -958,7 +961,11 @@ namespace PCBPlotter.Controls
 
             if (quadtree != null)
             {
-                visiblePrimitives = quadtree.QueryRect(visibleWorld);
+                // OPTIMIZATION: Reuse list to reduce GC pressure during panning/zooming.
+                // Since OnRender is single-threaded and RenderLayerVectors completes
+                // before the next layer is processed, this is safe.
+                quadtree.QueryRect(visibleWorld, _reusableVisibleList);
+                visiblePrimitives = _reusableVisibleList;
             }
             else
             {
@@ -990,8 +997,10 @@ namespace PCBPlotter.Controls
                 dc.PushOpacity(layer.Opacity);
             }
 
-            // LOD threshold: 0.5 screen pixels
-            double minWorldSize = MIN_PRIMITIVE_SCREEN_PIXELS / currentZoom;
+            // Dynamic LOD: skip more detail while panning/selecting for smoother interaction
+            // Still: show 0.5 pixel details. Moving: skip anything smaller than 2 pixels.
+            double screenPixelThreshold = (_isPanning || _isSelecting) ? 2.0 : MIN_PRIMITIVE_SCREEN_PIXELS;
+            double minWorldSize = screenPixelThreshold / currentZoom;
 
             // --- Step 3: Render Loop (Optimized) ---
             // We ONLY batch Polygons/Contours and rotated shapes.
