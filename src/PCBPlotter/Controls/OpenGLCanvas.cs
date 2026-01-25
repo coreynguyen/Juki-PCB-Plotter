@@ -9,9 +9,11 @@ using System.Windows.Forms.Integration;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+#if USE_OPENGL
 using OpenTK;
 using OpenTK.Graphics;
 using OpenTK.Graphics.OpenGL;
+#endif
 using PCBPlotter.Core.Models;
 
 namespace PCBPlotter.Controls
@@ -19,9 +21,12 @@ namespace PCBPlotter.Controls
     /// <summary>
     /// High-performance OpenGL-accelerated canvas for rendering PCB layouts.
     /// Uses GPU batching, instancing, and proper screen blend mode support.
+    /// NOTE: Requires OpenTK NuGet packages. Run 'nuget restore' if you see compile errors.
+    /// To disable OpenGL support, remove USE_OPENGL from project DefineConstants.
     /// </summary>
     public class OpenGLCanvas : ContentControl
     {
+#if USE_OPENGL
         private OpenTK.GLControl _glControl;
         private WindowsFormsHost _host;
         private bool _glInitialized;
@@ -78,6 +83,14 @@ namespace PCBPlotter.Controls
         private Point _lastMousePosition;
         private Point _panStart;
         private bool _isPanning;
+#else
+        // Stub fields when OpenGL is not available
+        private bool _needsRebuild = true;
+        private Dictionary<string, GerberQuadtree> _layerQuadtrees = new Dictionary<string, GerberQuadtree>();
+        private Point _lastMousePosition;
+        private Point _panStart;
+        private bool _isPanning;
+#endif
 
         #region Dependency Properties
 
@@ -179,11 +192,14 @@ namespace PCBPlotter.Controls
 
         public OpenGLCanvas()
         {
+#if USE_OPENGL
             InitializeUnitCircle();
+#endif
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
         }
 
+#if USE_OPENGL
         private void InitializeUnitCircle()
         {
             // Pre-generate unit circle vertices for instanced circle rendering
@@ -210,9 +226,11 @@ namespace PCBPlotter.Controls
                 _unitCircleIndices[i * 3 + 2] = (uint)((i + 1) % CIRCLE_SEGMENTS + 1);
             }
         }
+#endif
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
+#if USE_OPENGL
             try
             {
                 InitializeOpenGL();
@@ -229,13 +247,27 @@ namespace PCBPlotter.Controls
                     VerticalAlignment = VerticalAlignment.Center
                 };
             }
+#else
+            // OpenGL not available - show message
+            Content = new TextBlock
+            {
+                Text = "OpenGL renderer not available.\nPlease restore NuGet packages and rebuild with USE_OPENGL defined.",
+                Foreground = Brushes.Orange,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Center
+            };
+#endif
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
+#if USE_OPENGL
             CleanupOpenGL();
+#endif
         }
 
+#if USE_OPENGL
         private void InitializeOpenGL()
         {
             // Create GLControl
@@ -736,6 +768,10 @@ void main()
             // Batch render primitives by type
             foreach (var prim in visiblePrimitives)
             {
+                // Skip clear/negative primitives in rendering for now (they need special handling)
+                if (!prim.IsDark)
+                    continue;
+
                 // LOD culling
                 float size = Math.Max(prim.Width, prim.Height);
                 if (size < minSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
@@ -745,7 +781,7 @@ void main()
             }
         }
 
-        private void RenderPrimitive(GerberPrimitive prim, Vector4 color, float opacity)
+        private void RenderPrimitive(GerberPrimitive prim, OpenTK.Vector4 color, float opacity)
         {
             color.W *= opacity;
 
@@ -782,7 +818,7 @@ void main()
             }
         }
 
-        private void RenderCircle(float x, float y, float radius, Vector4 color)
+        private void RenderCircle(float x, float y, float radius, OpenTK.Vector4 color)
         {
             GL.Begin(PrimitiveType.TriangleFan);
             GL.Color4(color.X, color.Y, color.Z, color.W);
@@ -796,7 +832,7 @@ void main()
             GL.End();
         }
 
-        private void RenderRectangle(float x, float y, float width, float height, Vector4 color)
+        private void RenderRectangle(float x, float y, float width, float height, OpenTK.Vector4 color)
         {
             float hw = width / 2;
             float hh = height / 2;
@@ -810,7 +846,7 @@ void main()
             GL.End();
         }
 
-        private void RenderObround(float x, float y, float width, float height, Vector4 color)
+        private void RenderObround(float x, float y, float width, float height, OpenTK.Vector4 color)
         {
             // Obround = rectangle with semicircle ends
             float hw = width / 2;
@@ -852,7 +888,7 @@ void main()
             }
         }
 
-        private void RenderLine(float x1, float y1, float x2, float y2, float width, Vector4 color)
+        private void RenderLine(float x1, float y1, float x2, float y2, float width, OpenTK.Vector4 color)
         {
             // Line with width = rotated rectangle
             float dx = x2 - x1;
@@ -877,7 +913,7 @@ void main()
             RenderCircle(x2, y2, radius, color);
         }
 
-        private void RenderPolygon(IList<System.Windows.Point> points, Vector4 color)
+        private void RenderPolygon(IList<System.Windows.Point> points, OpenTK.Vector4 color)
         {
             if (points.Count < 3) return;
 
@@ -950,13 +986,13 @@ void main()
                 halfHeight * 2);
         }
 
-        private Vector4 GetColorFromArgb(uint argb)
+        private OpenTK.Vector4 GetColorFromArgb(uint argb)
         {
             float a = ((argb >> 24) & 0xFF) / 255f;
             float r = ((argb >> 16) & 0xFF) / 255f;
             float g = ((argb >> 8) & 0xFF) / 255f;
             float b = (argb & 0xFF) / 255f;
-            return new Vector4(r, g, b, a);
+            return new OpenTK.Vector4(r, g, b, a);
         }
 
         private void BuildLayerQuadtreeAsync(GerberLayer layer)
@@ -997,14 +1033,6 @@ void main()
 
                 Dispatcher.BeginInvoke(new Action(Invalidate));
             });
-        }
-
-        public void Invalidate()
-        {
-            if (_glControl != null && _glInitialized)
-            {
-                _glControl.Invalidate();
-            }
         }
 
         #region Mouse Handling
@@ -1061,6 +1089,17 @@ void main()
         }
 
         #endregion
+#endif
+
+        public void Invalidate()
+        {
+#if USE_OPENGL
+            if (_glControl != null && _glInitialized)
+            {
+                _glControl.Invalidate();
+            }
+#endif
+        }
 
         #region Public API
 
@@ -1069,6 +1108,7 @@ void main()
         /// </summary>
         public static GpuInfo GetGpuInfo()
         {
+#if USE_OPENGL
             try
             {
                 using (var tempControl = new OpenTK.GLControl())
@@ -1088,6 +1128,9 @@ void main()
             {
                 return new GpuInfo { Vendor = "Unknown", Renderer = "Unknown", Version = "Unknown", ShadingLanguageVersion = "Unknown", IsHighPerformance = false };
             }
+#else
+            return new GpuInfo { Vendor = "N/A", Renderer = "OpenGL not available", Version = "N/A", ShadingLanguageVersion = "N/A", IsHighPerformance = false };
+#endif
         }
 
         /// <summary>
@@ -1106,8 +1149,13 @@ void main()
 
             if (bounds.IsEmpty) return;
 
+#if USE_OPENGL
             double width = _glControl?.Width ?? ActualWidth;
             double height = _glControl?.Height ?? ActualHeight;
+#else
+            double width = ActualWidth;
+            double height = ActualHeight;
+#endif
 
             double zoomX = width / bounds.Width * 0.9;
             double zoomY = height / bounds.Height * 0.9;

@@ -685,6 +685,10 @@ namespace PCBPlotter.ViewModels
 
             foreach (var primitive in SelectedLayer.Primitives)
             {
+                // Skip non-dark (clear/negative) primitives - they subtract material and shouldn't be selectable
+                if (!primitive.IsDark)
+                    continue;
+
                 if (worldRect.IntersectsWith(primitive.GetBounds()))
                 {
                     primitive.IsSelected = true;

@@ -623,7 +623,8 @@ namespace PCBPlotter.Core.Services
             {
                 X = x,
                 Y = y,
-                ApertureIndex = _currentAperture
+                ApertureIndex = _currentAperture,
+                IsDark = _darkPolarity
             };
 
             switch (aperture.Type)
@@ -688,6 +689,7 @@ namespace PCBPlotter.Core.Services
                     Type = GerberPrimitiveType.Line,
                     Width = width,
                     ApertureIndex = _currentAperture,
+                    IsDark = _darkPolarity,
                     Points = new List<Point> { new Point(x1, y1), new Point(x2, y2) }
                 };
                 prim.X = (x1 + x2) / 2;
@@ -705,6 +707,7 @@ namespace PCBPlotter.Core.Services
                         Type = GerberPrimitiveType.Arc,
                         Width = width,
                         ApertureIndex = _currentAperture,
+                        IsDark = _darkPolarity,
                         Points = arcPoints
                     };
 
@@ -783,7 +786,8 @@ namespace PCBPlotter.Core.Services
             {
                 Type = GerberPrimitiveType.Contour,
                 Points = _regionPoints.ToList(),
-                Width = 0
+                Width = 0,
+                IsDark = _darkPolarity
             };
 
             // Calculate center

@@ -43,8 +43,12 @@
                                     MouseLeftButtonDown="ColorBorder_MouseLeftButtonDown">
                                 <Rectangle Fill="{Binding Color, Converter={StaticResource ColorToBrushConverter}}"/>
                             </Border>
-                            <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="* " FontWeight="Bold" Foreground="{StaticResource AccentBrush}"
+                                           Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibilityConverter}}"
+                                           ToolTip="Active layer (selection enabled)"/>
+                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
                         </Grid>
                     </DataTemplate>
                 </ListBox.ItemTemplate>

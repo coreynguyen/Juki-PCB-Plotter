@@ -1167,6 +1167,10 @@ namespace PCBPlotter.Controls
 
             foreach (var prim in candidates)
             {
+                // Skip non-dark (clear/negative) primitives - they subtract material and shouldn't be selectable
+                if (!prim.IsDark)
+                    continue;
+
                 double dist = Math.Sqrt(Math.Pow(prim.X - worldPos.X, 2) + Math.Pow(prim.Y - worldPos.Y, 2));
 
                 // For shapes, check if point is inside
@@ -1188,7 +1192,7 @@ namespace PCBPlotter.Controls
 
         /// <summary>
         /// Select Gerber primitives in the given screen rectangle
-        /// ONLY selects from the ACTIVE layer
+        /// ONLY selects from the ACTIVE layer, and only dark (visible) primitives
         /// </summary>
         public List<GerberPrimitive> SelectGerberPrimitivesInRect(Rect screenRect)
         {
@@ -1206,7 +1210,8 @@ namespace PCBPlotter.Controls
                 Math.Abs(worldBR.Y - worldTL.Y)
             );
 
-            return _activeLayerQuadtree.QueryRect(worldRect);
+            // Filter out clear/negative primitives - only return dark (visible) ones
+            return _activeLayerQuadtree.QueryRect(worldRect).Where(p => p.IsDark).ToList();
         }
 
         /// <summary>

@@ -180,6 +180,7 @@ namespace PCBPlotter.Core.Models
         private List<Point> _points;
         private int _apertureIndex;
         private bool _isSelected;
+        private bool _isDark = true;
 
         public string Id
         {
@@ -239,6 +240,16 @@ namespace PCBPlotter.Core.Models
         {
             get { return _isSelected; }
             set { SetProperty(ref _isSelected, value); }
+        }
+
+        /// <summary>
+        /// Whether this primitive uses dark polarity (adds material).
+        /// Clear/negative primitives (IsDark=false) subtract material and should not be selectable.
+        /// </summary>
+        public bool IsDark
+        {
+            get { return _isDark; }
+            set { SetProperty(ref _isDark, value); }
         }
 
         public Point Position
