@@ -851,7 +851,9 @@ namespace PCBPlotter.Controls
                                 foreach (var prim in primitives)
                                 {
                                     if (_isDisposed) return;
-                                    quadtree.Insert(prim);
+                                    // Only index dark primitives - clear ones are not selectable
+                                    if (prim.IsDark)
+                                        quadtree.Insert(prim);
                                 }
 
                                 // Update on UI thread
@@ -1020,6 +1022,11 @@ namespace PCBPlotter.Controls
                 // Coordinate Safety (prevents NaN/Infinity glitches)
                 if (double.IsNaN(prim.X) || double.IsInfinity(prim.X) ||
                     double.IsNaN(prim.Y) || double.IsInfinity(prim.Y))
+                    continue;
+
+                // Skip clear/negative polarity primitives - they represent cutouts/holes
+                // and should not be rendered as solid shapes (they're for boolean subtraction)
+                if (!prim.IsDark)
                     continue;
 
                 Point screenPos = WorldToScreen(new Point(prim.X, prim.Y));
