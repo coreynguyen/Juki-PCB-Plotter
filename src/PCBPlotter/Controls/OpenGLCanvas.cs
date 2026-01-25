@@ -85,6 +85,16 @@ namespace PCBPlotter.Controls
         private bool _needsRedraw = true; // Dirty flag to avoid continuous rendering
         private int _lastWidth, _lastHeight;
 
+        // View state tracking for change detection
+        private double _lastZoom;
+        private double _lastPanX;
+        private double _lastPanY;
+        private bool _viewChanged = true;
+
+        // Layer geometry caching - avoid rebuilding every frame
+        private Dictionary<string, LayerGeometryCache> _layerGeometryCache = new Dictionary<string, LayerGeometryCache>();
+        private bool _geometryCacheDirty = true;
+
         // Quadtrees for spatial indexing (parallel building)
         private Dictionary<string, GerberQuadtree> _layerQuadtrees = new Dictionary<string, GerberQuadtree>();
 
@@ -212,6 +222,8 @@ namespace PCBPlotter.Controls
             var canvas = (OpenGLCanvas)d;
             canvas._needsRebuild = true;
             canvas._layerQuadtrees.Clear();
+            canvas._layerGeometryCache.Clear();
+            canvas._geometryCacheDirty = true;
             canvas.Invalidate();
         }
 
@@ -673,6 +685,18 @@ void main()
 
             _glControl.MakeCurrent();
 
+            // Detect view changes for optimization
+            bool viewChanged = Math.Abs(_lastZoom - Zoom) > 0.001 ||
+                              Math.Abs(_lastPanX - PanX) > 0.1 ||
+                              Math.Abs(_lastPanY - PanY) > 0.1;
+            if (viewChanged)
+            {
+                _lastZoom = Zoom;
+                _lastPanX = PanX;
+                _lastPanY = PanY;
+                _viewChanged = true;
+            }
+
             // Update view matrices
             UpdateMatrices();
 
@@ -684,12 +708,14 @@ void main()
             // Render layers
             if (GerberLayers != null && GerberLayers.Count > 0)
             {
-                if (UseScreenBlend)
+                // Use fast path (no screen blend) for better performance during interaction
+                if (UseScreenBlend && !_isPanning && !_isSelecting)
                 {
                     RenderLayersWithScreenBlend();
                 }
                 else
                 {
+                    // Fast path: simple alpha blending, much faster
                     RenderLayersNormal();
                 }
             }
@@ -988,55 +1014,175 @@ void main()
             if (layer.Primitives == null || layer.Primitives.Count == 0)
                 return;
 
-            // Build quadtree if needed
-            if (!_layerQuadtrees.ContainsKey(layer.Id))
-            {
-                BuildLayerQuadtreeAsync(layer);
-            }
-
-            // Get visible primitives using quadtree spatial query
-            List<GerberPrimitive> visiblePrimitives;
-            if (_layerQuadtrees.TryGetValue(layer.Id, out var quadtree))
-            {
-                var wpfRect = new System.Windows.Rect(visibleBounds.X, visibleBounds.Y, visibleBounds.Width, visibleBounds.Height);
-                visiblePrimitives = quadtree.QueryRect(wpfRect);
-            }
-            else
-            {
-                visiblePrimitives = layer.Primitives;
-            }
-
             // Get layer color as Vector4
             var color = GetColorFromArgb(layer.ColorArgb);
             color.W *= (float)layer.Opacity;
 
-            // Minimum size for LOD filtering
-            float minSize = (float)(0.5 / Zoom);
+            // Check if we have a valid geometry cache for this layer
+            LayerGeometryCache cache;
+            bool needsRebuild = false;
 
-            // Batch primitives into the renderer
-            foreach (var prim in visiblePrimitives)
+            if (!_layerGeometryCache.TryGetValue(layer.Id, out cache))
+            {
+                cache = new LayerGeometryCache { LayerId = layer.Id };
+                _layerGeometryCache[layer.Id] = cache;
+                needsRebuild = true;
+            }
+            else if (!cache.IsValid || cache.PrimitiveCount != layer.Primitives.Count)
+            {
+                needsRebuild = true;
+            }
+
+            // Build cache if needed (only once per layer, not every frame!)
+            if (needsRebuild)
+            {
+                BuildLayerGeometryCache(layer, cache);
+            }
+
+            // Aggressive LOD filtering during interaction for smoother panning/zooming
+            // Skip small primitives that won't be visible at current zoom
+            float minVisibleSize = (_isPanning || _isSelecting) ? (float)(3.0 / Zoom) : (float)(0.5 / Zoom);
+            float viewLeft = (float)visibleBounds.Left;
+            float viewRight = (float)visibleBounds.Right;
+            float viewBottom = (float)visibleBounds.Top; // Note: Rect uses Top for min Y
+            float viewTop = (float)visibleBounds.Bottom;
+
+            // Fast path: replay cached geometry to batch renderer with frustum culling
+            foreach (var circle in cache.Circles)
+            {
+                // Quick bounds check (frustum culling)
+                float r = circle.Radius;
+                if (circle.X + r < viewLeft || circle.X - r > viewRight ||
+                    circle.Y + r < viewBottom || circle.Y - r > viewTop)
+                    continue;
+
+                // LOD filtering
+                if (r * 2 < minVisibleSize)
+                    continue;
+
+                _batchRenderer.AddCircle(circle.X, circle.Y, circle.Radius, color);
+            }
+
+            foreach (var rect in cache.Rectangles)
+            {
+                float hw = rect.Width / 2;
+                float hh = rect.Height / 2;
+
+                // Quick bounds check
+                if (rect.X + hw < viewLeft || rect.X - hw > viewRight ||
+                    rect.Y + hh < viewBottom || rect.Y - hh > viewTop)
+                    continue;
+
+                // LOD filtering
+                if (Math.Max(rect.Width, rect.Height) < minVisibleSize)
+                    continue;
+
+                _batchRenderer.AddRectangle(rect.X, rect.Y, rect.Width, rect.Height, color);
+            }
+
+            // Lines and polygons - skip LOD filtering during interaction since they're usually important
+            if (!_isPanning)
+            {
+                foreach (var line in cache.Lines)
+                {
+                    _batchRenderer.AddLine(line.X1, line.Y1, line.X2, line.Y2, line.Width, color);
+                }
+
+                foreach (var poly in cache.Polygons)
+                {
+                    _batchRenderer.AddPolygon(poly.Points, color);
+                }
+            }
+            else
+            {
+                // During interaction, only render larger lines
+                foreach (var line in cache.Lines)
+                {
+                    if (line.Width >= minVisibleSize)
+                    {
+                        _batchRenderer.AddLine(line.X1, line.Y1, line.X2, line.Y2, line.Width, color);
+                    }
+                }
+
+                // Skip polygons during fast panning for performance
+                // (they're usually small details)
+            }
+        }
+
+        private void BuildLayerGeometryCache(GerberLayer layer, LayerGeometryCache cache)
+        {
+            cache.Clear();
+            cache.PrimitiveCount = layer.Primitives.Count;
+            cache.ColorArgb = layer.ColorArgb;
+            cache.Opacity = layer.Opacity;
+
+            // Pre-allocate lists based on expected counts
+            int estimatedCount = layer.Primitives.Count;
+            cache.Circles = new List<CachedCircle>(estimatedCount / 2);
+            cache.Rectangles = new List<CachedRectangle>(estimatedCount / 4);
+            cache.Lines = new List<CachedLine>(estimatedCount / 4);
+            cache.Polygons = new List<CachedPolygon>(estimatedCount / 10);
+
+            // Build cache from primitives (done once, not every frame)
+            foreach (var prim in layer.Primitives)
             {
                 // Skip clear/negative primitives
                 if (!prim.IsDark)
                     continue;
 
-                // LOD culling for small primitives
-                float size = (float)Math.Max(prim.Width, prim.Height);
-                if (size < minSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
-                    continue;
-
                 switch (prim.Type)
                 {
                     case GerberPrimitiveType.Circle:
-                        _batchRenderer.AddCircle((float)prim.X, (float)prim.Y, (float)(prim.Width / 2), color);
+                        cache.Circles.Add(new CachedCircle
+                        {
+                            X = (float)prim.X,
+                            Y = (float)prim.Y,
+                            Radius = (float)(prim.Width / 2)
+                        });
                         break;
 
                     case GerberPrimitiveType.Rectangle:
-                        _batchRenderer.AddRectangle((float)prim.X, (float)prim.Y, (float)prim.Width, (float)prim.Height, color);
+                        cache.Rectangles.Add(new CachedRectangle
+                        {
+                            X = (float)prim.X,
+                            Y = (float)prim.Y,
+                            Width = (float)prim.Width,
+                            Height = (float)prim.Height
+                        });
                         break;
 
                     case GerberPrimitiveType.Obround:
-                        _batchRenderer.AddObround((float)prim.X, (float)prim.Y, (float)prim.Width, (float)prim.Height, color);
+                        // Decompose obround into rect + 2 circles (cached)
+                        float hw = (float)(prim.Width / 2);
+                        float hh = (float)(prim.Height / 2);
+                        if (prim.Width > prim.Height)
+                        {
+                            float radius = hh;
+                            float rectHw = hw - radius;
+                            cache.Rectangles.Add(new CachedRectangle
+                            {
+                                X = (float)prim.X,
+                                Y = (float)prim.Y,
+                                Width = rectHw * 2,
+                                Height = (float)prim.Height
+                            });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
+                        }
+                        else
+                        {
+                            float radius = hw;
+                            float rectHh = hh - radius;
+                            cache.Rectangles.Add(new CachedRectangle
+                            {
+                                X = (float)prim.X,
+                                Y = (float)prim.Y,
+                                Width = (float)prim.Width,
+                                Height = rectHh * 2
+                            });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                        }
                         break;
 
                     case GerberPrimitiveType.Line:
@@ -1044,7 +1190,14 @@ void main()
                         {
                             var p1 = prim.Points[0];
                             var p2 = prim.Points[1];
-                            _batchRenderer.AddLine((float)p1.X, (float)p1.Y, (float)p2.X, (float)p2.Y, (float)prim.Width, color);
+                            cache.Lines.Add(new CachedLine
+                            {
+                                X1 = (float)p1.X,
+                                Y1 = (float)p1.Y,
+                                X2 = (float)p2.X,
+                                Y2 = (float)p2.Y,
+                                Width = (float)prim.Width
+                            });
                         }
                         break;
 
@@ -1052,11 +1205,17 @@ void main()
                     case GerberPrimitiveType.Polygon:
                         if (prim.Points != null && prim.Points.Count >= 3)
                         {
-                            _batchRenderer.AddPolygon(prim.Points, color);
+                            cache.Polygons.Add(new CachedPolygon { Points = prim.Points });
                         }
                         break;
                 }
             }
+
+            cache.CircleCount = cache.Circles.Count;
+            cache.RectangleCount = cache.Rectangles.Count;
+            cache.LineCount = cache.Lines.Count;
+            cache.PolygonCount = cache.Polygons.Count;
+            cache.IsValid = true;
         }
 
         private void RenderPrimitive(GerberPrimitive prim, OpenTK.Vector4 color, float opacity)
@@ -1604,6 +1763,62 @@ void main()
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// Cached layer geometry to avoid rebuilding every frame.
+    /// Stores pre-built GPU buffers for each layer.
+    /// </summary>
+    internal class LayerGeometryCache
+    {
+        public string LayerId { get; set; }
+        public int PrimitiveCount { get; set; }
+        public int CircleCount { get; set; }
+        public int RectangleCount { get; set; }
+        public int LineCount { get; set; }
+        public int PolygonCount { get; set; }
+        public uint ColorArgb { get; set; }
+        public double Opacity { get; set; }
+        public bool IsValid { get; set; }
+
+        // Cached primitive data for quick re-rendering
+        public List<CachedCircle> Circles { get; set; } = new List<CachedCircle>();
+        public List<CachedRectangle> Rectangles { get; set; } = new List<CachedRectangle>();
+        public List<CachedLine> Lines { get; set; } = new List<CachedLine>();
+        public List<CachedPolygon> Polygons { get; set; } = new List<CachedPolygon>();
+
+        public void Clear()
+        {
+            Circles.Clear();
+            Rectangles.Clear();
+            Lines.Clear();
+            Polygons.Clear();
+            CircleCount = 0;
+            RectangleCount = 0;
+            LineCount = 0;
+            PolygonCount = 0;
+            IsValid = false;
+        }
+    }
+
+    internal struct CachedCircle
+    {
+        public float X, Y, Radius;
+    }
+
+    internal struct CachedRectangle
+    {
+        public float X, Y, Width, Height;
+    }
+
+    internal struct CachedLine
+    {
+        public float X1, Y1, X2, Y2, Width;
+    }
+
+    internal struct CachedPolygon
+    {
+        public IList<System.Windows.Point> Points;
     }
 
     /// <summary>
