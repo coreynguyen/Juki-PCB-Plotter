@@ -14,39 +14,33 @@ namespace PCBPlotter.Controls
     /// Key optimization: Instance data (positions, colors, scales) is uploaded to GPU ONCE
     /// when the layer is loaded. During rendering, only visible tiles are drawn with
     /// simple glDrawElementsInstanced calls - no per-primitive C# iteration needed.
+    ///
+    /// Two-phase initialization:
+    /// 1. PrepareData() - Heavy CPU work (can run on background thread)
+    /// 2. Upload() - Light work storing precomputed data (must run on UI thread)
     /// </summary>
     public class StaticLayerRenderer : IDisposable
     {
 #if USE_OPENGL
         /// <summary>
-        /// Represents a spatial tile containing pre-built GPU buffers for primitives in that tile.
+        /// Holds pre-computed tile data prepared on background thread.
+        /// Contains raw float arrays for GPU upload - no OpenGL calls.
         /// </summary>
-        private class Tile
+        public class PreparedTileData
         {
             public float MinX, MinY, MaxX, MaxY;
-
-            // Pre-built instance data for this tile (positions, scales, colors)
-            // These are uploaded to GPU once and reused every frame
-            public float[] CircleInstances;
-            public float[] RectInstances;
-
+            public float[] CircleInstances;  // Raw float array (prepared on background thread)
+            public float[] RectInstances;    // Raw float array (prepared on background thread)
             public int CircleCount;
             public int RectCount;
-
-            // GPU buffer handles (created on first upload)
-            public int CircleInstanceVbo;
-            public int RectInstanceVbo;
-
-            // Dedicated VAOs for this tile (avoids state conflicts with BatchRenderer)
-            // Each VAO has its own vertex attribute bindings, so we don't interfere
-            // with the shared GeometryCache's VAO state
-            public int CircleVao;
-            public int RectVao;
-
+            public int CircleInstanceVbo;    // GPU handle (filled during lazy upload)
+            public int RectInstanceVbo;      // GPU handle (filled during lazy upload)
+            public int CircleVao;            // GPU handle (filled during lazy upload)
+            public int RectVao;              // GPU handle (filled during lazy upload)
             public bool IsUploaded;
         }
 
-        private List<Tile> _tiles = new List<Tile>();
+        private List<PreparedTileData> _tiles = new List<PreparedTileData>();
         private int _tilesX;
         private int _tilesY;
         private float _tileSize;
@@ -89,72 +83,60 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Builds static GPU buffers from cached geometry data.
-        /// This is called ONCE when the layer is loaded, not every frame.
+        /// PHASE 1: Heavy CPU work - prepares tile data WITHOUT any OpenGL calls.
+        /// This method is THREAD-SAFE and should be called from a BACKGROUND THREAD.
+        /// Returns precomputed tile data that can be passed to Upload() on the UI thread.
         /// </summary>
-        public void Initialize(
+        public static List<PreparedTileData> PrepareData(
             IList<CachedCircle> circles,
             IList<CachedRectangle> rectangles,
             float boundsX, float boundsY, float boundsWidth, float boundsHeight,
-            Vector4 layerColor)
+            Vector4 layerColor,
+            out int tilesX, out int tilesY, out float tileSize,
+            out int totalCircles, out int totalRects, out int tilesWithData)
         {
-            if (_isInitialized)
-            {
-                Dispose();
-            }
+            var tiles = new List<PreparedTileData>();
+            totalCircles = circles?.Count ?? 0;
+            totalRects = rectangles?.Count ?? 0;
+            tilesWithData = 0;
 
-            _layerColor = layerColor;
-            _totalCircles = circles?.Count ?? 0;
-            _totalRects = rectangles?.Count ?? 0;
-
-            // Calculate tile size - aim for ~2000 primitives per tile for good batching
-            // but cap at reasonable values
-            int totalPrimitives = _totalCircles + _totalRects;
+            int totalPrimitives = totalCircles + totalRects;
             if (totalPrimitives == 0)
             {
-                _isInitialized = true;
-                return;
+                tilesX = 1;
+                tilesY = 1;
+                tileSize = 1f;
+                return tiles;
             }
 
             // Adaptive tile size based on primitive density
             float area = boundsWidth * boundsHeight;
             float density = totalPrimitives / Math.Max(area, 1f);
 
-            // MEGA-TILE FIX: Target ~50000 primitives per tile instead of 1500
-            // Modern GPUs prefer large batches - 50k instances per draw call is much better
-            // than thousands of small draw calls with 1.5k instances each.
-            // This reduces draw call overhead by ~30x.
+            // MEGA-TILE: Target ~50000 primitives per tile
             float targetPrimsPerTile = 50000f;
             float targetTileArea = targetPrimsPerTile / Math.Max(density, 0.001f);
-            _tileSize = (float)Math.Sqrt(targetTileArea);
+            tileSize = (float)Math.Sqrt(targetTileArea);
 
             // Clamp tile size to reasonable bounds
-            // With 50k target, we want fewer, larger tiles
-            _tileSize = Math.Max(_tileSize, Math.Max(boundsWidth, boundsHeight) / 10f); // At most 10x10 = 100 tiles
-            _tileSize = Math.Min(_tileSize, Math.Max(boundsWidth, boundsHeight));        // At least 1 tile
-            _tileSize = Math.Max(_tileSize, 10f); // Minimum 10mm tiles
+            tileSize = Math.Max(tileSize, Math.Max(boundsWidth, boundsHeight) / 10f);
+            tileSize = Math.Min(tileSize, Math.Max(boundsWidth, boundsHeight));
+            tileSize = Math.Max(tileSize, 10f);
 
-            _originX = boundsX;
-            _originY = boundsY;
+            tilesX = Math.Max(1, (int)Math.Ceiling(boundsWidth / tileSize));
+            tilesY = Math.Max(1, (int)Math.Ceiling(boundsHeight / tileSize));
 
-            _tilesX = Math.Max(1, (int)Math.Ceiling(boundsWidth / _tileSize));
-            _tilesY = Math.Max(1, (int)Math.Ceiling(boundsHeight / _tileSize));
-
-            // Cap total tiles at 100 (10x10 grid) for mega-tile approach
-            // With 50k primitives per tile target, 100 tiles can handle 5M primitives
-            // This drastically reduces draw call overhead
-            if (_tilesX * _tilesY > 100)
+            // Cap total tiles at 100
+            if (tilesX * tilesY > 100)
             {
-                float scale = (float)Math.Sqrt(100.0 / (_tilesX * _tilesY));
-                _tilesX = Math.Max(1, (int)(_tilesX * scale));
-                _tilesY = Math.Max(1, (int)(_tilesY * scale));
-                _tileSize = Math.Max(boundsWidth / _tilesX, boundsHeight / _tilesY);
+                float scale = (float)Math.Sqrt(100.0 / (tilesX * tilesY));
+                tilesX = Math.Max(1, (int)(tilesX * scale));
+                tilesY = Math.Max(1, (int)(tilesY * scale));
+                tileSize = Math.Max(boundsWidth / tilesX, boundsHeight / tilesY);
             }
 
-            // Create tiles
-            int totalTiles = _tilesX * _tilesY;
-            _tiles.Clear();
-            _tiles.Capacity = totalTiles;
+            int totalTiles = tilesX * tilesY;
+            tiles.Capacity = totalTiles;
 
             // Initialize tile lists for sorting primitives
             var tileCircleLists = new List<List<int>>(totalTiles);
@@ -162,54 +144,56 @@ namespace PCBPlotter.Controls
 
             for (int i = 0; i < totalTiles; i++)
             {
-                int tx = i % _tilesX;
-                int ty = i / _tilesX;
+                int tx = i % tilesX;
+                int ty = i / tilesX;
 
-                var tile = new Tile
+                tiles.Add(new PreparedTileData
                 {
-                    MinX = _originX + tx * _tileSize,
-                    MinY = _originY + ty * _tileSize,
-                    MaxX = _originX + (tx + 1) * _tileSize,
-                    MaxY = _originY + (ty + 1) * _tileSize
-                };
-                _tiles.Add(tile);
+                    MinX = boundsX + tx * tileSize,
+                    MinY = boundsY + ty * tileSize,
+                    MaxX = boundsX + (tx + 1) * tileSize,
+                    MaxY = boundsY + (ty + 1) * tileSize
+                });
                 tileCircleLists.Add(new List<int>());
                 tileRectLists.Add(new List<int>());
             }
 
-            // Sort circles into tiles (done ONCE, not every frame)
+            // Sort circles into tiles (HEAVY LOOP)
             if (circles != null)
             {
                 for (int i = 0; i < circles.Count; i++)
                 {
                     var circle = circles[i];
-                    int tileIdx = GetTileIndex(circle.X, circle.Y);
-                    if (tileIdx >= 0 && tileIdx < totalTiles)
-                    {
-                        tileCircleLists[tileIdx].Add(i);
-                    }
+                    int tx = (int)((circle.X - boundsX) / tileSize);
+                    int ty = (int)((circle.Y - boundsY) / tileSize);
+                    if (tx < 0) tx = 0;
+                    if (ty < 0) ty = 0;
+                    if (tx >= tilesX) tx = tilesX - 1;
+                    if (ty >= tilesY) ty = tilesY - 1;
+                    tileCircleLists[ty * tilesX + tx].Add(i);
                 }
             }
 
-            // Sort rectangles into tiles (done ONCE, not every frame)
+            // Sort rectangles into tiles (HEAVY LOOP)
             if (rectangles != null)
             {
                 for (int i = 0; i < rectangles.Count; i++)
                 {
                     var rect = rectangles[i];
-                    int tileIdx = GetTileIndex(rect.X, rect.Y);
-                    if (tileIdx >= 0 && tileIdx < totalTiles)
-                    {
-                        tileRectLists[tileIdx].Add(i);
-                    }
+                    int tx = (int)((rect.X - boundsX) / tileSize);
+                    int ty = (int)((rect.Y - boundsY) / tileSize);
+                    if (tx < 0) tx = 0;
+                    if (ty < 0) ty = 0;
+                    if (tx >= tilesX) tx = tilesX - 1;
+                    if (ty >= tilesY) ty = tilesY - 1;
+                    tileRectLists[ty * tilesX + tx].Add(i);
                 }
             }
 
-            // Build instance arrays for each tile (done ONCE, not every frame)
-            _tilesWithData = 0;
+            // Build instance arrays for each tile (HEAVY ALLOCATION)
             for (int i = 0; i < totalTiles; i++)
             {
-                var tile = _tiles[i];
+                var tile = tiles[i];
                 var tileCircles = tileCircleLists[i];
                 var tileRects = tileRectLists[i];
 
@@ -225,16 +209,14 @@ namespace PCBPlotter.Controls
                         int offset = j * INSTANCE_SIZE;
                         tile.CircleInstances[offset] = circle.X;
                         tile.CircleInstances[offset + 1] = circle.Y;
-                        tile.CircleInstances[offset + 2] = circle.Radius; // scale X
-                        tile.CircleInstances[offset + 3] = circle.Radius; // scale Y
-                        tile.CircleInstances[offset + 4] = _layerColor.X; // R
-                        tile.CircleInstances[offset + 5] = _layerColor.Y; // G
-                        tile.CircleInstances[offset + 6] = _layerColor.Z; // B
-                        // Store alpha = 1.0, opacity is applied via shader uniform
-                        // This allows changing opacity without rebuilding GPU buffers
+                        tile.CircleInstances[offset + 2] = circle.Radius;
+                        tile.CircleInstances[offset + 3] = circle.Radius;
+                        tile.CircleInstances[offset + 4] = layerColor.X;
+                        tile.CircleInstances[offset + 5] = layerColor.Y;
+                        tile.CircleInstances[offset + 6] = layerColor.Z;
                         tile.CircleInstances[offset + 7] = 1.0f;
                     }
-                    _tilesWithData++;
+                    tilesWithData++;
                 }
 
                 if (tile.RectCount > 0)
@@ -246,43 +228,71 @@ namespace PCBPlotter.Controls
                         int offset = j * INSTANCE_SIZE;
                         tile.RectInstances[offset] = rect.X;
                         tile.RectInstances[offset + 1] = rect.Y;
-                        tile.RectInstances[offset + 2] = rect.Width;  // scale X
-                        tile.RectInstances[offset + 3] = rect.Height; // scale Y
-                        tile.RectInstances[offset + 4] = _layerColor.X; // R
-                        tile.RectInstances[offset + 5] = _layerColor.Y; // G
-                        tile.RectInstances[offset + 6] = _layerColor.Z; // B
-                        // Store alpha = 1.0, opacity is applied via shader uniform
+                        tile.RectInstances[offset + 2] = rect.Width;
+                        tile.RectInstances[offset + 3] = rect.Height;
+                        tile.RectInstances[offset + 4] = layerColor.X;
+                        tile.RectInstances[offset + 5] = layerColor.Y;
+                        tile.RectInstances[offset + 6] = layerColor.Z;
                         tile.RectInstances[offset + 7] = 1.0f;
                     }
-                    if (tile.CircleCount == 0) _tilesWithData++;
+                    if (tile.CircleCount == 0) tilesWithData++;
                 }
             }
 
+            return tiles;
+        }
+
+        /// <summary>
+        /// PHASE 2: Light work - stores precomputed tile data.
+        /// Must be called on the UI thread before rendering.
+        /// </summary>
+        public void Upload(List<PreparedTileData> tiles, int tilesX, int tilesY, float tileSize,
+                          float originX, float originY, int totalCircles, int totalRects, int tilesWithData)
+        {
+            if (_isInitialized)
+            {
+                Dispose();
+            }
+
+            _tiles = tiles;
+            _tilesX = tilesX;
+            _tilesY = tilesY;
+            _tileSize = tileSize;
+            _originX = originX;
+            _originY = originY;
+            _totalCircles = totalCircles;
+            _totalRects = totalRects;
+            _tilesWithData = tilesWithData;
             _isInitialized = true;
         }
 
         /// <summary>
-        /// Gets the tile index for a world coordinate.
+        /// Legacy method that does both phases on the calling thread.
+        /// Use PrepareData() + Upload() for async operation.
         /// </summary>
-        private int GetTileIndex(float x, float y)
+        public void Initialize(
+            IList<CachedCircle> circles,
+            IList<CachedRectangle> rectangles,
+            float boundsX, float boundsY, float boundsWidth, float boundsHeight,
+            Vector4 layerColor)
         {
-            int tx = (int)((x - _originX) / _tileSize);
-            int ty = (int)((y - _originY) / _tileSize);
+            int tilesX, tilesY, totalCircles, totalRects, tilesWithData;
+            float tileSize;
 
-            if (tx < 0) tx = 0;
-            if (ty < 0) ty = 0;
-            if (tx >= _tilesX) tx = _tilesX - 1;
-            if (ty >= _tilesY) ty = _tilesY - 1;
+            var tiles = PrepareData(circles, rectangles, boundsX, boundsY, boundsWidth, boundsHeight,
+                                   layerColor, out tilesX, out tilesY, out tileSize,
+                                   out totalCircles, out totalRects, out tilesWithData);
 
-            return ty * _tilesX + tx;
+            Upload(tiles, tilesX, tilesY, tileSize, boundsX, boundsY, totalCircles, totalRects, tilesWithData);
+            _layerColor = layerColor;
         }
 
         /// <summary>
         /// Uploads tile instance data to GPU and creates dedicated VAOs.
-        /// This is done lazily on first render, not during Initialize().
+        /// This is done lazily on first render, not during Upload().
         /// Creating dedicated VAOs avoids state conflicts with BatchRenderer's shared VAOs.
         /// </summary>
-        private void UploadTileToGpu(Tile tile)
+        private void UploadTileToGpu(PreparedTileData tile)
         {
             if (tile.IsUploaded) return;
 
@@ -472,7 +482,7 @@ namespace PCBPlotter.Controls
         /// Draws circles in a tile using dedicated VAO with pre-uploaded instance VBO.
         /// Using dedicated VAO avoids state conflicts with BatchRenderer.
         /// </summary>
-        private void DrawTileCircles(Tile tile)
+        private void DrawTileCircles(PreparedTileData tile)
         {
             // Bind our dedicated VAO (already has all attribute bindings set up)
             GL.BindVertexArray(tile.CircleVao);
@@ -488,7 +498,7 @@ namespace PCBPlotter.Controls
         /// Draws rectangles in a tile using dedicated VAO with pre-uploaded instance VBO.
         /// Using dedicated VAO avoids state conflicts with BatchRenderer.
         /// </summary>
-        private void DrawTileRectangles(Tile tile)
+        private void DrawTileRectangles(PreparedTileData tile)
         {
             // Bind our dedicated VAO (already has all attribute bindings set up)
             GL.BindVertexArray(tile.RectVao);

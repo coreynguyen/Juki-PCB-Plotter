@@ -1276,16 +1276,32 @@ void main()
                         _batchRenderer.InstancedViewLocation,
                         _batchRenderer.InstancedOpacityLocation);
 
-                    // Get layer bounds for tile partitioning
-                    // Note: color.W (opacity) is NOT baked into instance data anymore
-                    // It's applied via shader uniform in Render() for instant opacity changes
-                    var bounds = layer.Bounds;
-                    staticRenderer.Initialize(
-                        cache.Circles,
-                        cache.Rectangles,
-                        (float)bounds.X, (float)bounds.Y,
-                        (float)bounds.Width, (float)bounds.Height,
-                        color);
+                    // ASYNC FIX: Use precomputed tile data from background thread (instant)
+                    // This moves the heavy allocation/sorting work that used to freeze the UI
+                    if (cache.PrecomputedTiles != null)
+                    {
+                        staticRenderer.Upload(
+                            cache.PrecomputedTiles,
+                            cache.TilesX, cache.TilesY, cache.TileSize,
+                            cache.OriginX, cache.OriginY,
+                            cache.PrecomputedTotalCircles, cache.PrecomputedTotalRects,
+                            cache.PrecomputedTilesWithData);
+
+                        // Clear the precomputed data now that it's been passed to the renderer
+                        // The renderer will manage the memory from here (and free after GPU upload)
+                        cache.PrecomputedTiles = null;
+                    }
+                    else
+                    {
+                        // Fallback: compute on UI thread (legacy path, should rarely happen)
+                        var bounds = layer.Bounds;
+                        staticRenderer.Initialize(
+                            cache.Circles,
+                            cache.Rectangles,
+                            (float)bounds.X, (float)bounds.Y,
+                            (float)bounds.Width, (float)bounds.Height,
+                            color);
+                    }
 
                     _staticLayerRenderers[layer.Id] = staticRenderer;
                 }
@@ -1710,6 +1726,38 @@ void main()
             BuildStaticLineMesh(cache);
             BuildStaticPolygonMesh(cache);
 
+            // ASYNC FIX: Prepare StaticLayerRenderer tile data HERE on background thread
+            // This moves the heavy allocation/sorting work off the UI thread
+            if (cache.Circles.Count > 0 || cache.Rectangles.Count > 0)
+            {
+                // Convert color ARGB to Vector4
+                float a = ((colorArgb >> 24) & 0xFF) / 255f;
+                float r = ((colorArgb >> 16) & 0xFF) / 255f;
+                float g = ((colorArgb >> 8) & 0xFF) / 255f;
+                float b = (colorArgb & 0xFF) / 255f;
+                var layerColorVec = new OpenTK.Vector4(r, g, b, a);
+
+                int tilesX, tilesY, totalCircles, totalRects, tilesWithData;
+                float tileSize;
+
+                cache.PrecomputedTiles = StaticLayerRenderer.PrepareData(
+                    cache.Circles,
+                    cache.Rectangles,
+                    (float)bounds.X, (float)bounds.Y, (float)bounds.Width, (float)bounds.Height,
+                    layerColorVec,
+                    out tilesX, out tilesY, out tileSize,
+                    out totalCircles, out totalRects, out tilesWithData);
+
+                cache.TilesX = tilesX;
+                cache.TilesY = tilesY;
+                cache.TileSize = tileSize;
+                cache.OriginX = (float)bounds.X;
+                cache.OriginY = (float)bounds.Y;
+                cache.PrecomputedTotalCircles = totalCircles;
+                cache.PrecomputedTotalRects = totalRects;
+                cache.PrecomputedTilesWithData = tilesWithData;
+            }
+
             cache.IsValid = true;
         }
 
@@ -1825,7 +1873,7 @@ void main()
             if (cache.Polygons.Count == 0) return;
 
             // Maximum polygon size for full ear-clipping triangulation
-            // Larger polygons use fast triangle fan (may look wrong for concave shapes but won't freeze)
+            // Larger polygons use outline rendering (thick perimeter line)
             const int MAX_EAR_CLIP_VERTICES = 2000;
 
             // Use lists since ear clipping may produce varying triangle counts
@@ -1836,41 +1884,69 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                uint baseVertex = (uint)(allVertices.Count / 2);
+                // FIX: For massive polygons, render as OUTLINE instead of broken triangle fan
+                // Triangle fans only work for convex shapes - concave shapes like ground planes
+                // with cutouts would render incorrectly ("pulling towards origin" artifacts).
+                // Outlines show the shape boundary correctly and avoid memory/CPU spikes.
+                bool isMassive = poly.Points.Count > MAX_EAR_CLIP_VERTICES;
 
-                // Add vertices
-                foreach (var pt in poly.Points)
+                if (isMassive)
                 {
-                    allVertices.Add((float)pt.X);
-                    allVertices.Add((float)pt.Y);
-                }
+                    // OUTLINE MODE: Generate thick line strip around polygon perimeter
+                    // This creates quads for each edge segment
+                    float lineWidth = 0.15f; // Visible outline thickness
 
-                List<int> polyIndices;
-
-                // SAFETY VALVE: If polygon is massive, use simple triangle fan (instant)
-                // This prevents app freeze on complex ground planes with thousands of vertices
-                // May render incorrectly for deeply concave shapes, but better than freezing
-                if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
-                {
-                    // Simple triangle fan from first vertex - O(n) instead of O(n³)
-                    polyIndices = new List<int>((poly.Points.Count - 2) * 3);
-                    for (int i = 1; i < poly.Points.Count - 1; i++)
+                    for (int i = 0; i < poly.Points.Count; i++)
                     {
-                        polyIndices.Add(0);
-                        polyIndices.Add(i);
-                        polyIndices.Add(i + 1);
+                        var p1 = poly.Points[i];
+                        var p2 = poly.Points[(i + 1) % poly.Points.Count];
+
+                        float dx = (float)(p2.X - p1.X);
+                        float dy = (float)(p2.Y - p1.Y);
+                        float len = (float)Math.Sqrt(dx * dx + dy * dy);
+                        if (len < 0.0001f) continue;
+
+                        // Perpendicular normal for line width
+                        float nx = -dy / len * lineWidth / 2;
+                        float ny = dx / len * lineWidth / 2;
+
+                        uint vStart = (uint)(allVertices.Count / 2);
+
+                        // Add 4 vertices for this line segment (quad)
+                        allVertices.Add((float)p1.X - nx); allVertices.Add((float)p1.Y - ny);
+                        allVertices.Add((float)p1.X + nx); allVertices.Add((float)p1.Y + ny);
+                        allVertices.Add((float)p2.X + nx); allVertices.Add((float)p2.Y + ny);
+                        allVertices.Add((float)p2.X - nx); allVertices.Add((float)p2.Y - ny);
+
+                        // Add 2 triangles for the quad
+                        allIndices.Add(vStart);
+                        allIndices.Add(vStart + 1);
+                        allIndices.Add(vStart + 2);
+                        allIndices.Add(vStart);
+                        allIndices.Add(vStart + 2);
+                        allIndices.Add(vStart + 3);
                     }
                 }
                 else
                 {
-                    // Full ear clipping for high-quality concave polygon support
-                    polyIndices = Triangulator.Triangulate(poly.Points);
-                }
+                    // FILL MODE: Full ear-clipping triangulation for normal polygons
+                    uint baseVertex = (uint)(allVertices.Count / 2);
 
-                // Add indices offset by the current base vertex
-                foreach (int index in polyIndices)
-                {
-                    allIndices.Add(baseVertex + (uint)index);
+                    // Add vertices
+                    foreach (var pt in poly.Points)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
+
+                    // Full ear clipping for high-quality concave polygon support
+                    var polyIndices = Triangulator.Triangulate(poly.Points);
+
+                    // Add indices offset by the current base vertex
+                    foreach (int index in polyIndices)
+                    {
+                        allIndices.Add(baseVertex + (uint)index);
+                    }
                 }
             }
 
@@ -2539,6 +2615,17 @@ void main()
         public StaticMeshData LineMesh { get; set; }
         public StaticMeshData PolygonMesh { get; set; }
 
+        // Pre-computed tile data for StaticLayerRenderer (prepared on background thread)
+        public List<StaticLayerRenderer.PreparedTileData> PrecomputedTiles { get; set; }
+        public int TilesX { get; set; }
+        public int TilesY { get; set; }
+        public float TileSize { get; set; }
+        public float OriginX { get; set; }
+        public float OriginY { get; set; }
+        public int PrecomputedTotalCircles { get; set; }
+        public int PrecomputedTotalRects { get; set; }
+        public int PrecomputedTilesWithData { get; set; }
+
         public void Clear()
         {
             Circles.Clear();
@@ -2555,6 +2642,14 @@ void main()
             LineMesh = null;
             PolygonMesh?.Clear();
             PolygonMesh = null;
+            // Clear precomputed tile data
+            PrecomputedTiles = null;
+            TilesX = 0;
+            TilesY = 0;
+            TileSize = 0;
+            PrecomputedTotalCircles = 0;
+            PrecomputedTotalRects = 0;
+            PrecomputedTilesWithData = 0;
             IsValid = false;
         }
     }
