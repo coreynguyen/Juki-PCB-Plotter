@@ -649,9 +649,14 @@ void main()
 
         private void RenderLayersNormal()
         {
-            GL.UseProgram(_shaderProgram);
-            GL.UniformMatrix4(_projectionLoc, false, ref _projection);
-            GL.UniformMatrix4(_viewLoc, false, ref _view);
+            // Use fixed-function pipeline for immediate mode rendering
+            GL.UseProgram(0);
+
+            // Set up matrices for fixed-function pipeline
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
 
             // Get visible bounds
             var visibleBounds = GetVisibleBounds();
@@ -685,9 +690,12 @@ void main()
                 GL.ClearColor(0, 0, 0, 0);
                 GL.Clear(ClearBufferMask.ColorBufferBit);
 
-                GL.UseProgram(_shaderProgram);
-                GL.UniformMatrix4(_projectionLoc, false, ref _projection);
-                GL.UniformMatrix4(_viewLoc, false, ref _view);
+                // Use fixed-function pipeline for immediate mode rendering
+                GL.UseProgram(0);
+                GL.MatrixMode(MatrixMode.Projection);
+                GL.LoadMatrix(ref _projection);
+                GL.MatrixMode(MatrixMode.Modelview);
+                GL.LoadMatrix(ref _view);
 
                 RenderLayer(layer, visibleBounds);
 
@@ -923,6 +931,13 @@ void main()
 
         private void RenderGrid()
         {
+            // Ensure fixed-function pipeline for grid rendering
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
+
             var bounds = GetVisibleBounds();
             double spacing = GridSpacing;
 
