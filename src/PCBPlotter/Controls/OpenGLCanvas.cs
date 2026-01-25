@@ -92,6 +92,9 @@ namespace PCBPlotter.Controls
         private Point _lastMousePosition;
         private Point _panStart;
         private bool _isPanning;
+        private bool _isSelecting;
+        private Point _selectionStart;
+        private Rect _selectionRect;
 #else
         // Stub fields when OpenGL is not available
         private bool _needsRebuild = true;
@@ -99,6 +102,9 @@ namespace PCBPlotter.Controls
         private Point _lastMousePosition;
         private Point _panStart;
         private bool _isPanning;
+        private bool _isSelecting;
+        private Point _selectionStart;
+        private Rect _selectionRect;
 #endif
 
         #region Dependency Properties
@@ -460,20 +466,25 @@ uniform sampler2D blendTexture;
 uniform int blendMode; // 0=normal, 1=screen, 2=multiply, 3=overlay
 uniform float opacity;
 
-vec4 screenBlend(vec4 base, vec4 blend)
+vec4 screenBlend(vec4 base, vec4 blend, float blendOpacity)
 {
-    // Screen: 1 - (1 - base) * (1 - blend)
-    vec3 result = vec3(1.0) - (vec3(1.0) - base.rgb) * (vec3(1.0) - blend.rgb * blend.a);
-    return vec4(result, max(base.a, blend.a));
+    // Screen blend: 1 - (1 - base) * (1 - blend)
+    // This creates an additive-like effect where colors lighten
+    vec3 screenResult = vec3(1.0) - (vec3(1.0) - base.rgb) * (vec3(1.0) - blend.rgb);
+    // Mix with base based on blend alpha and layer opacity
+    float effectiveAlpha = blend.a * blendOpacity;
+    vec3 finalRgb = mix(base.rgb, screenResult, effectiveAlpha);
+    return vec4(finalRgb, max(base.a, effectiveAlpha));
 }
 
-vec4 multiplyBlend(vec4 base, vec4 blend)
+vec4 multiplyBlend(vec4 base, vec4 blend, float blendOpacity)
 {
     vec3 result = base.rgb * blend.rgb;
-    return vec4(mix(base.rgb, result, blend.a), max(base.a, blend.a));
+    float effectiveAlpha = blend.a * blendOpacity;
+    return vec4(mix(base.rgb, result, effectiveAlpha), max(base.a, effectiveAlpha));
 }
 
-vec4 overlayBlend(vec4 base, vec4 blend)
+vec4 overlayBlend(vec4 base, vec4 blend, float blendOpacity)
 {
     vec3 result;
     for (int i = 0; i < 3; i++)
@@ -483,30 +494,31 @@ vec4 overlayBlend(vec4 base, vec4 blend)
         else
             result[i] = 1.0 - 2.0 * (1.0 - base[i]) * (1.0 - blend[i]);
     }
-    return vec4(mix(base.rgb, result, blend.a), max(base.a, blend.a));
+    float effectiveAlpha = blend.a * blendOpacity;
+    return vec4(mix(base.rgb, result, effectiveAlpha), max(base.a, effectiveAlpha));
 }
 
 void main()
 {
     vec4 base = texture(baseTexture, TexCoord);
     vec4 blend = texture(blendTexture, TexCoord);
-    blend.a *= opacity;
 
     if (blendMode == 0) // Normal
     {
-        FragColor = mix(base, blend, blend.a);
+        float effectiveAlpha = blend.a * opacity;
+        FragColor = vec4(mix(base.rgb, blend.rgb, effectiveAlpha), max(base.a, effectiveAlpha));
     }
     else if (blendMode == 1) // Screen
     {
-        FragColor = screenBlend(base, blend);
+        FragColor = screenBlend(base, blend, opacity);
     }
     else if (blendMode == 2) // Multiply
     {
-        FragColor = multiplyBlend(base, blend);
+        FragColor = multiplyBlend(base, blend, opacity);
     }
     else if (blendMode == 3) // Overlay
     {
-        FragColor = overlayBlend(base, blend);
+        FragColor = overlayBlend(base, blend, opacity);
     }
     else
     {
@@ -688,7 +700,53 @@ void main()
                 RenderGrid();
             }
 
+            // Render selection rectangle if active
+            if (_isSelecting && !_selectionRect.IsEmpty)
+            {
+                RenderSelectionRect();
+            }
+
             _glControl.SwapBuffers();
+        }
+
+        private void RenderSelectionRect()
+        {
+            // Disable depth test and enable blending for overlay
+            GL.UseProgram(0);
+
+            // Use screen-space coordinates for selection rectangle
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.PushMatrix();
+            GL.LoadIdentity();
+            GL.Ortho(0, _glControl.Width, _glControl.Height, 0, -1, 1);
+
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.PushMatrix();
+            GL.LoadIdentity();
+
+            // Draw selection rectangle fill
+            GL.Begin(PrimitiveType.Quads);
+            GL.Color4(0.3f, 0.5f, 0.8f, 0.2f);
+            GL.Vertex2(_selectionRect.Left, _selectionRect.Top);
+            GL.Vertex2(_selectionRect.Right, _selectionRect.Top);
+            GL.Vertex2(_selectionRect.Right, _selectionRect.Bottom);
+            GL.Vertex2(_selectionRect.Left, _selectionRect.Bottom);
+            GL.End();
+
+            // Draw selection rectangle border
+            GL.Begin(PrimitiveType.LineLoop);
+            GL.Color4(0.3f, 0.5f, 0.8f, 0.8f);
+            GL.Vertex2(_selectionRect.Left, _selectionRect.Top);
+            GL.Vertex2(_selectionRect.Right, _selectionRect.Top);
+            GL.Vertex2(_selectionRect.Right, _selectionRect.Bottom);
+            GL.Vertex2(_selectionRect.Left, _selectionRect.Bottom);
+            GL.End();
+
+            // Restore matrices
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.PopMatrix();
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.PopMatrix();
         }
 
         private void UpdateMatrices()
@@ -698,15 +756,27 @@ void main()
 
             if (width <= 0 || height <= 0) return;
 
-            // Orthographic projection centered on view
-            float halfWidth = width / (2 * (float)Zoom);
-            float halfHeight = height / (2 * (float)Zoom);
+            // Match CPU coordinate system (DesignCanvas):
+            // CPU: screenX = world.X * Zoom + PanX
+            // CPU: screenY = ActualHeight - (world.Y * Zoom + PanY)
+            //
+            // For GPU, we need to compute the world bounds that map to the screen.
+            // From CPU transform: world.X = (screenX - PanX) / Zoom
+            // At screenX = 0: worldLeft = -PanX / Zoom
+            // At screenX = width: worldRight = (width - PanX) / Zoom
+            //
+            // For Y: world.Y = (ActualHeight - screenY - PanY) / Zoom
+            // At screenY = 0: worldTop = (height - PanY) / Zoom
+            // At screenY = height: worldBottom = -PanY / Zoom
+
+            float worldLeft = (float)(-PanX / Zoom);
+            float worldRight = (float)((width - PanX) / Zoom);
+            float worldBottom = (float)(-PanY / Zoom);
+            float worldTop = (float)((height - PanY) / Zoom);
 
             _projection = Matrix4.CreateOrthographicOffCenter(
-                (float)PanX - halfWidth,
-                (float)PanX + halfWidth,
-                (float)PanY - halfHeight,
-                (float)PanY + halfHeight,
+                worldLeft, worldRight,
+                worldBottom, worldTop,
                 -1, 1);
 
             _view = Matrix4.Identity;
@@ -757,6 +827,20 @@ void main()
         {
             if (_layerFbo == 0 || _compositeFboA == 0 || _compositeFboB == 0) return;
 
+            // Count visible layers to optimize rendering
+            int visibleLayerCount = 0;
+            foreach (var layer in GerberLayers)
+            {
+                if (layer.IsVisible) visibleLayerCount++;
+            }
+
+            // If only one visible layer, skip compositing and render directly
+            if (visibleLayerCount <= 1)
+            {
+                RenderLayersNormal();
+                return;
+            }
+
             // Initialize composite A with background
             _useCompositeA = true;
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, _compositeFboA);
@@ -771,6 +855,12 @@ void main()
             {
                 _batchRenderer.SetViewBounds(visibleBounds, Zoom);
             }
+
+            // Cache uniform locations to avoid repeated lookups
+            int baseTextureLoc = GL.GetUniformLocation(_screenBlendShader, "baseTexture");
+            int blendTextureLoc = GL.GetUniformLocation(_screenBlendShader, "blendTexture");
+            int blendModeLoc = GL.GetUniformLocation(_screenBlendShader, "blendMode");
+            int opacityLoc = GL.GetUniformLocation(_screenBlendShader, "opacity");
 
             foreach (var layer in GerberLayers)
             {
@@ -811,14 +901,14 @@ void main()
 
                 GL.ActiveTexture(TextureUnit.Texture0);
                 GL.BindTexture(TextureTarget.Texture2D, srcTexture);
-                GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "baseTexture"), 0);
+                GL.Uniform1(baseTextureLoc, 0);
 
                 GL.ActiveTexture(TextureUnit.Texture1);
                 GL.BindTexture(TextureTarget.Texture2D, _layerTexture);
-                GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "blendTexture"), 1);
+                GL.Uniform1(blendTextureLoc, 1);
 
-                GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "blendMode"), 1); // Screen blend
-                GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "opacity"), (float)layer.Opacity);
+                GL.Uniform1(blendModeLoc, 1); // Screen blend
+                GL.Uniform1(opacityLoc, (float)layer.Opacity);
 
                 GL.BindVertexArray(_quadVao);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -836,13 +926,13 @@ void main()
 
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, finalTexture);
-            GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "baseTexture"), 0);
+            GL.Uniform1(baseTextureLoc, 0);
 
-            // Use a dummy texture for blend (just copy base)
+            // Use a 1x1 transparent texture for blend instead of null (more reliable)
             GL.ActiveTexture(TextureUnit.Texture1);
-            GL.BindTexture(TextureTarget.Texture2D, 0);
-            GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "blendMode"), 0); // Normal (just copy)
-            GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "opacity"), 1.0f);
+            GL.BindTexture(TextureTarget.Texture2D, _layerTexture); // Reuse layer texture
+            GL.Uniform1(blendModeLoc, 0); // Normal (just copy)
+            GL.Uniform1(opacityLoc, 0.0f); // Zero opacity = pure passthrough
 
             GL.BindVertexArray(_quadVao);
             GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -1171,14 +1261,22 @@ void main()
         {
             float width = _glControl.Width;
             float height = _glControl.Height;
-            float halfWidth = width / (2 * (float)Zoom);
-            float halfHeight = height / (2 * (float)Zoom);
+
+            // Match CPU coordinate system:
+            // worldLeft = -PanX / Zoom
+            // worldRight = (width - PanX) / Zoom
+            // worldBottom = -PanY / Zoom
+            // worldTop = (height - PanY) / Zoom
+            double worldLeft = -PanX / Zoom;
+            double worldRight = (width - PanX) / Zoom;
+            double worldBottom = -PanY / Zoom;
+            double worldTop = (height - PanY) / Zoom;
 
             return new Rect(
-                PanX - halfWidth,
-                PanY - halfHeight,
-                halfWidth * 2,
-                halfHeight * 2);
+                worldLeft,
+                worldBottom,
+                worldRight - worldLeft,
+                worldTop - worldBottom);
         }
 
         private OpenTK.Vector4 GetColorFromArgb(uint argb)
@@ -1192,19 +1290,33 @@ void main()
 
         private void BuildLayerQuadtreeAsync(GerberLayer layer)
         {
-            // Build quadtree in parallel
-            Task.Run(() =>
+            var bounds = layer.Bounds;
+            if (bounds.IsEmpty) return;
+
+            bounds.Inflate(bounds.Width * 0.02, bounds.Height * 0.02);
+            var quadtree = new GerberQuadtree(bounds);
+
+            // For smaller layers, build synchronously to avoid first-frame stutter
+            // Only use async for very large layers
+            if (layer.Primitives.Count <= 5000)
             {
-                var bounds = layer.Bounds;
-                if (bounds.IsEmpty) return;
-
-                bounds.Inflate(bounds.Width * 0.02, bounds.Height * 0.02);
-                var quadtree = new GerberQuadtree(bounds);
-
-                // Parallel insertion for large layers
-                if (layer.Primitives.Count > 10000)
+                // Build synchronously
+                foreach (var prim in layer.Primitives)
                 {
-                    // Build in batches
+                    quadtree.Insert(prim);
+                }
+
+                lock (_layerQuadtrees)
+                {
+                    _layerQuadtrees[layer.Id] = quadtree;
+                }
+            }
+            else
+            {
+                // Build quadtree in parallel for large layers
+                Task.Run(() =>
+                {
+                    // Parallel insertion for large layers
                     Parallel.ForEach(layer.Primitives, prim =>
                     {
                         lock (quadtree)
@@ -1212,22 +1324,15 @@ void main()
                             quadtree.Insert(prim);
                         }
                     });
-                }
-                else
-                {
-                    foreach (var prim in layer.Primitives)
+
+                    lock (_layerQuadtrees)
                     {
-                        quadtree.Insert(prim);
+                        _layerQuadtrees[layer.Id] = quadtree;
                     }
-                }
 
-                lock (_layerQuadtrees)
-                {
-                    _layerQuadtrees[layer.Id] = quadtree;
-                }
-
-                Dispatcher.BeginInvoke(new Action(Invalidate));
-            });
+                    Dispatcher.BeginInvoke(new Action(Invalidate));
+                });
+            }
         }
 
         #region Mouse Handling
@@ -1241,6 +1346,12 @@ void main()
                 _panStart = new Point(e.X, e.Y);
                 _glControl.Capture = true;
             }
+            else if (e.Button == System.Windows.Forms.MouseButtons.Left)
+            {
+                // Start potential selection
+                _selectionStart = new Point(e.X, e.Y);
+                _selectionRect = Rect.Empty;
+            }
         }
 
         private void GlControl_MouseUp(object sender, System.Windows.Forms.MouseEventArgs e)
@@ -1250,35 +1361,104 @@ void main()
                 _isPanning = false;
                 _glControl.Capture = false;
             }
+            else if (e.Button == System.Windows.Forms.MouseButtons.Left)
+            {
+                Point screenPos = new Point(e.X, e.Y);
+
+                if (_isSelecting)
+                {
+                    // Complete rectangle selection
+                    _isSelecting = false;
+                    _glControl.Capture = false;
+
+                    // Convert screen rect to world rect
+                    Point worldTL = ScreenToWorld(new Point(_selectionRect.Left, _selectionRect.Top));
+                    Point worldBR = ScreenToWorld(new Point(_selectionRect.Right, _selectionRect.Bottom));
+
+                    // Normalize (screen Y and world Y are inverted)
+                    double worldLeft = Math.Min(worldTL.X, worldBR.X);
+                    double worldRight = Math.Max(worldTL.X, worldBR.X);
+                    double worldBottom = Math.Min(worldTL.Y, worldBR.Y);
+                    double worldTop = Math.Max(worldTL.Y, worldBR.Y);
+
+                    Rect worldRect = new Rect(worldLeft, worldBottom, worldRight - worldLeft, worldTop - worldBottom);
+                    SelectionRectCompleted?.Invoke(this, worldRect);
+
+                    _selectionRect = Rect.Empty;
+                    Invalidate();
+                }
+                else
+                {
+                    // Single click - raise point clicked event
+                    Point worldPos = ScreenToWorld(screenPos);
+                    PointClicked?.Invoke(this, worldPos);
+                }
+            }
         }
 
         private void GlControl_MouseMove(object sender, System.Windows.Forms.MouseEventArgs e)
         {
+            Point screenPos = new Point(e.X, e.Y);
+            Point worldPos = ScreenToWorld(screenPos);
+
+            // Always report cursor position
+            CursorPositionChanged?.Invoke(this, worldPos);
+
             if (_isPanning)
             {
-                double dx = (e.X - _panStart.X) / Zoom;
-                double dy = (e.Y - _panStart.Y) / Zoom;
-                PanX -= dx;
-                PanY += dy; // Y is inverted
+                // Match CPU coordinate system: PanX/PanY are screen offsets
+                double dx = e.X - _panStart.X;
+                double dy = e.Y - _panStart.Y;
+                PanX += dx;
+                PanY -= dy; // Y is inverted (screen Y increases down, world Y increases up)
                 _panStart = new Point(e.X, e.Y);
             }
+            else if (e.Button == System.Windows.Forms.MouseButtons.Left && !_isSelecting)
+            {
+                // Start rectangle selection after small movement
+                double dist = Math.Sqrt(Math.Pow(screenPos.X - _selectionStart.X, 2) +
+                                       Math.Pow(screenPos.Y - _selectionStart.Y, 2));
+                if (dist > 3)
+                {
+                    _isSelecting = true;
+                    _glControl.Capture = true;
+                }
+            }
+            else if (_isSelecting)
+            {
+                // Update selection rectangle
+                _selectionRect = new Rect(
+                    Math.Min(_selectionStart.X, screenPos.X),
+                    Math.Min(_selectionStart.Y, screenPos.Y),
+                    Math.Abs(screenPos.X - _selectionStart.X),
+                    Math.Abs(screenPos.Y - _selectionStart.Y)
+                );
+                Invalidate();
+            }
 
-            _lastMousePosition = new Point(e.X, e.Y);
+            _lastMousePosition = screenPos;
         }
 
         private void GlControl_MouseWheel(object sender, System.Windows.Forms.MouseEventArgs e)
         {
-            // Zoom towards mouse position
-            double mouseWorldX = PanX + (e.X - _glControl.Width / 2.0) / Zoom;
-            double mouseWorldY = PanY - (e.Y - _glControl.Height / 2.0) / Zoom;
+            // Match CPU coordinate system for zoom towards mouse position
+            // CPU ScreenToWorld: worldX = (screenX - PanX) / Zoom
+            // CPU ScreenToWorld: worldY = (ActualHeight - screenY - PanY) / Zoom
+            double mouseWorldX = (e.X - PanX) / Zoom;
+            double mouseWorldY = (_glControl.Height - e.Y - PanY) / Zoom;
 
             double zoomFactor = e.Delta > 0 ? 1.2 : 1 / 1.2;
             double newZoom = Zoom * zoomFactor;
             newZoom = Math.Max(0.1, Math.Min(10000, newZoom));
 
-            // Adjust pan to keep mouse position fixed
-            PanX = mouseWorldX - (e.X - _glControl.Width / 2.0) / newZoom;
-            PanY = mouseWorldY + (e.Y - _glControl.Height / 2.0) / newZoom;
+            // CPU WorldToScreen: screenX = world.X * newZoom + PanX
+            // We want: e.X = mouseWorldX * newZoom + newPanX
+            // So: newPanX = e.X - mouseWorldX * newZoom
+            // Similarly: screenY = ActualHeight - (world.Y * newZoom + PanY)
+            // e.Y = ActualHeight - (mouseWorldY * newZoom + newPanY)
+            // newPanY = ActualHeight - e.Y - mouseWorldY * newZoom
+            PanX = e.X - mouseWorldX * newZoom;
+            PanY = _glControl.Height - e.Y - mouseWorldY * newZoom;
 
             Zoom = newZoom;
         }
@@ -1292,6 +1472,60 @@ void main()
             _needsRedraw = true;
 #endif
         }
+
+        #region Coordinate Conversion
+
+        /// <summary>
+        /// Converts world coordinates to screen coordinates (matches DesignCanvas)
+        /// </summary>
+        public Point WorldToScreen(Point world)
+        {
+#if USE_OPENGL
+            return new Point(
+                world.X * Zoom + PanX,
+                (_glControl?.Height ?? 0) - (world.Y * Zoom + PanY)
+            );
+#else
+            return world;
+#endif
+        }
+
+        /// <summary>
+        /// Converts screen coordinates to world coordinates (matches DesignCanvas)
+        /// </summary>
+        public Point ScreenToWorld(Point screen)
+        {
+#if USE_OPENGL
+            double height = _glControl?.Height ?? 0;
+            return new Point(
+                (screen.X - PanX) / Zoom,
+                (height - screen.Y - PanY) / Zoom
+            );
+#else
+            return screen;
+#endif
+        }
+
+        #endregion
+
+        #region Events
+
+        /// <summary>
+        /// Raised when the cursor position changes (in world coordinates)
+        /// </summary>
+        public event EventHandler<Point> CursorPositionChanged;
+
+        /// <summary>
+        /// Raised when user clicks in the canvas (for selection)
+        /// </summary>
+        public event EventHandler<Point> PointClicked;
+
+        /// <summary>
+        /// Raised when user completes a selection rectangle
+        /// </summary>
+        public event EventHandler<Rect> SelectionRectCompleted;
+
+        #endregion
 
         #region Public API
 

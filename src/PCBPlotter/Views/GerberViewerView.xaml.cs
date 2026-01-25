@@ -51,6 +51,11 @@ namespace PCBPlotter.Views
                 }
             };
 
+            // Wire up OpenGL canvas events for selection support
+            OpenGLCanvas.CursorPositionChanged += OnCursorPositionChanged;
+            OpenGLCanvas.SelectionRectCompleted += OnOpenGLSelectionRectCompleted;
+            OpenGLCanvas.PointClicked += OnOpenGLPointClicked;
+
             // Subscribe to layer list selection changes
             LayerListBox.SelectionChanged += OnLayerListSelectionChanged;
 
@@ -151,6 +156,28 @@ namespace PCBPlotter.Views
             {
                 bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
                 vm.SelectPrimitivesInRect(worldRect, addToSelection);
+            }
+        }
+
+        private void OnOpenGLSelectionRectCompleted(object sender, Rect worldRect)
+        {
+            // Forward selection to view model (same as CPU canvas)
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm != null)
+            {
+                bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+                vm.SelectPrimitivesInRect(worldRect, addToSelection);
+            }
+        }
+
+        private void OnOpenGLPointClicked(object sender, Point worldPos)
+        {
+            // Forward click to view model for hit testing
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm != null)
+            {
+                bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+                vm.SelectPrimitiveAtPoint(worldPos, addToSelection);
             }
         }
 

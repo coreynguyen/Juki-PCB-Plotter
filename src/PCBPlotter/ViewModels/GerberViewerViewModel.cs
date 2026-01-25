@@ -705,6 +705,75 @@ namespace PCBPlotter.ViewModels
             });
         }
 
+        /// <summary>
+        /// Selects a primitive at the specified world position (for GPU canvas click handling)
+        /// </summary>
+        public void SelectPrimitiveAtPoint(Point worldPos, bool addToSelection = false)
+        {
+            if (SelectedLayer == null) return;
+
+            const double hitRadius = 0.5; // World units hit radius
+
+            GerberPrimitive closestPrimitive = null;
+            double closestDistance = double.MaxValue;
+
+            foreach (var primitive in SelectedLayer.Primitives)
+            {
+                // Skip non-dark (clear/negative) primitives
+                if (!primitive.IsDark)
+                    continue;
+
+                // Calculate distance to primitive center
+                double dx = worldPos.X - primitive.X;
+                double dy = worldPos.Y - primitive.Y;
+                double distance = Math.Sqrt(dx * dx + dy * dy);
+
+                // Check if point is within primitive bounds with some tolerance
+                var bounds = primitive.GetBounds();
+                bounds.Inflate(hitRadius, hitRadius);
+
+                if (bounds.Contains(worldPos) && distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closestPrimitive = primitive;
+                }
+            }
+
+            if (closestPrimitive != null)
+            {
+                if (addToSelection)
+                {
+                    // Toggle selection
+                    closestPrimitive.IsSelected = !closestPrimitive.IsSelected;
+                    if (closestPrimitive.IsSelected)
+                    {
+                        if (!SelectedPrimitives.Contains(closestPrimitive))
+                            SelectedPrimitives.Add(closestPrimitive);
+                    }
+                    else
+                    {
+                        SelectedPrimitives.Remove(closestPrimitive);
+                    }
+                }
+                else
+                {
+                    ExecuteSelectNone();
+                    closestPrimitive.IsSelected = true;
+                    SelectedPrimitives.Add(closestPrimitive);
+                }
+
+                Publish(new GerberSelectionChangedEvent
+                {
+                    SelectedPrimitives = SelectedPrimitives.ToList()
+                });
+            }
+            else if (!addToSelection)
+            {
+                // Clicked on empty space - clear selection
+                ExecuteSelectNone();
+            }
+        }
+
         #endregion
 
         #region Event Handlers

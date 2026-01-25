@@ -384,44 +384,53 @@ void main()
         {
             if (_lineBatches.Count == 0) return;
 
-            _dynamicBuffer.Clear();
-
-            // Build line geometry
-            foreach (var line in _lineBatches)
-            {
-                uint baseVertex = (uint)_dynamicBuffer.VertexCount;
-
-                // Line quad
-                _dynamicBuffer.AddVertex(line.X1 - line.Nx, line.Y1 - line.Ny);
-                _dynamicBuffer.AddVertex(line.X1 + line.Nx, line.Y1 + line.Ny);
-                _dynamicBuffer.AddVertex(line.X2 + line.Nx, line.Y2 + line.Ny);
-                _dynamicBuffer.AddVertex(line.X2 - line.Nx, line.Y2 - line.Ny);
-
-                _dynamicBuffer.AddQuad(baseVertex, baseVertex + 1, baseVertex + 2, baseVertex + 3);
-
-                // Round caps - add circle geometry
-                AddCircleToDynamic(line.X1, line.Y1, line.Width / 2);
-                AddCircleToDynamic(line.X2, line.Y2, line.Width / 2);
-            }
-
-            _dynamicBuffer.Upload();
-
-            // Render with solid shader using state cache
+            // Use state cache for efficient state management
             _stateCache.UseProgram(_solidShader);
             _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
             _stateCache.SetViewMatrix(_solidViewLoc, ref view);
 
-            // For now, render all lines with the color of the first line
-            // A more sophisticated approach would batch by color
-            if (_lineBatches.Count > 0)
+            // Group lines by color for efficient batching
+            var colorBatches = new Dictionary<uint, List<LineBatch>>();
+
+            foreach (var line in _lineBatches)
             {
-                var color = _lineBatches[0].Color;
-                _stateCache.SetColor(_solidColorLoc, color);
+                uint colorKey = ColorToKey(line.Color);
+                if (!colorBatches.ContainsKey(colorKey))
+                    colorBatches[colorKey] = new List<LineBatch>();
+                colorBatches[colorKey].Add(line);
             }
 
-            _dynamicBuffer.Draw();
-            _drawCalls++;
-            _trianglesRendered += _dynamicBuffer.IndexCount / 3;
+            foreach (var kvp in colorBatches)
+            {
+                _dynamicBuffer.Clear();
+
+                // Build line geometry for this color batch
+                foreach (var line in kvp.Value)
+                {
+                    uint baseVertex = (uint)_dynamicBuffer.VertexCount;
+
+                    // Line quad
+                    _dynamicBuffer.AddVertex(line.X1 - line.Nx, line.Y1 - line.Ny);
+                    _dynamicBuffer.AddVertex(line.X1 + line.Nx, line.Y1 + line.Ny);
+                    _dynamicBuffer.AddVertex(line.X2 + line.Nx, line.Y2 + line.Ny);
+                    _dynamicBuffer.AddVertex(line.X2 - line.Nx, line.Y2 - line.Ny);
+
+                    _dynamicBuffer.AddQuad(baseVertex, baseVertex + 1, baseVertex + 2, baseVertex + 3);
+
+                    // Round caps - add circle geometry
+                    AddCircleToDynamic(line.X1, line.Y1, line.Width / 2);
+                    AddCircleToDynamic(line.X2, line.Y2, line.Width / 2);
+                }
+
+                _dynamicBuffer.Upload();
+
+                var color = kvp.Value[0].Color;
+                _stateCache.SetColor(_solidColorLoc, color);
+
+                _dynamicBuffer.Draw();
+                _drawCalls++;
+                _trianglesRendered += _dynamicBuffer.IndexCount / 3;
+            }
         }
 
         private void AddCircleToDynamic(float x, float y, float radius)
