@@ -910,15 +910,16 @@ namespace PCBPlotter.Controls
         /// <summary>
         /// Get or create a frozen pen for the given brush and thickness.
         /// Pens are cached to eliminate per-frame allocations.
+        /// Keys by color hash + rounded thickness to prevent infinite cache growth.
         /// </summary>
-        private Pen GetCachedPen(uint argb, double thickness)
+        private Pen GetCachedPen(SolidColorBrush brush, double thickness)
         {
-            // Create a unique key combining color ARGB and thickness (scaled to preserve precision)
-            long key = ((long)argb) | ((long)(thickness * 10000) << 32);
+            // Round thickness to 2 decimal places to avoid infinite cache growth with zoom
+            int thicknessKey = (int)(thickness * 100);
+            long key = ((long)brush.Color.GetHashCode() << 32) | (uint)thicknessKey;
 
             if (!_penCache.TryGetValue(key, out var pen))
             {
-                var brush = GetLayerBrush(argb);
                 pen = new Pen(brush, thickness);
                 pen.StartLineCap = PenLineCap.Round;
                 pen.EndLineCap = PenLineCap.Round;
@@ -928,25 +929,26 @@ namespace PCBPlotter.Controls
             return pen;
         }
 
-        // CHUNK_SIZE: WPF StreamGeometry can't handle huge numbers of figures (>15-20k).
-        // Split batches into chunks to prevent render thread freezes and memory issues.
-        private const int CHUNK_SIZE = 5000;
+        // Maximum polygon batch size before flushing
+        private const int POLY_BATCH_LIMIT = 2000;
 
         /// <summary>
-        /// Render a layer using HYBRID vector rendering (no bitmaps).
+        /// Render a layer using FAST DIRECT vector rendering.
         ///
-        /// HYBRID STRATEGY (Best of Both Worlds):
-        /// - Circles/Pads: Use dc.DrawEllipse directly (WPF is optimized for this)
-        /// - Rectangles/Obrounds: Use dc.DrawRectangle/DrawRoundedRectangle for non-rotated
-        /// - Tracks/Lines/Polygons: Use StreamGeometry batching (faster than thousands of DrawLine calls)
-        /// - Rotated shapes: Batch into StreamGeometry as polygons
+        /// OPTIMIZED STRATEGY:
+        /// - Circles/Pads: Use dc.DrawEllipse directly (WPF native optimization)
+        /// - Rectangles/Obrounds: Use dc.DrawRectangle/DrawRoundedRectangle (fast path)
+        /// - Lines/Arcs: Use dc.DrawLine with cached Pens (WPF handles thickness natively)
+        /// - Polygons/Contours: Only these get batched into StreamGeometry
+        /// - Rotated shapes: Batch into StreamGeometry
         ///
-        /// This approach gives fast rendering for pads (which are often the majority)
-        /// while still benefiting from batching for track geometry.
+        /// KEY INSIGHT: Manually tessellating lines into quads is SLOWER than letting
+        /// WPF handle thick lines natively via dc.DrawLine with a Pen. WPF's internal
+        /// renderer is optimized for this. We only batch actual polygons.
         /// </summary>
         private void RenderLayerVectors(DrawingContext dc, GerberLayer layer, Rect visibleWorld, double currentZoom)
         {
-            // Get visible primitives from quadtree
+            // --- Step 1: Data Retrieval (Async Safe) ---
             List<GerberPrimitive> visiblePrimitives;
             GerberQuadtree quadtree = null;
             lock (_quadtreeLock)
@@ -960,15 +962,18 @@ namespace PCBPlotter.Controls
             }
             else
             {
-                // "LOD-LIKE" BEHAVIOR:
-                // If quadtree isn't ready yet, skip rendering massive layers to prevent freeze.
-                // Small layers (<5000 items) can render immediately.
+                // ASYNC POP-IN BEHAVIOR:
+                // If quadtree isn't ready and layer is huge, SKIP IT completely.
+                // This prevents the multi-minute freeze on load.
+                // The layer will "pop in" automatically when background thread finishes.
                 var allPrims = layer.Primitives;
-                if (allPrims.Count > 5000)
+                if (allPrims.Count > 2000)
                 {
-                    // Wait for background quadtree build to complete
+                    // Skip - wait for quadtree to be built
                     return;
                 }
+
+                // Small layers can be brute-forced safely
                 visiblePrimitives = allPrims
                     .Where(p => p.GetBounds().IntersectsWith(visibleWorld))
                     .ToList();
@@ -977,43 +982,24 @@ namespace PCBPlotter.Controls
             if (visiblePrimitives.Count == 0)
                 return;
 
-            // Get frozen brush for this layer's color
+            // --- Step 2: Setup Resources ---
             var brush = GetLayerBrush(layer.ColorArgb);
-
-            // Apply layer opacity
             bool hasOpacity = layer.Opacity < 1.0;
             if (hasOpacity)
             {
                 dc.PushOpacity(layer.Opacity);
             }
 
-            // Minimum world-space size to render (LOD filtering)
+            // LOD threshold: 0.5 screen pixels
             double minWorldSize = MIN_PRIMITIVE_SCREEN_PIXELS / currentZoom;
 
-            // CHUNKED BATCHING for tracks/polygons: Collect shapes into StreamGeometry chunks
-            StreamGeometry chunkGeometry = new StreamGeometry();
-            chunkGeometry.FillRule = FillRule.Nonzero;
-            StreamGeometryContext ctx = chunkGeometry.Open();
-            int figureCount = 0;
-            bool hasShapesInChunk = false;
+            // --- Step 3: Render Loop (Optimized) ---
+            // We ONLY batch Polygons/Contours and rotated shapes.
+            // Lines, Arcs, Pads, and Rects are drawn DIRECTLY for maximum speed.
 
-            // Helper to flush the current batch (preserves z-order when switching to direct draws)
-            Action flushBatch = () =>
-            {
-                if (hasShapesInChunk)
-                {
-                    ctx.Close();
-                    chunkGeometry.Freeze();
-                    dc.DrawGeometry(brush, null, chunkGeometry);
-
-                    // Start new chunk
-                    chunkGeometry = new StreamGeometry();
-                    chunkGeometry.FillRule = FillRule.Nonzero;
-                    ctx = chunkGeometry.Open();
-                    figureCount = 0;
-                    hasShapesInChunk = false;
-                }
-            };
+            StreamGeometry polyBatch = null;
+            StreamGeometryContext polyCtx = null;
+            int polyCount = 0;
 
             foreach (var prim in visiblePrimitives)
             {
@@ -1022,7 +1008,7 @@ namespace PCBPlotter.Controls
                 if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
                     continue;
 
-                // Safety: Filter out invalid coordinates that cause rendering glitches
+                // Coordinate Safety (prevents NaN/Infinity glitches)
                 if (double.IsNaN(prim.X) || double.IsInfinity(prim.X) ||
                     double.IsNaN(prim.Y) || double.IsInfinity(prim.Y))
                     continue;
@@ -1033,40 +1019,37 @@ namespace PCBPlotter.Controls
 
                 switch (prim.Type)
                 {
-                    // ===== FAST PATH: Draw Pads/Circles Directly =====
-                    // WPF is heavily optimized for drawing simple circles.
-                    // This is MUCH faster than batching 50,000 octagon approximations.
+                    // ===== FASTEST: Direct Drawing for Simple Shapes =====
                     case GerberPrimitiveType.Circle:
                     case GerberPrimitiveType.Flash:
-                        flushBatch(); // Preserve z-order
                         double r = Math.Max(screenWidth / 2, 0.5);
                         dc.DrawEllipse(brush, null, screenPos, r, r);
                         break;
 
-                    // ===== FAST PATH: Non-Rotated Rectangles =====
-                    // WPF's DrawRectangle is optimized, no need to batch as quads
                     case GerberPrimitiveType.Rectangle:
                         if (prim.Rotation == 0)
                         {
-                            flushBatch(); // Preserve z-order
                             double rw = Math.Max(screenWidth, 0.5);
                             double rh = Math.Max(screenHeight, 0.5);
                             dc.DrawRectangle(brush, null, new Rect(screenPos.X - rw / 2, screenPos.Y - rh / 2, rw, rh));
                         }
                         else
                         {
-                            // Rotated rectangles must be batched as polygons
-                            AddRotatedRectToContext(ctx, screenPos, screenWidth, screenHeight, prim.Rotation);
-                            hasShapesInChunk = true;
-                            figureCount++;
+                            // Rotated rects go to polygon batch
+                            if (polyBatch == null)
+                            {
+                                polyBatch = new StreamGeometry();
+                                polyBatch.FillRule = FillRule.Nonzero;
+                                polyCtx = polyBatch.Open();
+                            }
+                            AddRotatedRectToContext(polyCtx, screenPos, screenWidth, screenHeight, prim.Rotation);
+                            polyCount++;
                         }
                         break;
 
-                    // ===== FAST PATH: Non-Rotated Obrounds =====
                     case GerberPrimitiveType.Obround:
                         if (prim.Rotation == 0)
                         {
-                            flushBatch(); // Preserve z-order
                             double ow = Math.Max(screenWidth, 0.5);
                             double oh = Math.Max(screenHeight, 0.5);
                             double cr = Math.Min(ow, oh) / 2;
@@ -1074,98 +1057,91 @@ namespace PCBPlotter.Controls
                         }
                         else
                         {
-                            // Rotated obrounds: batch as rounded rect approximation
+                            // Rotated obround -> batch as rounded rect approximation
+                            if (polyBatch == null)
+                            {
+                                polyBatch = new StreamGeometry();
+                                polyBatch.FillRule = FillRule.Nonzero;
+                                polyCtx = polyBatch.Open();
+                            }
                             double w = Math.Max(screenWidth, 0.5) / 2;
                             double h = Math.Max(screenHeight, 0.5) / 2;
-                            double cornerR = Math.Min(w, h);
-                            AddRoundedRectToContext(ctx, screenPos, w, h, cornerR);
-                            hasShapesInChunk = true;
-                            figureCount++;
+                            AddRoundedRectToContext(polyCtx, screenPos, w, h, Math.Min(w, h));
+                            polyCount++;
                         }
                         break;
 
-                    // ===== BATCH PATH: Tracks/Lines benefit from batching =====
-                    // Drawing thousands of thick lines individually is slow.
-                    // Batching them into quads with caps is much faster.
+                    // ===== CRITICAL FIX: Draw Lines Directly (No Manual Tessellation) =====
+                    // Using dc.DrawLine with a cached Pen is MUCH faster than manually
+                    // calculating 4 corner points per segment and batching into StreamGeometry.
+                    // WPF's internal renderer handles thick lines natively and efficiently.
                     case GerberPrimitiveType.Line:
-                    case GerberPrimitiveType.Arc:
                         if (prim.Points != null && prim.Points.Count >= 2)
                         {
-                            double halfWidth = Math.Max(screenWidth, 0.5) / 2;
-                            for (int i = 0; i < prim.Points.Count - 1; i++)
+                            // Get a cached pen for this thickness (round caps built-in)
+                            var pen = GetCachedPen(brush, Math.Max(screenWidth, 1.0));
+
+                            Point p1 = WorldToScreen(prim.Points[0]);
+                            Point p2 = WorldToScreen(prim.Points[1]);
+                            dc.DrawLine(pen, p1, p2);
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Arc:
+                        // Arcs are polylines - draw each segment directly
+                        if (prim.Points != null && prim.Points.Count >= 2)
+                        {
+                            var pen = GetCachedPen(brush, Math.Max(screenWidth, 1.0));
+                            Point lastPt = WorldToScreen(prim.Points[0]);
+                            for (int i = 1; i < prim.Points.Count; i++)
                             {
-                                Point p1 = WorldToScreen(prim.Points[i]);
-                                Point p2 = WorldToScreen(prim.Points[i + 1]);
-
-                                // Calculate line direction and perpendicular for thickness
-                                Vector v = p2 - p1;
-                                double len = v.Length;
-                                if (len < 0.1) continue;
-
-                                // Normal perpendicular to line direction, scaled by half-width
-                                Vector n = new Vector(-v.Y, v.X) / len * halfWidth;
-
-                                // Draw quad (4 corners of the thick line segment)
-                                ctx.BeginFigure(new Point(p1.X - n.X, p1.Y - n.Y), true, true);
-                                ctx.LineTo(new Point(p1.X + n.X, p1.Y + n.Y), false, false);
-                                ctx.LineTo(new Point(p2.X + n.X, p2.Y + n.Y), false, false);
-                                ctx.LineTo(new Point(p2.X - n.X, p2.Y - n.Y), false, false);
-                                hasShapesInChunk = true;
-                                figureCount++;
-                            }
-
-                            // Draw round caps at endpoints
-                            if (prim.Points.Count >= 2)
-                            {
-                                AddCircleToContext(ctx, WorldToScreen(prim.Points[0]), halfWidth);
-                                AddCircleToContext(ctx, WorldToScreen(prim.Points[prim.Points.Count - 1]), halfWidth);
-                                hasShapesInChunk = true;
-                                figureCount += 2;
+                                Point currPt = WorldToScreen(prim.Points[i]);
+                                dc.DrawLine(pen, lastPt, currPt);
+                                lastPt = currPt;
                             }
                         }
                         break;
 
-                    // ===== BATCH PATH: Polygons must be batched =====
+                    // ===== BATCH PATH: Only Polygons/Contours need batching =====
                     case GerberPrimitiveType.Polygon:
                     case GerberPrimitiveType.Contour:
                         if (prim.Points != null && prim.Points.Count >= 3)
                         {
-                            ctx.BeginFigure(WorldToScreen(prim.Points[0]), true, true);
+                            if (polyBatch == null)
+                            {
+                                polyBatch = new StreamGeometry();
+                                polyBatch.FillRule = FillRule.Nonzero;
+                                polyCtx = polyBatch.Open();
+                            }
+
+                            polyCtx.BeginFigure(WorldToScreen(prim.Points[0]), true, true);
                             for (int i = 1; i < prim.Points.Count; i++)
                             {
-                                ctx.LineTo(WorldToScreen(prim.Points[i]), false, false);
+                                polyCtx.LineTo(WorldToScreen(prim.Points[i]), false, false);
                             }
-                            hasShapesInChunk = true;
-                            figureCount++;
+                            polyCount++;
                         }
                         break;
                 }
 
-                // CHUNK FLUSH: When we hit the limit, draw this chunk and start a new one
-                if (figureCount >= CHUNK_SIZE)
+                // Flush polygon batch if it gets too large (prevents geometry complexity issues)
+                if (polyCount >= POLY_BATCH_LIMIT)
                 {
-                    ctx.Close();
-                    if (hasShapesInChunk)
-                    {
-                        chunkGeometry.Freeze();
-                        dc.DrawGeometry(brush, null, chunkGeometry);
-                    }
-
-                    // Start new chunk
-                    chunkGeometry = new StreamGeometry();
-                    chunkGeometry.FillRule = FillRule.Nonzero;
-                    ctx = chunkGeometry.Open();
-                    figureCount = 0;
-                    hasShapesInChunk = false;
+                    polyCtx.Close();
+                    polyBatch.Freeze();
+                    dc.DrawGeometry(brush, null, polyBatch);
+                    polyBatch = null;
+                    polyCtx = null;
+                    polyCount = 0;
                 }
             }
 
-            // Draw remaining shapes in the final chunk
-            ctx.Close();
-            if (hasShapesInChunk)
+            // Final flush of any remaining polygons
+            if (polyBatch != null)
             {
-                chunkGeometry.Freeze();
-                dc.DrawGeometry(brush, null, chunkGeometry);
+                polyCtx.Close();
+                polyBatch.Freeze();
+                dc.DrawGeometry(brush, null, polyBatch);
             }
 
             if (hasOpacity)
