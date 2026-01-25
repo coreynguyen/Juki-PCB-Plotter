@@ -278,6 +278,7 @@ namespace PCBPlotter.Core.Models
 
                 case GerberPrimitiveType.Line:
                 case GerberPrimitiveType.Contour:
+                case GerberPrimitiveType.Polygon:  // FIX: Polygons need bounds from Points, not X/Y/Width/Height
                     if (Points != null && Points.Count > 0)
                     {
                         double minX = double.MaxValue, minY = double.MaxValue;
@@ -289,11 +290,14 @@ namespace PCBPlotter.Core.Models
                             if (pt.X > maxX) maxX = pt.X;
                             if (pt.Y > maxY) maxY = pt.Y;
                         }
-                        // Add stroke width
-                        minX -= Width / 2;
-                        minY -= Width / 2;
-                        maxX += Width / 2;
-                        maxY += Width / 2;
+                        // Add stroke width (for lines/contours)
+                        if (Type == GerberPrimitiveType.Line || Type == GerberPrimitiveType.Contour)
+                        {
+                            minX -= Width / 2;
+                            minY -= Width / 2;
+                            maxX += Width / 2;
+                            maxY += Width / 2;
+                        }
                         return new Rect(minX, minY, maxX - minX, maxY - minY);
                     }
                     return new Rect(X, Y, 0, 0);

@@ -312,6 +312,7 @@ namespace PCBPlotter.Controls
             InitializeBrushesAndPens();
 
             Loaded += (s, e) => InvalidateVisual();
+            Unloaded += (s, e) => _isDisposed = true;
         }
 
         /// <summary>
@@ -525,7 +526,11 @@ namespace PCBPlotter.Controls
             // This prevents the CPU canvas from doing heavy quadtree building when not visible.
             if (canvas.Visibility != Visibility.Visible)
             {
-                canvas._layerQuadtrees.Clear();
+                lock (canvas._quadtreeLock)
+                {
+                    canvas._layerQuadtrees.Clear();
+                    canvas._pendingQuadtreeBuilds.Clear();
+                }
                 canvas._worldBounds = Rect.Empty;
                 canvas._activeLayerQuadtree = null;
                 canvas._activeGerberLayer = null;
@@ -534,7 +539,11 @@ namespace PCBPlotter.Controls
             }
 
             // Clear all caches when layers change - quadtrees will be rebuilt on demand
-            canvas._layerQuadtrees.Clear();
+            lock (canvas._quadtreeLock)
+            {
+                canvas._layerQuadtrees.Clear();
+                canvas._pendingQuadtreeBuilds.Clear();
+            }
             canvas._worldBounds = Rect.Empty;
             canvas._activeLayerQuadtree = null;
             canvas._activeGerberLayer = null;
@@ -547,7 +556,11 @@ namespace PCBPlotter.Controls
             // New layers added - quadtrees will be built on demand
             // Removed layers will be cleaned up when quadtrees are rebuilt
             _gerberCacheDirty = true;
-            _layerQuadtrees.Clear();
+            lock (_quadtreeLock)
+            {
+                _layerQuadtrees.Clear();
+                _pendingQuadtreeBuilds.Clear();
+            }
 
             // OPTIMIZATION: Skip invalidation if not visible (GPU mode active)
             if (Visibility == Visibility.Visible)
@@ -706,6 +719,11 @@ namespace PCBPlotter.Controls
         // Quadtree per layer for viewport culling - O(log n) lookup of visible primitives
         private Dictionary<string, GerberQuadtree> _layerQuadtrees = new Dictionary<string, GerberQuadtree>();
 
+        // ASYNC FIX: Track pending quadtree builds to avoid UI freeze
+        private HashSet<string> _pendingQuadtreeBuilds = new HashSet<string>();
+        private readonly object _quadtreeLock = new object();
+        private volatile bool _isDisposed;
+
         // Frozen brush cache per layer color (ARGB -> SolidColorBrush)
         private Dictionary<uint, SolidColorBrush> _layerBrushCache = new Dictionary<uint, SolidColorBrush>();
 
@@ -774,7 +792,8 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Ensure quadtrees are built for all layers (for viewport culling)
+        /// Ensure quadtrees are built for all layers (for viewport culling).
+        /// ASYNC FIX: Builds quadtrees on background threads to prevent UI freeze.
         /// </summary>
         private void EnsureLayerQuadtreesBuilt()
         {
@@ -786,19 +805,76 @@ namespace PCBPlotter.Controls
                 if (layer.Primitives == null || layer.Primitives.Count == 0)
                     continue;
 
-                if (!_layerQuadtrees.ContainsKey(layer.Id))
+                bool needsBuild = false;
+                lock (_quadtreeLock)
                 {
-                    var bounds = layer.Bounds;
-                    if (!bounds.IsEmpty)
+                    if (!_layerQuadtrees.ContainsKey(layer.Id) && !_pendingQuadtreeBuilds.Contains(layer.Id))
                     {
-                        bounds.Inflate(bounds.Width * 0.02, bounds.Height * 0.02);
-                        var quadtree = new GerberQuadtree(bounds);
-                        foreach (var prim in layer.Primitives)
-                        {
-                            quadtree.Insert(prim);
-                        }
-                        _layerQuadtrees[layer.Id] = quadtree;
+                        _pendingQuadtreeBuilds.Add(layer.Id);
+                        needsBuild = true;
                     }
+                }
+
+                if (needsBuild)
+                {
+                    // Snapshot data for background thread
+                    var layerId = layer.Id;
+                    var bounds = layer.Bounds;
+                    var primitives = layer.Primitives.ToList(); // Copy to avoid threading issues
+
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try
+                        {
+                            if (_isDisposed) return;
+
+                            if (!bounds.IsEmpty)
+                            {
+                                bounds.Inflate(bounds.Width * 0.02, bounds.Height * 0.02);
+                                var quadtree = new GerberQuadtree(bounds);
+                                foreach (var prim in primitives)
+                                {
+                                    if (_isDisposed) return;
+                                    quadtree.Insert(prim);
+                                }
+
+                                // Update on UI thread
+                                Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    if (_isDisposed) return;
+                                    lock (_quadtreeLock)
+                                    {
+                                        _layerQuadtrees[layerId] = quadtree;
+                                        _pendingQuadtreeBuilds.Remove(layerId);
+                                    }
+                                    InvalidateVisual(); // Trigger redraw now that quadtree is ready
+                                }));
+                            }
+                            else
+                            {
+                                Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    if (_isDisposed) return;
+                                    lock (_quadtreeLock)
+                                    {
+                                        _pendingQuadtreeBuilds.Remove(layerId);
+                                    }
+                                }));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error building quadtree for layer {layerId}: {ex}");
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                if (_isDisposed) return;
+                                lock (_quadtreeLock)
+                                {
+                                    _pendingQuadtreeBuilds.Remove(layerId);
+                                }
+                            }));
+                        }
+                    });
                 }
             }
         }
@@ -849,14 +925,27 @@ namespace PCBPlotter.Controls
         {
             // Get visible primitives from quadtree
             List<GerberPrimitive> visiblePrimitives;
-            if (_layerQuadtrees.TryGetValue(layer.Id, out var quadtree))
+            GerberQuadtree quadtree = null;
+            lock (_quadtreeLock)
+            {
+                _layerQuadtrees.TryGetValue(layer.Id, out quadtree);
+            }
+
+            if (quadtree != null)
             {
                 visiblePrimitives = quadtree.QueryRect(visibleWorld);
             }
             else
             {
-                // Fallback: filter primitives manually
-                visiblePrimitives = layer.Primitives
+                // Fallback: filter primitives manually (limited to avoid freeze)
+                // If quadtree is being built, limit the number of primitives we process
+                var allPrims = layer.Primitives;
+                if (allPrims.Count > 5000)
+                {
+                    // Skip rendering large layers until quadtree is ready
+                    return;
+                }
+                visiblePrimitives = allPrims
                     .Where(p => p.GetBounds().IntersectsWith(visibleWorld))
                     .ToList();
             }
@@ -1318,7 +1407,11 @@ namespace PCBPlotter.Controls
         public void InvalidateGerberCache()
         {
             // Clear layer quadtrees - they will be rebuilt on demand
-            _layerQuadtrees.Clear();
+            lock (_quadtreeLock)
+            {
+                _layerQuadtrees.Clear();
+                _pendingQuadtreeBuilds.Clear();
+            }
             _worldBounds = Rect.Empty;
             _activeLayerQuadtree = null;
             _gerberCacheDirty = true;
