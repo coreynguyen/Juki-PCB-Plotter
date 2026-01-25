@@ -743,6 +743,37 @@ void main()
             return _stateCache?.GetStats() ?? new RenderStateStats();
         }
 
+        // Public accessors for StaticLayerRenderer integration
+        /// <summary>
+        /// Gets the instanced shader program handle.
+        /// </summary>
+        public int InstancedShader => _instancedShader;
+
+        /// <summary>
+        /// Gets the solid color shader program handle.
+        /// </summary>
+        public int SolidShader => _solidShader;
+
+        /// <summary>
+        /// Gets the projection uniform location for the instanced shader.
+        /// </summary>
+        public int InstancedProjectionLocation => _instancedProjLoc;
+
+        /// <summary>
+        /// Gets the view uniform location for the instanced shader.
+        /// </summary>
+        public int InstancedViewLocation => _instancedViewLoc;
+
+        /// <summary>
+        /// Gets the geometry cache containing base primitives (unit circle, unit rectangle).
+        /// </summary>
+        public GeometryCache GeometryCache => _geometryCache;
+
+        /// <summary>
+        /// Gets the render state cache for efficient state management.
+        /// </summary>
+        public RenderStateCache StateCache => _stateCache;
+
         public void Dispose()
         {
             if (_instancedShader != 0) GL.DeleteProgram(_instancedShader);
@@ -823,6 +854,12 @@ void main()
         public RenderStats EndFrame() => new RenderStats();
         public CullingStats GetCullingStats() => new CullingStats();
         public RenderStateStats GetStateStats() => new RenderStateStats();
+        public int InstancedShader => 0;
+        public int SolidShader => 0;
+        public int InstancedProjectionLocation => 0;
+        public int InstancedViewLocation => 0;
+        public GeometryCache GeometryCache => null;
+        public RenderStateCache StateCache => null;
         public void Dispose() { }
 #endif
     }

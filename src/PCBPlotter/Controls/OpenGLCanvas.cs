@@ -95,6 +95,10 @@ namespace PCBPlotter.Controls
         private Dictionary<string, LayerGeometryCache> _layerGeometryCache = new Dictionary<string, LayerGeometryCache>();
         private bool _geometryCacheDirty = true;
 
+        // Static layer renderers - upload instance data to GPU once, render with just draw calls
+        private Dictionary<string, StaticLayerRenderer> _staticLayerRenderers = new Dictionary<string, StaticLayerRenderer>();
+        private bool _useStaticRendering = true; // Toggle for static vs dynamic rendering
+
         // Quadtrees for spatial indexing (parallel building)
         private Dictionary<string, GerberQuadtree> _layerQuadtrees = new Dictionary<string, GerberQuadtree>();
 
@@ -224,6 +228,14 @@ namespace PCBPlotter.Controls
             canvas._layerQuadtrees.Clear();
             canvas._layerGeometryCache.Clear();
             canvas._geometryCacheDirty = true;
+
+            // Dispose and clear static layer renderers
+            foreach (var renderer in canvas._staticLayerRenderers.Values)
+            {
+                renderer.Dispose();
+            }
+            canvas._staticLayerRenderers.Clear();
+
             canvas.Invalidate();
         }
 
@@ -373,6 +385,13 @@ namespace PCBPlotter.Controls
                 if (_compositeTextureA != 0) GL.DeleteTexture(_compositeTextureA);
                 if (_compositeFboB != 0) GL.DeleteFramebuffer(_compositeFboB);
                 if (_compositeTextureB != 0) GL.DeleteTexture(_compositeTextureB);
+
+                // Cleanup static layer renderers
+                foreach (var renderer in _staticLayerRenderers.Values)
+                {
+                    renderer.Dispose();
+                }
+                _staticLayerRenderers.Clear();
 
                 // Cleanup batch renderer
                 _batchRenderer?.Dispose();
@@ -1039,6 +1058,13 @@ void main()
                 BuildLayerGeometryCache(layer, cache);
                 // Invalidate static GPU buffers when cache is rebuilt
                 _batchRenderer.InvalidateStaticBuffers(layer.Id);
+
+                // Invalidate static layer renderer when cache is rebuilt
+                if (_staticLayerRenderers.TryGetValue(layer.Id, out var oldRenderer))
+                {
+                    oldRenderer.Dispose();
+                    _staticLayerRenderers.Remove(layer.Id);
+                }
             }
 
             // Upload static meshes to GPU if needed (only once per layer)
@@ -1052,8 +1078,55 @@ void main()
             float viewBottom = (float)visibleBounds.Top; // Note: Rect uses Top for min Y
             float viewTop = (float)visibleBounds.Bottom;
 
-            // Use tile-based spatial index for O(visible) instead of O(N) iteration
-            if (cache.TileIndex != null)
+            // Use static layer renderer for circles/rectangles (zero per-primitive C# iteration)
+            if (_useStaticRendering && cache.Circles.Count + cache.Rectangles.Count > 0)
+            {
+                // Check if we need to rebuild static renderer due to color/opacity change
+                bool needsStaticRebuild = false;
+                if (_staticLayerRenderers.TryGetValue(layer.Id, out var existingRenderer))
+                {
+                    // Color is baked into instance data, so we need to rebuild if it changed
+                    if (cache.ColorArgb != layer.ColorArgb || Math.Abs(cache.Opacity - layer.Opacity) > 0.001)
+                    {
+                        existingRenderer.Dispose();
+                        _staticLayerRenderers.Remove(layer.Id);
+                        // Update cache color info
+                        cache.ColorArgb = layer.ColorArgb;
+                        cache.Opacity = layer.Opacity;
+                        needsStaticRebuild = true;
+                    }
+                }
+
+                // Initialize static renderer if needed (done ONCE per layer)
+                if (!_staticLayerRenderers.TryGetValue(layer.Id, out var staticRenderer))
+                {
+                    staticRenderer = new StaticLayerRenderer(
+                        layer.Id,
+                        _batchRenderer.GeometryCache,
+                        _batchRenderer.InstancedShader,
+                        _batchRenderer.InstancedProjectionLocation,
+                        _batchRenderer.InstancedViewLocation);
+
+                    // Get layer bounds for tile partitioning
+                    var bounds = layer.Bounds;
+                    staticRenderer.Initialize(
+                        cache.Circles,
+                        cache.Rectangles,
+                        (float)bounds.X, (float)bounds.Y,
+                        (float)bounds.Width, (float)bounds.Height,
+                        color);
+
+                    _staticLayerRenderers[layer.Id] = staticRenderer;
+                }
+
+                // Render circles and rectangles using pre-uploaded GPU buffers
+                staticRenderer.Render(_projection, _view, viewLeft, viewBottom, viewRight, viewTop, minVisibleSize, _batchRenderer.StateCache);
+
+                // Still render lines/polygons using existing static mesh system
+                RenderStaticMeshesOnly(cache, color);
+            }
+            // Use tile-based spatial index for O(visible) instead of O(N) iteration (fallback)
+            else if (cache.TileIndex != null)
             {
                 RenderWithTileIndex(cache, color, minVisibleSize, viewLeft, viewBottom, viewRight, viewTop);
             }
@@ -1061,6 +1134,26 @@ void main()
             {
                 // Fallback to O(N) iteration if no tile index
                 RenderWithFullIteration(cache, color, minVisibleSize, viewLeft, viewBottom, viewRight, viewTop);
+            }
+        }
+
+        /// <summary>
+        /// Renders only static meshes (lines/polygons) - used when StaticLayerRenderer handles circles/rectangles.
+        /// </summary>
+        private void RenderStaticMeshesOnly(LayerGeometryCache cache, OpenTK.Vector4 color)
+        {
+            // Render lines using static mesh (no per-frame geometry rebuild)
+            // Skip during panning for performance
+            if (!_isPanning && cache.LineMesh != null && cache.LineMesh.HasData)
+            {
+                _batchRenderer.RenderStaticLineMesh(cache.LayerId, color);
+            }
+
+            // Render polygons using static mesh (no per-frame geometry rebuild)
+            // Skip during panning for performance
+            if (!_isPanning && cache.PolygonMesh != null && cache.PolygonMesh.HasData)
+            {
+                _batchRenderer.RenderStaticPolygonMesh(cache.LayerId, color);
             }
         }
 
@@ -2151,12 +2244,18 @@ void main()
         }
     }
 
-    internal struct CachedCircle
+    /// <summary>
+    /// Cached circle data structure used by retained-mode rendering.
+    /// </summary>
+    public struct CachedCircle
     {
         public float X, Y, Radius;
     }
 
-    internal struct CachedRectangle
+    /// <summary>
+    /// Cached rectangle data structure used by retained-mode rendering.
+    /// </summary>
+    public struct CachedRectangle
     {
         public float X, Y, Width, Height;
     }

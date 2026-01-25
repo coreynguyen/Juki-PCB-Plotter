@@ -359,6 +359,26 @@ namespace PCBPlotter.Controls
         public bool IsDirty => _isDirty;
         public int VAO => _vao;
 
+        /// <summary>
+        /// Returns true if the buffer has valid data uploaded to the GPU.
+        /// Used to check if static buffers can be rendered without re-upload.
+        /// </summary>
+        public bool HasDataOnGpu => _isInitialized && _instanceCount > 0 && !_isDirty;
+
+        /// <summary>
+        /// Locks the buffer for static use by switching to StaticDraw hint.
+        /// Call this after uploading data that won't change to optimize GPU memory access.
+        /// </summary>
+        public void LockForStaticUse()
+        {
+            _usageHint = BufferUsageHint.StaticDraw;
+        }
+
+        /// <summary>
+        /// Gets the buffer usage hint.
+        /// </summary>
+        public BufferUsageHint UsageHint => _usageHint;
+
         private void EnsureVertexCapacity(int required)
         {
             if (required * VERTEX_SIZE <= _vertices.Length) return;
@@ -428,6 +448,8 @@ namespace PCBPlotter.Controls
         public int InstanceCount => 0;
         public bool IsDirty => false;
         public int VAO => 0;
+        public bool HasDataOnGpu => false;
+        public void LockForStaticUse() { }
         public void Dispose() { }
 #endif
     }
