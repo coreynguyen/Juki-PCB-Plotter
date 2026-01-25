@@ -351,9 +351,7 @@ namespace PCBPlotter.Controls
         private void InitializeShaders()
         {
             // Vertex shader for primitives
-            string vertexSource = @"
-#version 330 core
-layout (location = 0) in vec2 aPos;
+            string vertexSource = "#version 330 core\n" + @"layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aInstancePos;
 layout (location = 2) in vec2 aInstanceScale;
 layout (location = 3) in vec4 aInstanceColor;
@@ -372,9 +370,7 @@ void main()
 ";
 
             // Fragment shader
-            string fragmentSource = @"
-#version 330 core
-in vec4 vertexColor;
+            string fragmentSource = "#version 330 core\n" + @"in vec4 vertexColor;
 out vec4 FragColor;
 
 void main()
@@ -391,9 +387,7 @@ void main()
         private void InitializeScreenBlendShader()
         {
             // Vertex shader for full-screen quad
-            string vertexSource = @"
-#version 330 core
-layout (location = 0) in vec2 aPos;
+            string vertexSource = "#version 330 core\n" + @"layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec2 aTexCoord;
 
 out vec2 TexCoord;
@@ -406,9 +400,7 @@ void main()
 ";
 
             // Fragment shader with screen blend mode
-            string fragmentSource = @"
-#version 330 core
-in vec2 TexCoord;
+            string fragmentSource = "#version 330 core\n" + @"in vec2 TexCoord;
 out vec4 FragColor;
 
 uniform sampler2D baseTexture;
