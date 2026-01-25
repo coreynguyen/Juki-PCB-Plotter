@@ -44,6 +44,13 @@ namespace PCBPlotter.Controls
         private List<LineBatch> _lineBatches = new List<LineBatch>();
         private List<PolygonBatch> _polygonBatches = new List<PolygonBatch>();
 
+        // Static GPU buffers for pre-triangulated line/polygon meshes per layer
+        private Dictionary<string, StaticLayerBuffer> _staticLayerBuffers = new Dictionary<string, StaticLayerBuffer>();
+
+        // Pending static mesh renders for the current frame
+        private List<StaticMeshRender> _pendingStaticLineRenders = new List<StaticMeshRender>();
+        private List<StaticMeshRender> _pendingStaticPolygonRenders = new List<StaticMeshRender>();
+
         // Statistics
         private int _drawCalls;
         private int _trianglesRendered;
@@ -221,6 +228,10 @@ void main()
             _lineBatches.Clear();
             _polygonBatches.Clear();
 
+            // Clear pending static mesh renders
+            _pendingStaticLineRenders.Clear();
+            _pendingStaticPolygonRenders.Clear();
+
             _geometryCache.ClearInstances();
             _dynamicBuffer.Clear();
 
@@ -345,6 +356,122 @@ void main()
         }
 
         /// <summary>
+        /// Uploads static line mesh data to GPU (only called once per layer).
+        /// </summary>
+        public void UploadStaticLineMesh(string layerId, float[] vertices, int vertexCount, uint[] indices, int indexCount)
+        {
+            if (vertexCount == 0 || indexCount == 0) return;
+
+            if (!_staticLayerBuffers.TryGetValue(layerId, out var layerBuffer))
+            {
+                layerBuffer = new StaticLayerBuffer();
+                _staticLayerBuffers[layerId] = layerBuffer;
+            }
+
+            if (layerBuffer.LineBuffer == null)
+            {
+                layerBuffer.LineBuffer = new GeometryBuffer(vertexCount, indexCount, 0, BufferUsageHint.StaticDraw);
+                layerBuffer.LineBuffer.Initialize();
+            }
+
+            // Add vertices (x,y pairs)
+            for (int i = 0; i < vertexCount; i++)
+            {
+                layerBuffer.LineBuffer.AddVertex(vertices[i * 2], vertices[i * 2 + 1]);
+            }
+
+            // Add indices
+            layerBuffer.LineBuffer.AddIndices(indices, indexCount);
+            layerBuffer.LineBuffer.Upload();
+            layerBuffer.LineBufferReady = true;
+        }
+
+        /// <summary>
+        /// Uploads static polygon mesh data to GPU (only called once per layer).
+        /// </summary>
+        public void UploadStaticPolygonMesh(string layerId, float[] vertices, int vertexCount, uint[] indices, int indexCount)
+        {
+            if (vertexCount == 0 || indexCount == 0) return;
+
+            if (!_staticLayerBuffers.TryGetValue(layerId, out var layerBuffer))
+            {
+                layerBuffer = new StaticLayerBuffer();
+                _staticLayerBuffers[layerId] = layerBuffer;
+            }
+
+            if (layerBuffer.PolygonBuffer == null)
+            {
+                layerBuffer.PolygonBuffer = new GeometryBuffer(vertexCount, indexCount, 0, BufferUsageHint.StaticDraw);
+                layerBuffer.PolygonBuffer.Initialize();
+            }
+
+            // Add vertices
+            for (int i = 0; i < vertexCount; i++)
+            {
+                layerBuffer.PolygonBuffer.AddVertex(vertices[i * 2], vertices[i * 2 + 1]);
+            }
+
+            // Add indices
+            layerBuffer.PolygonBuffer.AddIndices(indices, indexCount);
+            layerBuffer.PolygonBuffer.Upload();
+            layerBuffer.PolygonBufferReady = true;
+        }
+
+        /// <summary>
+        /// Queues a static line mesh for rendering.
+        /// </summary>
+        public void RenderStaticLineMesh(string layerId, Vector4 color)
+        {
+            _pendingStaticLineRenders.Add(new StaticMeshRender
+            {
+                LayerId = layerId,
+                IsLineMesh = true,
+                Color = color
+            });
+        }
+
+        /// <summary>
+        /// Queues a static polygon mesh for rendering.
+        /// </summary>
+        public void RenderStaticPolygonMesh(string layerId, Vector4 color)
+        {
+            _pendingStaticPolygonRenders.Add(new StaticMeshRender
+            {
+                LayerId = layerId,
+                IsLineMesh = false,
+                Color = color
+            });
+        }
+
+        /// <summary>
+        /// Checks if static buffers exist for a layer.
+        /// </summary>
+        public bool HasStaticLineMesh(string layerId)
+        {
+            return _staticLayerBuffers.TryGetValue(layerId, out var buffer) && buffer.LineBufferReady;
+        }
+
+        /// <summary>
+        /// Checks if static polygon buffers exist for a layer.
+        /// </summary>
+        public bool HasStaticPolygonMesh(string layerId)
+        {
+            return _staticLayerBuffers.TryGetValue(layerId, out var buffer) && buffer.PolygonBufferReady;
+        }
+
+        /// <summary>
+        /// Invalidates static buffers for a layer (call when layer data changes).
+        /// </summary>
+        public void InvalidateStaticBuffers(string layerId)
+        {
+            if (_staticLayerBuffers.TryGetValue(layerId, out var buffer))
+            {
+                buffer.Dispose();
+                _staticLayerBuffers.Remove(layerId);
+            }
+        }
+
+        /// <summary>
         /// Uploads all batched geometry to GPU and renders.
         /// </summary>
         public void Render(Matrix4 projection, Matrix4 view)
@@ -373,11 +500,61 @@ void main()
                 _trianglesRendered += _geometryCache.RectangleCount * 2;
             }
 
-            // Render lines
+            // Render dynamic lines (fallback)
             RenderLines(projection, view);
 
-            // Render polygons
+            // Render dynamic polygons (fallback)
             RenderPolygons(projection, view);
+
+            // Render static line meshes (pre-triangulated, no per-frame rebuild)
+            RenderStaticLineMeshes(projection, view);
+
+            // Render static polygon meshes (pre-triangulated, no per-frame rebuild)
+            RenderStaticPolygonMeshes(projection, view);
+        }
+
+        private void RenderStaticLineMeshes(Matrix4 projection, Matrix4 view)
+        {
+            if (_pendingStaticLineRenders.Count == 0) return;
+
+            _stateCache.UseProgram(_solidShader);
+            _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
+            _stateCache.SetViewMatrix(_solidViewLoc, ref view);
+
+            foreach (var render in _pendingStaticLineRenders)
+            {
+                if (!_staticLayerBuffers.TryGetValue(render.LayerId, out var buffer))
+                    continue;
+                if (!buffer.LineBufferReady || buffer.LineBuffer == null)
+                    continue;
+
+                _stateCache.SetColor(_solidColorLoc, render.Color);
+                buffer.LineBuffer.Draw();
+                _drawCalls++;
+                _trianglesRendered += buffer.LineBuffer.IndexCount / 3;
+            }
+        }
+
+        private void RenderStaticPolygonMeshes(Matrix4 projection, Matrix4 view)
+        {
+            if (_pendingStaticPolygonRenders.Count == 0) return;
+
+            _stateCache.UseProgram(_solidShader);
+            _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
+            _stateCache.SetViewMatrix(_solidViewLoc, ref view);
+
+            foreach (var render in _pendingStaticPolygonRenders)
+            {
+                if (!_staticLayerBuffers.TryGetValue(render.LayerId, out var buffer))
+                    continue;
+                if (!buffer.PolygonBufferReady || buffer.PolygonBuffer == null)
+                    continue;
+
+                _stateCache.SetColor(_solidColorLoc, render.Color);
+                buffer.PolygonBuffer.Draw();
+                _drawCalls++;
+                _trianglesRendered += buffer.PolygonBuffer.IndexCount / 3;
+            }
         }
 
         private void RenderLines(Matrix4 projection, Matrix4 view)
@@ -527,8 +704,9 @@ void main()
                 TrianglesRendered = _trianglesRendered,
                 CircleCount = _geometryCache.CircleCount,
                 RectangleCount = _geometryCache.RectangleCount,
-                LineCount = _lineBatches.Count,
-                PolygonCount = _polygonBatches.Count
+                // Include both dynamic batches and static mesh renders
+                LineCount = _lineBatches.Count + _pendingStaticLineRenders.Count,
+                PolygonCount = _polygonBatches.Count + _pendingStaticPolygonRenders.Count
             };
 
             // Include culling statistics
@@ -572,6 +750,13 @@ void main()
 
             _geometryCache?.Dispose();
             _dynamicBuffer?.Dispose();
+
+            // Dispose static layer buffers
+            foreach (var buffer in _staticLayerBuffers.Values)
+            {
+                buffer.Dispose();
+            }
+            _staticLayerBuffers.Clear();
         }
 
         private struct CircleBatch
@@ -598,6 +783,30 @@ void main()
         {
             public IList<System.Windows.Point> Points;
             public Vector4 Color;
+        }
+
+        private struct StaticMeshRender
+        {
+            public string LayerId;
+            public bool IsLineMesh; // true for line mesh, false for polygon mesh
+            public Vector4 Color;
+        }
+
+        /// <summary>
+        /// Holds static GPU buffers for a layer's pre-triangulated meshes.
+        /// </summary>
+        private class StaticLayerBuffer : IDisposable
+        {
+            public GeometryBuffer LineBuffer;
+            public GeometryBuffer PolygonBuffer;
+            public bool LineBufferReady;
+            public bool PolygonBufferReady;
+
+            public void Dispose()
+            {
+                LineBuffer?.Dispose();
+                PolygonBuffer?.Dispose();
+            }
         }
 #else
         // Stub implementation

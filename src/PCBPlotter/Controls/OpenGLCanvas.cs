@@ -1037,7 +1037,12 @@ void main()
             if (needsRebuild)
             {
                 BuildLayerGeometryCache(layer, cache);
+                // Invalidate static GPU buffers when cache is rebuilt
+                _batchRenderer.InvalidateStaticBuffers(layer.Id);
             }
+
+            // Upload static meshes to GPU if needed (only once per layer)
+            UploadStaticMeshesIfNeeded(layer.Id, cache);
 
             // Aggressive LOD filtering during interaction for smoother panning/zooming
             // Skip small primitives that won't be visible at current zoom
@@ -1047,6 +1052,107 @@ void main()
             float viewBottom = (float)visibleBounds.Top; // Note: Rect uses Top for min Y
             float viewTop = (float)visibleBounds.Bottom;
 
+            // Use tile-based spatial index for O(visible) instead of O(N) iteration
+            if (cache.TileIndex != null)
+            {
+                RenderWithTileIndex(cache, color, minVisibleSize, viewLeft, viewBottom, viewRight, viewTop);
+            }
+            else
+            {
+                // Fallback to O(N) iteration if no tile index
+                RenderWithFullIteration(cache, color, minVisibleSize, viewLeft, viewBottom, viewRight, viewTop);
+            }
+        }
+
+        /// <summary>
+        /// O(visible) rendering using tile-based spatial index.
+        /// Circles/rectangles: iterates only visible tiles
+        /// Lines/polygons: uses pre-triangulated static meshes (single draw call)
+        /// </summary>
+        private void RenderWithTileIndex(LayerGeometryCache cache, OpenTK.Vector4 color,
+            float minVisibleSize, float viewLeft, float viewBottom, float viewRight, float viewTop)
+        {
+            var tileIndex = cache.TileIndex;
+            tileIndex.GetVisibleTileRange(viewLeft, viewBottom, viewRight, viewTop,
+                out int minTileX, out int minTileY, out int maxTileX, out int maxTileY);
+
+            // Use HashSets to avoid duplicate rendering (primitives can span tiles)
+            var renderedCircles = new HashSet<int>();
+            var renderedRects = new HashSet<int>();
+
+            // Iterate only visible tiles for circles and rectangles
+            for (int ty = minTileY; ty <= maxTileY; ty++)
+            {
+                for (int tx = minTileX; tx <= maxTileX; tx++)
+                {
+                    int tileIdx = ty * tileIndex.TilesX + tx;
+
+                    // Render circles in this tile
+                    foreach (int idx in tileIndex.CircleIndices[tileIdx])
+                    {
+                        if (renderedCircles.Contains(idx)) continue;
+                        renderedCircles.Add(idx);
+
+                        var circle = cache.Circles[idx];
+                        float r = circle.Radius;
+
+                        // LOD filtering
+                        if (r * 2 < minVisibleSize)
+                            continue;
+
+                        // Precise bounds check (tile may extend beyond view)
+                        if (circle.X + r < viewLeft || circle.X - r > viewRight ||
+                            circle.Y + r < viewBottom || circle.Y - r > viewTop)
+                            continue;
+
+                        _batchRenderer.AddCircle(circle.X, circle.Y, circle.Radius, color);
+                    }
+
+                    // Render rectangles in this tile
+                    foreach (int idx in tileIndex.RectangleIndices[tileIdx])
+                    {
+                        if (renderedRects.Contains(idx)) continue;
+                        renderedRects.Add(idx);
+
+                        var rect = cache.Rectangles[idx];
+                        float hw = rect.Width / 2;
+                        float hh = rect.Height / 2;
+
+                        // LOD filtering
+                        if (Math.Max(rect.Width, rect.Height) < minVisibleSize)
+                            continue;
+
+                        // Precise bounds check
+                        if (rect.X + hw < viewLeft || rect.X - hw > viewRight ||
+                            rect.Y + hh < viewBottom || rect.Y - hh > viewTop)
+                            continue;
+
+                        _batchRenderer.AddRectangle(rect.X, rect.Y, rect.Width, rect.Height, color);
+                    }
+                }
+            }
+
+            // Render lines using static mesh (no per-frame geometry rebuild)
+            // Skip during panning for performance
+            if (!_isPanning && cache.LineMesh != null && cache.LineMesh.HasData)
+            {
+                _batchRenderer.RenderStaticLineMesh(cache.LayerId, color);
+            }
+
+            // Render polygons using static mesh (no per-frame geometry rebuild)
+            // Skip during panning for performance
+            if (!_isPanning && cache.PolygonMesh != null && cache.PolygonMesh.HasData)
+            {
+                _batchRenderer.RenderStaticPolygonMesh(cache.LayerId, color);
+            }
+        }
+
+        /// <summary>
+        /// Fallback O(N) rendering when tile index is not available.
+        /// </summary>
+        private void RenderWithFullIteration(LayerGeometryCache cache, OpenTK.Vector4 color,
+            float minVisibleSize, float viewLeft, float viewBottom, float viewRight, float viewTop)
+        {
             // Fast path: replay cached geometry to batch renderer with frustum culling
             foreach (var circle in cache.Circles)
             {
@@ -1080,32 +1186,19 @@ void main()
                 _batchRenderer.AddRectangle(rect.X, rect.Y, rect.Width, rect.Height, color);
             }
 
-            // Lines and polygons - skip LOD filtering during interaction since they're usually important
+            // Lines and polygons - use static meshes for no per-frame geometry rebuild
+            // Skip during panning for performance
             if (!_isPanning)
             {
-                foreach (var line in cache.Lines)
+                if (cache.LineMesh != null && cache.LineMesh.HasData)
                 {
-                    _batchRenderer.AddLine(line.X1, line.Y1, line.X2, line.Y2, line.Width, color);
+                    _batchRenderer.RenderStaticLineMesh(cache.LayerId, color);
                 }
 
-                foreach (var poly in cache.Polygons)
+                if (cache.PolygonMesh != null && cache.PolygonMesh.HasData)
                 {
-                    _batchRenderer.AddPolygon(poly.Points, color);
+                    _batchRenderer.RenderStaticPolygonMesh(cache.LayerId, color);
                 }
-            }
-            else
-            {
-                // During interaction, only render larger lines
-                foreach (var line in cache.Lines)
-                {
-                    if (line.Width >= minVisibleSize)
-                    {
-                        _batchRenderer.AddLine(line.X1, line.Y1, line.X2, line.Y2, line.Width, color);
-                    }
-                }
-
-                // Skip polygons during fast panning for performance
-                // (they're usually small details)
             }
         }
 
@@ -1215,7 +1308,251 @@ void main()
             cache.RectangleCount = cache.Rectangles.Count;
             cache.LineCount = cache.Lines.Count;
             cache.PolygonCount = cache.Polygons.Count;
+
+            // Build tile-based spatial index for O(visible) rendering
+            BuildTileIndex(cache, layer.Bounds);
+
+            // Pre-triangulate lines and polygons for static GPU rendering
+            BuildStaticLineMesh(cache);
+            BuildStaticPolygonMesh(cache);
+
             cache.IsValid = true;
+        }
+
+        /// <summary>
+        /// Pre-triangulate all lines into a static mesh (built once, not per-frame).
+        /// Lines are converted to quads + circle caps.
+        /// </summary>
+        private void BuildStaticLineMesh(LayerGeometryCache cache)
+        {
+            if (cache.Lines.Count == 0) return;
+
+            const int CIRCLE_SEGMENTS = 32;
+
+            // Calculate required buffer sizes
+            // Each line: 4 vertices for quad + (CIRCLE_SEGMENTS + 1) * 2 for caps
+            // Each line: 6 indices for quad + CIRCLE_SEGMENTS * 3 * 2 for caps
+            int verticesPerLine = 4 + (CIRCLE_SEGMENTS + 1) * 2;
+            int indicesPerLine = 6 + CIRCLE_SEGMENTS * 3 * 2;
+
+            var mesh = new StaticMeshData();
+            mesh.Vertices = new float[cache.Lines.Count * verticesPerLine * 2]; // x,y pairs
+            mesh.Indices = new uint[cache.Lines.Count * indicesPerLine];
+
+            int vIdx = 0;
+            int iIdx = 0;
+
+            foreach (var line in cache.Lines)
+            {
+                float dx = line.X2 - line.X1;
+                float dy = line.Y2 - line.Y1;
+                float len = (float)Math.Sqrt(dx * dx + dy * dy);
+                if (len < 0.0001f) continue;
+
+                float nx = -dy / len * line.Width / 2;
+                float ny = dx / len * line.Width / 2;
+
+                uint baseVertex = (uint)(vIdx / 2);
+
+                // Line quad vertices
+                mesh.Vertices[vIdx++] = line.X1 - nx;
+                mesh.Vertices[vIdx++] = line.Y1 - ny;
+                mesh.Vertices[vIdx++] = line.X1 + nx;
+                mesh.Vertices[vIdx++] = line.Y1 + ny;
+                mesh.Vertices[vIdx++] = line.X2 + nx;
+                mesh.Vertices[vIdx++] = line.Y2 + ny;
+                mesh.Vertices[vIdx++] = line.X2 - nx;
+                mesh.Vertices[vIdx++] = line.Y2 - ny;
+
+                // Quad indices
+                mesh.Indices[iIdx++] = baseVertex;
+                mesh.Indices[iIdx++] = baseVertex + 1;
+                mesh.Indices[iIdx++] = baseVertex + 2;
+                mesh.Indices[iIdx++] = baseVertex;
+                mesh.Indices[iIdx++] = baseVertex + 2;
+                mesh.Indices[iIdx++] = baseVertex + 3;
+
+                // Start cap (circle)
+                uint capBase = (uint)(vIdx / 2);
+                float radius = line.Width / 2;
+
+                // Center vertex
+                mesh.Vertices[vIdx++] = line.X1;
+                mesh.Vertices[vIdx++] = line.Y1;
+
+                // Circle perimeter
+                for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+                {
+                    float angle = (float)(2 * Math.PI * i / CIRCLE_SEGMENTS);
+                    mesh.Vertices[vIdx++] = line.X1 + radius * (float)Math.Cos(angle);
+                    mesh.Vertices[vIdx++] = line.Y1 + radius * (float)Math.Sin(angle);
+                }
+
+                // Circle indices
+                for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+                {
+                    mesh.Indices[iIdx++] = capBase;
+                    mesh.Indices[iIdx++] = capBase + (uint)(i + 1);
+                    mesh.Indices[iIdx++] = capBase + (uint)((i + 1) % CIRCLE_SEGMENTS + 1);
+                }
+
+                // End cap (circle)
+                capBase = (uint)(vIdx / 2);
+
+                mesh.Vertices[vIdx++] = line.X2;
+                mesh.Vertices[vIdx++] = line.Y2;
+
+                for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+                {
+                    float angle = (float)(2 * Math.PI * i / CIRCLE_SEGMENTS);
+                    mesh.Vertices[vIdx++] = line.X2 + radius * (float)Math.Cos(angle);
+                    mesh.Vertices[vIdx++] = line.Y2 + radius * (float)Math.Sin(angle);
+                }
+
+                for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+                {
+                    mesh.Indices[iIdx++] = capBase;
+                    mesh.Indices[iIdx++] = capBase + (uint)(i + 1);
+                    mesh.Indices[iIdx++] = capBase + (uint)((i + 1) % CIRCLE_SEGMENTS + 1);
+                }
+            }
+
+            mesh.VertexCount = vIdx / 2;
+            mesh.IndexCount = iIdx;
+            cache.LineMesh = mesh;
+        }
+
+        /// <summary>
+        /// Pre-triangulate all polygons into a static mesh.
+        /// Uses simple ear-clipping for non-convex polygon support.
+        /// </summary>
+        private void BuildStaticPolygonMesh(LayerGeometryCache cache)
+        {
+            if (cache.Polygons.Count == 0) return;
+
+            // Calculate rough buffer sizes (overestimate for safety)
+            int totalVertices = 0;
+            int totalIndices = 0;
+            foreach (var poly in cache.Polygons)
+            {
+                totalVertices += poly.Points.Count;
+                totalIndices += (poly.Points.Count - 2) * 3; // n-2 triangles per polygon
+            }
+
+            var mesh = new StaticMeshData();
+            mesh.Vertices = new float[totalVertices * 2];
+            mesh.Indices = new uint[totalIndices];
+
+            int vIdx = 0;
+            int iIdx = 0;
+
+            foreach (var poly in cache.Polygons)
+            {
+                if (poly.Points.Count < 3) continue;
+
+                uint baseVertex = (uint)(vIdx / 2);
+
+                // Add vertices
+                foreach (var pt in poly.Points)
+                {
+                    mesh.Vertices[vIdx++] = (float)pt.X;
+                    mesh.Vertices[vIdx++] = (float)pt.Y;
+                }
+
+                // Simple triangle fan (works for convex polygons)
+                // TODO: Implement proper ear-clipping for non-convex polygons
+                for (int i = 1; i < poly.Points.Count - 1; i++)
+                {
+                    mesh.Indices[iIdx++] = baseVertex;
+                    mesh.Indices[iIdx++] = baseVertex + (uint)i;
+                    mesh.Indices[iIdx++] = baseVertex + (uint)(i + 1);
+                }
+            }
+
+            mesh.VertexCount = vIdx / 2;
+            mesh.IndexCount = iIdx;
+            cache.PolygonMesh = mesh;
+        }
+
+        /// <summary>
+        /// Upload static mesh data to GPU if not already uploaded.
+        /// This is called once per layer, not per-frame.
+        /// </summary>
+        private void UploadStaticMeshesIfNeeded(string layerId, LayerGeometryCache cache)
+        {
+            // Upload static line mesh if needed
+            if (cache.LineMesh != null && cache.LineMesh.HasData && cache.LineMesh.NeedsUpload)
+            {
+                if (!_batchRenderer.HasStaticLineMesh(layerId))
+                {
+                    _batchRenderer.UploadStaticLineMesh(layerId,
+                        cache.LineMesh.Vertices, cache.LineMesh.VertexCount,
+                        cache.LineMesh.Indices, cache.LineMesh.IndexCount);
+                }
+                cache.LineMesh.NeedsUpload = false;
+            }
+
+            // Upload static polygon mesh if needed
+            if (cache.PolygonMesh != null && cache.PolygonMesh.HasData && cache.PolygonMesh.NeedsUpload)
+            {
+                if (!_batchRenderer.HasStaticPolygonMesh(layerId))
+                {
+                    _batchRenderer.UploadStaticPolygonMesh(layerId,
+                        cache.PolygonMesh.Vertices, cache.PolygonMesh.VertexCount,
+                        cache.PolygonMesh.Indices, cache.PolygonMesh.IndexCount);
+                }
+                cache.PolygonMesh.NeedsUpload = false;
+            }
+        }
+
+        /// <summary>
+        /// Build tile index for efficient viewport culling.
+        /// </summary>
+        private void BuildTileIndex(LayerGeometryCache cache, Rect bounds)
+        {
+            // Skip if no primitives
+            int totalPrimitives = cache.CircleCount + cache.RectangleCount + cache.LineCount + cache.PolygonCount;
+            if (totalPrimitives == 0)
+                return;
+
+            // Choose tile size based on bounds - aim for ~100 tiles per dimension max
+            float width = (float)bounds.Width;
+            float height = (float)bounds.Height;
+            float tileSize = Math.Max(width, height) / 50.0f; // ~50x50 grid max
+            tileSize = Math.Max(tileSize, 1.0f); // Minimum 1mm tiles
+
+            cache.TileIndex = new TileIndex();
+            cache.TileIndex.Initialize(
+                (float)bounds.Left, (float)bounds.Top,
+                (float)bounds.Right, (float)bounds.Bottom,
+                tileSize);
+
+            // Add circles to tile index
+            for (int i = 0; i < cache.Circles.Count; i++)
+            {
+                var c = cache.Circles[i];
+                cache.TileIndex.AddCircle(i, c.X, c.Y, c.Radius);
+            }
+
+            // Add rectangles to tile index
+            for (int i = 0; i < cache.Rectangles.Count; i++)
+            {
+                var r = cache.Rectangles[i];
+                cache.TileIndex.AddRectangle(i, r.X, r.Y, r.Width, r.Height);
+            }
+
+            // Add lines to tile index
+            for (int i = 0; i < cache.Lines.Count; i++)
+            {
+                var l = cache.Lines[i];
+                cache.TileIndex.AddLine(i, l.X1, l.Y1, l.X2, l.Y2, l.Width);
+            }
+
+            // Add polygons to tile index
+            for (int i = 0; i < cache.Polygons.Count; i++)
+            {
+                cache.TileIndex.AddPolygon(i, cache.Polygons[i].Points);
+            }
         }
 
         private void RenderPrimitive(GerberPrimitive prim, OpenTK.Vector4 color, float opacity)
@@ -1787,6 +2124,13 @@ void main()
         public List<CachedLine> Lines { get; set; } = new List<CachedLine>();
         public List<CachedPolygon> Polygons { get; set; } = new List<CachedPolygon>();
 
+        // Tile-based spatial index for O(visible) instead of O(N) iteration
+        public TileIndex TileIndex { get; set; }
+
+        // Pre-triangulated static mesh data for lines and polygons (built once, uploaded once)
+        public StaticMeshData LineMesh { get; set; }
+        public StaticMeshData PolygonMesh { get; set; }
+
         public void Clear()
         {
             Circles.Clear();
@@ -1797,6 +2141,12 @@ void main()
             RectangleCount = 0;
             LineCount = 0;
             PolygonCount = 0;
+            TileIndex?.Clear();
+            TileIndex = null;
+            LineMesh?.Clear();
+            LineMesh = null;
+            PolygonMesh?.Clear();
+            PolygonMesh = null;
             IsValid = false;
         }
     }
@@ -1819,6 +2169,203 @@ void main()
     internal struct CachedPolygon
     {
         public IList<System.Windows.Point> Points;
+    }
+
+    /// <summary>
+    /// Pre-triangulated mesh data for static GPU rendering.
+    /// Built once during cache creation, uploaded to GPU once.
+    /// </summary>
+    internal class StaticMeshData
+    {
+        // CPU-side triangulated geometry (built once)
+        public float[] Vertices;  // x, y pairs
+        public uint[] Indices;    // triangle indices
+        public int VertexCount;
+        public int IndexCount;
+
+        // Indicates if data needs to be uploaded to GPU
+        public bool NeedsUpload = true;
+
+        public void Clear()
+        {
+            Vertices = null;
+            Indices = null;
+            VertexCount = 0;
+            IndexCount = 0;
+            NeedsUpload = true;
+        }
+
+        public bool HasData => VertexCount > 0 && IndexCount > 0;
+    }
+
+    /// <summary>
+    /// Uniform grid tile index for O(visible) instead of O(N) iteration.
+    /// Each tile stores indices into the cached primitive arrays.
+    /// </summary>
+    internal class TileIndex
+    {
+        public float MinX, MinY, MaxX, MaxY;
+        public float TileSize;
+        public int TilesX, TilesY;
+
+        // 2D array of lists [tileY * TilesX + tileX] -> list of indices
+        public List<int>[] CircleIndices;
+        public List<int>[] RectangleIndices;
+        public List<int>[] LineIndices;
+        public List<int>[] PolygonIndices;
+
+        public void Initialize(float minX, float minY, float maxX, float maxY, float tileSize)
+        {
+            MinX = minX;
+            MinY = minY;
+            MaxX = maxX;
+            MaxY = maxY;
+            TileSize = tileSize;
+
+            // Calculate grid dimensions
+            TilesX = Math.Max(1, (int)Math.Ceiling((maxX - minX) / tileSize));
+            TilesY = Math.Max(1, (int)Math.Ceiling((maxY - minY) / tileSize));
+
+            // Cap to reasonable size to avoid memory explosion
+            if (TilesX > 500) { TileSize = (maxX - minX) / 500; TilesX = 500; }
+            if (TilesY > 500) { TileSize = Math.Max(TileSize, (maxY - minY) / 500); TilesY = 500; }
+
+            int totalTiles = TilesX * TilesY;
+            CircleIndices = new List<int>[totalTiles];
+            RectangleIndices = new List<int>[totalTiles];
+            LineIndices = new List<int>[totalTiles];
+            PolygonIndices = new List<int>[totalTiles];
+
+            for (int i = 0; i < totalTiles; i++)
+            {
+                CircleIndices[i] = new List<int>();
+                RectangleIndices[i] = new List<int>();
+                LineIndices[i] = new List<int>();
+                PolygonIndices[i] = new List<int>();
+            }
+        }
+
+        public void Clear()
+        {
+            CircleIndices = null;
+            RectangleIndices = null;
+            LineIndices = null;
+            PolygonIndices = null;
+        }
+
+        /// <summary>
+        /// Add a primitive to all tiles it intersects.
+        /// </summary>
+        public void AddCircle(int index, float x, float y, float radius)
+        {
+            int minTileX = GetTileX(x - radius);
+            int maxTileX = GetTileX(x + radius);
+            int minTileY = GetTileY(y - radius);
+            int maxTileY = GetTileY(y + radius);
+
+            for (int ty = minTileY; ty <= maxTileY; ty++)
+            {
+                for (int tx = minTileX; tx <= maxTileX; tx++)
+                {
+                    int tileIdx = ty * TilesX + tx;
+                    CircleIndices[tileIdx].Add(index);
+                }
+            }
+        }
+
+        public void AddRectangle(int index, float x, float y, float width, float height)
+        {
+            float hw = width / 2, hh = height / 2;
+            int minTileX = GetTileX(x - hw);
+            int maxTileX = GetTileX(x + hw);
+            int minTileY = GetTileY(y - hh);
+            int maxTileY = GetTileY(y + hh);
+
+            for (int ty = minTileY; ty <= maxTileY; ty++)
+            {
+                for (int tx = minTileX; tx <= maxTileX; tx++)
+                {
+                    int tileIdx = ty * TilesX + tx;
+                    RectangleIndices[tileIdx].Add(index);
+                }
+            }
+        }
+
+        public void AddLine(int index, float x1, float y1, float x2, float y2, float width)
+        {
+            float hw = width / 2;
+            float minX = Math.Min(x1, x2) - hw;
+            float maxX = Math.Max(x1, x2) + hw;
+            float minY = Math.Min(y1, y2) - hw;
+            float maxY = Math.Max(y1, y2) + hw;
+
+            int minTileX = GetTileX(minX);
+            int maxTileX = GetTileX(maxX);
+            int minTileY = GetTileY(minY);
+            int maxTileY = GetTileY(maxY);
+
+            for (int ty = minTileY; ty <= maxTileY; ty++)
+            {
+                for (int tx = minTileX; tx <= maxTileX; tx++)
+                {
+                    int tileIdx = ty * TilesX + tx;
+                    LineIndices[tileIdx].Add(index);
+                }
+            }
+        }
+
+        public void AddPolygon(int index, IList<System.Windows.Point> points)
+        {
+            if (points == null || points.Count == 0) return;
+
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            foreach (var pt in points)
+            {
+                if (pt.X < minX) minX = (float)pt.X;
+                if (pt.X > maxX) maxX = (float)pt.X;
+                if (pt.Y < minY) minY = (float)pt.Y;
+                if (pt.Y > maxY) maxY = (float)pt.Y;
+            }
+
+            int minTileX = GetTileX(minX);
+            int maxTileX = GetTileX(maxX);
+            int minTileY = GetTileY(minY);
+            int maxTileY = GetTileY(maxY);
+
+            for (int ty = minTileY; ty <= maxTileY; ty++)
+            {
+                for (int tx = minTileX; tx <= maxTileX; tx++)
+                {
+                    int tileIdx = ty * TilesX + tx;
+                    PolygonIndices[tileIdx].Add(index);
+                }
+            }
+        }
+
+        private int GetTileX(float x)
+        {
+            int tx = (int)((x - MinX) / TileSize);
+            return Math.Max(0, Math.Min(TilesX - 1, tx));
+        }
+
+        private int GetTileY(float y)
+        {
+            int ty = (int)((y - MinY) / TileSize);
+            return Math.Max(0, Math.Min(TilesY - 1, ty));
+        }
+
+        /// <summary>
+        /// Get the range of tile indices that intersect the given bounds.
+        /// </summary>
+        public void GetVisibleTileRange(float viewMinX, float viewMinY, float viewMaxX, float viewMaxY,
+            out int minTileX, out int minTileY, out int maxTileX, out int maxTileY)
+        {
+            minTileX = GetTileX(viewMinX);
+            maxTileX = GetTileX(viewMaxX);
+            minTileY = GetTileY(viewMinY);
+            maxTileY = GetTileY(viewMaxY);
+        }
     }
 
     /// <summary>

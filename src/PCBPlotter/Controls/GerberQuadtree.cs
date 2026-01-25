@@ -27,7 +27,8 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Insert a primitive into the quadtree
+        /// Insert a primitive into the quadtree.
+        /// Uses loose quadtree pattern: primitives that span child boundaries stay at parent.
         /// </summary>
         public void Insert(GerberPrimitive prim)
         {
@@ -39,8 +40,18 @@ namespace PCBPlotter.Controls
             {
                 if (_children != null)
                 {
-                    foreach (var child in _children)
-                        child.Insert(prim);
+                    // Find which child(ren) the primitive intersects
+                    int targetChild = GetContainingChild(primBounds);
+                    if (targetChild >= 0)
+                    {
+                        // Primitive fits entirely in one child - insert there
+                        _children[targetChild].Insert(prim);
+                    }
+                    else
+                    {
+                        // Primitive spans multiple children - store at this level
+                        _items.Add(prim);
+                    }
                     return;
                 }
 
@@ -51,6 +62,28 @@ namespace PCBPlotter.Controls
                     Subdivide();
                 }
             }
+        }
+
+        /// <summary>
+        /// Returns the index of the child that fully contains the bounds, or -1 if spans multiple children.
+        /// </summary>
+        private int GetContainingChild(Rect primBounds)
+        {
+            double midX = _bounds.X + _bounds.Width / 2;
+            double midY = _bounds.Y + _bounds.Height / 2;
+
+            bool fitsLeft = primBounds.Right <= midX;
+            bool fitsRight = primBounds.Left >= midX;
+            bool fitsBottom = primBounds.Top <= midY;
+            bool fitsTop = primBounds.Bottom >= midY;
+
+            // Child layout: 0=bottomLeft, 1=bottomRight, 2=topLeft, 3=topRight
+            if (fitsLeft && fitsBottom) return 0;
+            if (fitsRight && fitsBottom) return 1;
+            if (fitsLeft && fitsTop) return 2;
+            if (fitsRight && fitsTop) return 3;
+
+            return -1; // Spans multiple quadrants
         }
 
         private void Subdivide()
@@ -66,13 +99,24 @@ namespace PCBPlotter.Controls
             _children[2] = new GerberQuadtree(new Rect(x, y + halfH, halfW, halfH), _depth + 1);
             _children[3] = new GerberQuadtree(new Rect(x + halfW, y + halfH, halfW, halfH), _depth + 1);
 
+            // Re-insert items - those that fit in one child go there, others stay here
+            var itemsToKeep = new List<GerberPrimitive>();
             foreach (var item in _items)
             {
-                foreach (var child in _children)
-                    child.Insert(item);
+                var itemBounds = item.GetBounds();
+                int targetChild = GetContainingChild(itemBounds);
+                if (targetChild >= 0)
+                {
+                    _children[targetChild].Insert(item);
+                }
+                else
+                {
+                    // Spans multiple children - keep at this level
+                    itemsToKeep.Add(item);
+                }
             }
 
-            _items.Clear();
+            _items = itemsToKeep;
         }
 
         /// <summary>
@@ -103,18 +147,18 @@ namespace PCBPlotter.Controls
 
             lock (_lock)
             {
+                // Always check items at this node (loose quadtree stores spanning items here)
+                foreach (var item in _items)
+                {
+                    if (rect.IntersectsWith(item.GetBounds()))
+                        results.Add(item);
+                }
+
+                // If subdivided, recurse into children
                 if (_children != null)
                 {
                     foreach (var child in _children)
                         child.QueryRect(rect, results);
-                }
-                else
-                {
-                    foreach (var item in _items)
-                    {
-                        if (rect.IntersectsWith(item.GetBounds()))
-                            results.Add(item);
-                    }
                 }
             }
         }
