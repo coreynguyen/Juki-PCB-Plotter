@@ -320,10 +320,8 @@ namespace PCBPlotter.Controls
 
                 // Bind shared circle geometry VBO for position/texcoord (locations 0, 1)
                 int originalVao = circleBuffer.VAO;
-                int[] vboBinding = new int[1];
-                GL.GetVertexArrayIndexediv(originalVao, 0, VertexArrayIntegerParameter.VertexAttribRelativeOffset, out int _);
 
-                // Actually, let's just manually rebind what we need:
+                // Query the original VAO's buffers (uses OpenGL 2.0+ compatible calls)
                 // The GeometryBuffer VAO has the EBO bound, so we can query it
                 GL.BindVertexArray(originalVao);
                 GL.GetInteger(GetPName.ElementArrayBufferBinding, out int eboId);

@@ -1330,6 +1330,7 @@ void main()
                 switch (prim.Type)
                 {
                     case GerberPrimitiveType.Circle:
+                    case GerberPrimitiveType.Flash:
                         cache.Circles.Add(new CachedCircle
                         {
                             X = (float)prim.X,
