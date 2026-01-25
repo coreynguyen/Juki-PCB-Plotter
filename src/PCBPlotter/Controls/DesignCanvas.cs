@@ -1284,24 +1284,16 @@ namespace PCBPlotter.Controls
                     break;
 
                 case GerberPrimitiveType.Polygon:
+                    if (prim.Points != null && prim.Points.Count >= 3)
                     {
-                        int vertices = 6;
-                        double radius = screenWidth / 2;
-                        double startAngle = prim.Rotation * Math.PI / 180;
-
                         var geometry = new StreamGeometry();
                         using (var ctx = geometry.Open())
                         {
-                            for (int i = 0; i <= vertices; i++)
+                            Point first = WorldToScreen(prim.Points[0]);
+                            ctx.BeginFigure(first, true, true);
+                            for (int i = 1; i < prim.Points.Count; i++)
                             {
-                                double angle = startAngle + (2 * Math.PI * i / vertices);
-                                double px = screenCenter.X + radius * Math.Cos(angle);
-                                double py = screenCenter.Y - radius * Math.Sin(angle);
-
-                                if (i == 0)
-                                    ctx.BeginFigure(new Point(px, py), true, true);
-                                else
-                                    ctx.LineTo(new Point(px, py), true, false);
+                                ctx.LineTo(WorldToScreen(prim.Points[i]), true, false);
                             }
                         }
                         geometry.Freeze();

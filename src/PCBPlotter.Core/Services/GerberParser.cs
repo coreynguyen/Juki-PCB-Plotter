@@ -652,7 +652,20 @@ namespace PCBPlotter.Core.Services
                     prim.Width = aperture.Diameter;
                     prim.Height = aperture.Diameter;
                     prim.Rotation = aperture.Rotation;
-                    // Store vertex count in a way we can use during rendering
+                    // Generate polygon vertices
+                    {
+                        int numVertices = aperture.Vertices > 2 ? aperture.Vertices : 4;
+                        double radius = aperture.Diameter / 2.0;
+                        double startAngle = aperture.Rotation * Math.PI / 180.0;
+                        prim.Points = new List<Point>(numVertices);
+                        for (int i = 0; i < numVertices; i++)
+                        {
+                            double angle = startAngle + (2.0 * Math.PI * i / numVertices);
+                            double px = x + radius * Math.Cos(angle);
+                            double py = y + radius * Math.Sin(angle);
+                            prim.Points.Add(new Point(px, py));
+                        }
+                    }
                     break;
 
                 case ApertureType.Macro:
