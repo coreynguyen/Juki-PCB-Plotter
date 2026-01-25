@@ -42,8 +42,11 @@ namespace PCBPlotter.Controls
         // Framebuffers for layer compositing
         private int _layerFbo;
         private int _layerTexture;
-        private int _compositeFbo;
-        private int _compositeTexture;
+        private int _compositeFboA;
+        private int _compositeTextureA;
+        private int _compositeFboB;
+        private int _compositeTextureB;
+        private bool _useCompositeA = true; // Ping-pong flag
         private int _screenBlendShader;
         private int _quadVao;
         private int _quadVbo;
@@ -320,8 +323,10 @@ namespace PCBPlotter.Controls
                 if (_quadVbo != 0) GL.DeleteBuffer(_quadVbo);
                 if (_layerFbo != 0) GL.DeleteFramebuffer(_layerFbo);
                 if (_layerTexture != 0) GL.DeleteTexture(_layerTexture);
-                if (_compositeFbo != 0) GL.DeleteFramebuffer(_compositeFbo);
-                if (_compositeTexture != 0) GL.DeleteTexture(_compositeTexture);
+                if (_compositeFboA != 0) GL.DeleteFramebuffer(_compositeFboA);
+                if (_compositeTextureA != 0) GL.DeleteTexture(_compositeTextureA);
+                if (_compositeFboB != 0) GL.DeleteFramebuffer(_compositeFboB);
+                if (_compositeTextureB != 0) GL.DeleteTexture(_compositeTextureB);
             }
 
             _host?.Dispose();
@@ -562,8 +567,10 @@ void main()
             // Delete old framebuffers
             if (_layerFbo != 0) GL.DeleteFramebuffer(_layerFbo);
             if (_layerTexture != 0) GL.DeleteTexture(_layerTexture);
-            if (_compositeFbo != 0) GL.DeleteFramebuffer(_compositeFbo);
-            if (_compositeTexture != 0) GL.DeleteTexture(_compositeTexture);
+            if (_compositeFboA != 0) GL.DeleteFramebuffer(_compositeFboA);
+            if (_compositeTextureA != 0) GL.DeleteTexture(_compositeTextureA);
+            if (_compositeFboB != 0) GL.DeleteFramebuffer(_compositeFboB);
+            if (_compositeTextureB != 0) GL.DeleteTexture(_compositeTextureB);
 
             // Create layer render target
             _layerTexture = GL.GenTexture();
@@ -576,16 +583,27 @@ void main()
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, _layerFbo);
             GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _layerTexture, 0);
 
-            // Create composite render target
-            _compositeTexture = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, _compositeTexture);
+            // Create composite render target A (ping-pong buffer)
+            _compositeTextureA = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, _compositeTextureA);
             GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, _lastWidth, _lastHeight, 0, OpenTK.Graphics.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
 
-            _compositeFbo = GL.GenFramebuffer();
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _compositeFbo);
-            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _compositeTexture, 0);
+            _compositeFboA = GL.GenFramebuffer();
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _compositeFboA);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _compositeTextureA, 0);
+
+            // Create composite render target B (ping-pong buffer)
+            _compositeTextureB = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, _compositeTextureB);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, _lastWidth, _lastHeight, 0, OpenTK.Graphics.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+
+            _compositeFboB = GL.GenFramebuffer();
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _compositeFboB);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _compositeTextureB, 0);
 
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         }
@@ -671,10 +689,11 @@ void main()
 
         private void RenderLayersWithScreenBlend()
         {
-            if (_layerFbo == 0 || _compositeFbo == 0) return;
+            if (_layerFbo == 0 || _compositeFboA == 0 || _compositeFboB == 0) return;
 
-            // Initialize composite with background
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _compositeFbo);
+            // Initialize composite A with background
+            _useCompositeA = true;
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _compositeFboA);
             var bg = BackgroundColor;
             GL.ClearColor(bg.R / 255f, bg.G / 255f, bg.B / 255f, 1.0f);
             GL.Clear(ClearBufferMask.ColorBufferBit);
@@ -699,12 +718,16 @@ void main()
 
                 RenderLayer(layer, visibleBounds);
 
+                // Ping-pong: read from current composite, write to other
+                int srcTexture = _useCompositeA ? _compositeTextureA : _compositeTextureB;
+                int dstFbo = _useCompositeA ? _compositeFboB : _compositeFboA;
+
                 // Blend layer onto composite using screen blend
-                GL.BindFramebuffer(FramebufferTarget.Framebuffer, _compositeFbo);
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, dstFbo);
                 GL.UseProgram(_screenBlendShader);
 
                 GL.ActiveTexture(TextureUnit.Texture0);
-                GL.BindTexture(TextureTarget.Texture2D, _compositeTexture);
+                GL.BindTexture(TextureTarget.Texture2D, srcTexture);
                 GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "baseTexture"), 0);
 
                 GL.ActiveTexture(TextureUnit.Texture1);
@@ -716,14 +739,20 @@ void main()
 
                 GL.BindVertexArray(_quadVao);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
+
+                // Swap buffers for next iteration
+                _useCompositeA = !_useCompositeA;
             }
+
+            // Final result is in the buffer we just wrote to (which is now the "current" one after swap)
+            int finalTexture = _useCompositeA ? _compositeTextureA : _compositeTextureB;
 
             // Blit composite to screen
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
             GL.UseProgram(_screenBlendShader);
 
             GL.ActiveTexture(TextureUnit.Texture0);
-            GL.BindTexture(TextureTarget.Texture2D, _compositeTexture);
+            GL.BindTexture(TextureTarget.Texture2D, finalTexture);
             GL.Uniform1(GL.GetUniformLocation(_screenBlendShader, "baseTexture"), 0);
 
             // Use a dummy texture for blend (just copy base)
