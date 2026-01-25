@@ -18,6 +18,13 @@ namespace PCBPlotter.Controls
         private int _instancedShader;
         private int _solidShader;
 
+        // Frustum culling
+        private FrustumCuller _frustumCuller;
+        private bool _useFrustumCulling = true;
+
+        // Render state caching
+        private RenderStateCache _stateCache;
+
         // Uniform locations
         private int _instancedProjLoc;
         private int _instancedViewLoc;
@@ -63,7 +70,31 @@ namespace PCBPlotter.Controls
             _dynamicBuffer = new GeometryBuffer(16384, 32768, 0, BufferUsageHint.StreamDraw);
             _dynamicBuffer.Initialize();
 
+            // Initialize frustum culler
+            _frustumCuller = new FrustumCuller();
+
+            // Initialize render state cache
+            _stateCache = new RenderStateCache();
+
             _isInitialized = true;
+        }
+
+        /// <summary>
+        /// Sets the view bounds for frustum culling.
+        /// Call this at the beginning of each frame with the current view parameters.
+        /// </summary>
+        public void SetViewBounds(System.Windows.Rect viewBounds, double zoom)
+        {
+            _frustumCuller?.SetViewBounds(viewBounds, zoom);
+        }
+
+        /// <summary>
+        /// Enables or disables frustum culling.
+        /// </summary>
+        public bool UseFrustumCulling
+        {
+            get => _useFrustumCulling;
+            set => _useFrustumCulling = value;
         }
 
         private void CreateInstancedShader()
@@ -191,6 +222,9 @@ void main()
 
             _geometryCache.ClearInstances();
             _dynamicBuffer.Clear();
+
+            _stateCache?.BeginFrame();
+            _frustumCuller?.ResetStats();
         }
 
         /// <summary>
@@ -198,6 +232,13 @@ void main()
         /// </summary>
         public void AddCircle(float x, float y, float radius, Vector4 color)
         {
+            // Frustum culling check
+            if (_useFrustumCulling && _frustumCuller != null)
+            {
+                if (!_frustumCuller.IsVisible(x, y, radius))
+                    return;
+            }
+
             _geometryCache.AddCircle(x, y, radius, color.X, color.Y, color.Z, color.W);
         }
 
@@ -206,6 +247,13 @@ void main()
         /// </summary>
         public void AddRectangle(float x, float y, float width, float height, Vector4 color)
         {
+            // Frustum culling check
+            if (_useFrustumCulling && _frustumCuller != null)
+            {
+                if (!_frustumCuller.IsVisible(x, y, width, height))
+                    return;
+            }
+
             _geometryCache.AddRectangle(x, y, width, height, color.X, color.Y, color.Z, color.W);
         }
 
@@ -248,6 +296,13 @@ void main()
         /// </summary>
         public void AddLine(float x1, float y1, float x2, float y2, float width, Vector4 color)
         {
+            // Frustum culling check
+            if (_useFrustumCulling && _frustumCuller != null)
+            {
+                if (!_frustumCuller.IsLineVisible(x1, y1, x2, y2, width))
+                    return;
+            }
+
             float dx = x2 - x1;
             float dy = y2 - y1;
             float len = (float)Math.Sqrt(dx * dx + dy * dy);
@@ -274,6 +329,13 @@ void main()
         {
             if (points.Count < 3) return;
 
+            // Frustum culling check
+            if (_useFrustumCulling && _frustumCuller != null)
+            {
+                if (!_frustumCuller.IsPolygonVisible(points))
+                    return;
+            }
+
             _polygonBatches.Add(new PolygonBatch
             {
                 Points = points,
@@ -289,11 +351,12 @@ void main()
             // Upload instanced geometry
             _geometryCache.Upload();
 
-            // Render instanced circles
-            GL.UseProgram(_instancedShader);
-            GL.UniformMatrix4(_instancedProjLoc, false, ref projection);
-            GL.UniformMatrix4(_instancedViewLoc, false, ref view);
+            // Use state cache for efficient state management
+            _stateCache.UseProgram(_instancedShader);
+            _stateCache.SetProjectionMatrix(_instancedProjLoc, ref projection);
+            _stateCache.SetViewMatrix(_instancedViewLoc, ref view);
 
+            // Render instanced circles
             _geometryCache.DrawCircles();
             if (_geometryCache.CircleCount > 0)
             {
@@ -301,7 +364,7 @@ void main()
                 _trianglesRendered += _geometryCache.CircleCount * CIRCLE_SEGMENTS;
             }
 
-            // Render instanced rectangles
+            // Render instanced rectangles (same shader, no state change needed)
             _geometryCache.DrawRectangles();
             if (_geometryCache.RectangleCount > 0)
             {
@@ -309,7 +372,7 @@ void main()
                 _trianglesRendered += _geometryCache.RectangleCount * 2;
             }
 
-            // Render lines (each line is a batch for now)
+            // Render lines
             RenderLines(projection, view);
 
             // Render polygons
@@ -342,17 +405,17 @@ void main()
 
             _dynamicBuffer.Upload();
 
-            // Render with solid shader
-            GL.UseProgram(_solidShader);
-            GL.UniformMatrix4(_solidProjLoc, false, ref projection);
-            GL.UniformMatrix4(_solidViewLoc, false, ref view);
+            // Render with solid shader using state cache
+            _stateCache.UseProgram(_solidShader);
+            _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
+            _stateCache.SetViewMatrix(_solidViewLoc, ref view);
 
             // For now, render all lines with the color of the first line
             // A more sophisticated approach would batch by color
             if (_lineBatches.Count > 0)
             {
                 var color = _lineBatches[0].Color;
-                GL.Uniform4(_solidColorLoc, color.X, color.Y, color.Z, color.W);
+                _stateCache.SetColor(_solidColorLoc, color);
             }
 
             _dynamicBuffer.Draw();
@@ -386,9 +449,10 @@ void main()
         {
             if (_polygonBatches.Count == 0) return;
 
-            GL.UseProgram(_solidShader);
-            GL.UniformMatrix4(_solidProjLoc, false, ref projection);
-            GL.UniformMatrix4(_solidViewLoc, false, ref view);
+            // Use state cache - shader may already be bound from lines
+            _stateCache.UseProgram(_solidShader);
+            _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
+            _stateCache.SetViewMatrix(_solidViewLoc, ref view);
 
             // Group polygons by color for batching
             var colorBatches = new Dictionary<uint, List<PolygonBatch>>();
@@ -425,7 +489,7 @@ void main()
                 _dynamicBuffer.Upload();
 
                 var color = kvp.Value[0].Color;
-                GL.Uniform4(_solidColorLoc, color.X, color.Y, color.Z, color.W);
+                _stateCache.SetColor(_solidColorLoc, color);
 
                 _dynamicBuffer.Draw();
                 _drawCalls++;
@@ -447,7 +511,7 @@ void main()
         /// </summary>
         public RenderStats EndFrame()
         {
-            return new RenderStats
+            var stats = new RenderStats
             {
                 DrawCalls = _drawCalls,
                 TrianglesRendered = _trianglesRendered,
@@ -456,6 +520,39 @@ void main()
                 LineCount = _lineBatches.Count,
                 PolygonCount = _polygonBatches.Count
             };
+
+            // Include culling statistics
+            if (_frustumCuller != null)
+            {
+                var cullingStats = _frustumCuller.GetStats();
+                stats.CulledCount = cullingStats.CulledCount;
+                stats.LodFiltered = cullingStats.LodFiltered;
+            }
+
+            // Include state cache statistics
+            if (_stateCache != null)
+            {
+                var stateStats = _stateCache.GetStats();
+                stats.SkippedStateChanges = stateStats.SkippedStateChanges;
+            }
+
+            return stats;
+        }
+
+        /// <summary>
+        /// Gets the culling statistics for the current frame.
+        /// </summary>
+        public CullingStats GetCullingStats()
+        {
+            return _frustumCuller?.GetStats() ?? new CullingStats();
+        }
+
+        /// <summary>
+        /// Gets the render state statistics for the current frame.
+        /// </summary>
+        public RenderStateStats GetStateStats()
+        {
+            return _stateCache?.GetStats() ?? new RenderStateStats();
         }
 
         public void Dispose()
@@ -495,6 +592,8 @@ void main()
 #else
         // Stub implementation
         public void Initialize() { }
+        public void SetViewBounds(System.Windows.Rect viewBounds, double zoom) { }
+        public bool UseFrustumCulling { get; set; }
         public void BeginFrame() { }
         public void AddCircle(float x, float y, float radius, object color) { }
         public void AddRectangle(float x, float y, float width, float height, object color) { }
@@ -503,6 +602,8 @@ void main()
         public void AddPolygon(IList<System.Windows.Point> points, object color) { }
         public void Render(object projection, object view) { }
         public RenderStats EndFrame() => new RenderStats();
+        public CullingStats GetCullingStats() => new CullingStats();
+        public RenderStateStats GetStateStats() => new RenderStateStats();
         public void Dispose() { }
 #endif
     }
@@ -518,11 +619,18 @@ void main()
         public int RectangleCount;
         public int LineCount;
         public int PolygonCount;
+        public int CulledCount;
+        public int LodFiltered;
+        public int SkippedStateChanges;
+
+        public int TotalPrimitives => CircleCount + RectangleCount + LineCount + PolygonCount;
+        public int TotalCulled => CulledCount + LodFiltered;
 
         public override string ToString()
         {
             return $"Draw calls: {DrawCalls}, Triangles: {TrianglesRendered}, " +
-                   $"Circles: {CircleCount}, Rects: {RectangleCount}, Lines: {LineCount}, Polys: {PolygonCount}";
+                   $"Primitives: {TotalPrimitives} (Culled: {TotalCulled}), " +
+                   $"State skips: {SkippedStateChanges}";
         }
     }
 }

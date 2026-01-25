@@ -712,6 +712,9 @@ void main()
 
             if (_useModernPipeline && _batchRenderer != null)
             {
+                // Set view bounds for frustum culling
+                _batchRenderer.SetViewBounds(visibleBounds, Zoom);
+
                 // Modern batched rendering
                 _batchRenderer.BeginFrame();
 
@@ -755,6 +758,12 @@ void main()
             GL.Clear(ClearBufferMask.ColorBufferBit);
 
             var visibleBounds = GetVisibleBounds();
+
+            // Set view bounds for frustum culling (once before all layers)
+            if (_useModernPipeline && _batchRenderer != null)
+            {
+                _batchRenderer.SetViewBounds(visibleBounds, Zoom);
+            }
 
             foreach (var layer in GerberLayers)
             {
