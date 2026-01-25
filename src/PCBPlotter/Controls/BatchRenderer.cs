@@ -66,8 +66,9 @@ namespace PCBPlotter.Controls
             _geometryCache = new GeometryCache(CIRCLE_SEGMENTS);
             _geometryCache.Initialize();
 
-            // Initialize dynamic buffer
-            _dynamicBuffer = new GeometryBuffer(16384, 32768, 0, BufferUsageHint.StreamDraw);
+            // Initialize dynamic buffer with larger initial capacities to reduce reallocations
+            // PCB files often have many lines and polygons, so start with generous capacities
+            _dynamicBuffer = new GeometryBuffer(65536, 131072, 0, BufferUsageHint.StreamDraw);
             _dynamicBuffer.Initialize();
 
             // Initialize frustum culler

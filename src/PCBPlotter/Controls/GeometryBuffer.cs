@@ -267,13 +267,14 @@ namespace PCBPlotter.Controls
                 if (_vertexCount > _gpuVertexCapacity)
                 {
                     int newGpuCapacity = Math.Max(_vertexCount, _gpuVertexCapacity * 2);
-                    GL.BufferData(BufferTarget.ArrayBuffer, newGpuCapacity * VERTEX_SIZE * sizeof(float), _vertices, _usageHint);
+                    // CRITICAL FIX: Allocate GPU buffer without copying data first (IntPtr.Zero),
+                    // then use BufferSubData to copy only the valid data we have.
+                    // This prevents AccessViolationException when newGpuCapacity > _vertices.Length
+                    GL.BufferData(BufferTarget.ArrayBuffer, newGpuCapacity * VERTEX_SIZE * sizeof(float), IntPtr.Zero, _usageHint);
                     _gpuVertexCapacity = newGpuCapacity;
                 }
-                else
-                {
-                    GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, _vertexCount * VERTEX_SIZE * sizeof(float), _vertices);
-                }
+                // Always upload actual vertex data (only the data we have, not the full capacity)
+                GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, _vertexCount * VERTEX_SIZE * sizeof(float), _vertices);
             }
 
             // Upload indices
@@ -285,13 +286,12 @@ namespace PCBPlotter.Controls
                 if (_indexCount > _gpuIndexCapacity)
                 {
                     int newGpuCapacity = Math.Max(_indexCount, _gpuIndexCapacity * 2);
-                    GL.BufferData(BufferTarget.ElementArrayBuffer, newGpuCapacity * sizeof(uint), _indices, _usageHint);
+                    // CRITICAL FIX: Allocate without copying to prevent buffer overrun
+                    GL.BufferData(BufferTarget.ElementArrayBuffer, newGpuCapacity * sizeof(uint), IntPtr.Zero, _usageHint);
                     _gpuIndexCapacity = newGpuCapacity;
                 }
-                else
-                {
-                    GL.BufferSubData(BufferTarget.ElementArrayBuffer, IntPtr.Zero, _indexCount * sizeof(uint), _indices);
-                }
+                // Always upload actual index data
+                GL.BufferSubData(BufferTarget.ElementArrayBuffer, IntPtr.Zero, _indexCount * sizeof(uint), _indices);
             }
 
             // Upload instances
@@ -303,13 +303,12 @@ namespace PCBPlotter.Controls
                 if (_instanceCount > _gpuInstanceCapacity)
                 {
                     int newGpuCapacity = Math.Max(_instanceCount, _gpuInstanceCapacity * 2);
-                    GL.BufferData(BufferTarget.ArrayBuffer, newGpuCapacity * INSTANCE_SIZE * sizeof(float), _instances, BufferUsageHint.StreamDraw);
+                    // CRITICAL FIX: Allocate without copying to prevent buffer overrun
+                    GL.BufferData(BufferTarget.ArrayBuffer, newGpuCapacity * INSTANCE_SIZE * sizeof(float), IntPtr.Zero, BufferUsageHint.StreamDraw);
                     _gpuInstanceCapacity = newGpuCapacity;
                 }
-                else
-                {
-                    GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, _instanceCount * INSTANCE_SIZE * sizeof(float), _instances);
-                }
+                // Always upload actual instance data
+                GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, _instanceCount * INSTANCE_SIZE * sizeof(float), _instances);
             }
 
             GL.BindVertexArray(0);

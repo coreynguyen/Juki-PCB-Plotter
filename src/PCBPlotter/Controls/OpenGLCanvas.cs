@@ -82,6 +82,7 @@ namespace PCBPlotter.Controls
         private Matrix4 _projection;
         private Matrix4 _view;
         private bool _needsRebuild = true;
+        private bool _needsRedraw = true; // Dirty flag to avoid continuous rendering
         private int _lastWidth, _lastHeight;
 
         // Quadtrees for spatial indexing (parallel building)
@@ -315,15 +316,18 @@ namespace PCBPlotter.Controls
             _host = new WindowsFormsHost { Child = _glControl };
             Content = _host;
 
-            // Render timer (60 FPS target)
+            // Render timer - only render when dirty to reduce GPU load
             _renderTimer = new DispatcherTimer(DispatcherPriority.Render)
             {
                 Interval = TimeSpan.FromMilliseconds(16)
             };
             _renderTimer.Tick += (s, e) =>
             {
-                if (_glInitialized)
+                if (_glInitialized && _needsRedraw)
+                {
+                    _needsRedraw = false;
                     _glControl.Invalidate();
+                }
             };
             _renderTimer.Start();
         }
@@ -1285,10 +1289,7 @@ void main()
         public void Invalidate()
         {
 #if USE_OPENGL
-            if (_glControl != null && _glInitialized)
-            {
-                _glControl.Invalidate();
-            }
+            _needsRedraw = true;
 #endif
         }
 
