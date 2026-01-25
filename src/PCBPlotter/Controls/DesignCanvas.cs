@@ -521,6 +521,18 @@ namespace PCBPlotter.Controls
                 newCollection.CollectionChanged += canvas.OnGerberLayersCollectionChanged;
             }
 
+            // OPTIMIZATION: If this canvas is hidden (GPU mode active), clear data and return early.
+            // This prevents the CPU canvas from doing heavy quadtree building when not visible.
+            if (canvas.Visibility != Visibility.Visible)
+            {
+                canvas._layerQuadtrees.Clear();
+                canvas._worldBounds = Rect.Empty;
+                canvas._activeLayerQuadtree = null;
+                canvas._activeGerberLayer = null;
+                canvas._gerberCacheDirty = true;
+                return;
+            }
+
             // Clear all caches when layers change - quadtrees will be rebuilt on demand
             canvas._layerQuadtrees.Clear();
             canvas._worldBounds = Rect.Empty;
@@ -536,7 +548,12 @@ namespace PCBPlotter.Controls
             // Removed layers will be cleaned up when quadtrees are rebuilt
             _gerberCacheDirty = true;
             _layerQuadtrees.Clear();
-            InvalidateVisual();
+
+            // OPTIMIZATION: Skip invalidation if not visible (GPU mode active)
+            if (Visibility == Visibility.Visible)
+            {
+                InvalidateVisual();
+            }
         }
 
         #region Visual Tree

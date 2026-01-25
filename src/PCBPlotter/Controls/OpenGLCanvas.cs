@@ -114,6 +114,9 @@ namespace PCBPlotter.Controls
         private HashSet<string> _pendingCacheBuilds = new HashSet<string>();
         private object _cacheLock = new object();
 
+        // Track disposal state to prevent background tasks from accessing disposed resources
+        private volatile bool _isDisposed = false;
+
         // Mouse interaction
         private Point _lastMousePosition;
         private Point _panStart;
@@ -439,6 +442,9 @@ namespace PCBPlotter.Controls
 
         private void CleanupOpenGL()
         {
+            // Mark as disposed FIRST to stop background tasks from accessing resources
+            _isDisposed = true;
+
             _renderTimer?.Stop();
 
             if (_glInitialized && _glControl != null)
@@ -1163,12 +1169,15 @@ void main()
                         // Update UI on main thread
                         Dispatcher.BeginInvoke(new Action(() =>
                         {
+                            // Check if control was disposed while background task was running
+                            if (_isDisposed) return;
+
                             lock (_cacheLock)
                             {
                                 _layerGeometryCache[layerId] = newCache;
 
                                 // Invalidate static GPU buffers when cache is rebuilt
-                                _batchRenderer.InvalidateStaticBuffers(layerId);
+                                _batchRenderer?.InvalidateStaticBuffers(layerId);
 
                                 // Invalidate static layer renderer when cache is rebuilt
                                 if (_staticLayerRenderers.TryGetValue(layerId, out var oldRenderer))
@@ -1184,11 +1193,34 @@ void main()
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Error building cache for layer {layerId}: {ex.Message}");
-                        lock (_cacheLock)
+                        // LOG THE FULL ERROR so you can see it in Visual Studio Output window
+                        System.Diagnostics.Debug.WriteLine($"CRITICAL ERROR building cache for layer {layerId}: {ex}");
+
+                        // BREAK THE LOOP: Mark the cache as valid but empty so we stop trying to rebuild it
+                        // Without this, the next frame would see "no cache" and try again = infinite retry loop
+                        Dispatcher.BeginInvoke(new Action(() =>
                         {
-                            _pendingCacheBuilds.Remove(layerId);
-                        }
+                            // Check if control was disposed while background task was running
+                            if (_isDisposed) return;
+
+                            lock (_cacheLock)
+                            {
+                                // Create a "Dummy" empty cache to stop the infinite retry loop
+                                var failedCache = new LayerGeometryCache
+                                {
+                                    LayerId = layerId,
+                                    IsValid = true, // Lie to the system to stop retrying
+                                    PrimitiveCount = 0,
+                                    Circles = new List<CachedCircle>(),
+                                    Rectangles = new List<CachedRectangle>(),
+                                    Lines = new List<CachedLine>(),
+                                    Polygons = new List<CachedPolygon>()
+                                };
+                                _layerGeometryCache[layerId] = failedCache;
+
+                                _pendingCacheBuilds.Remove(layerId);
+                            }
+                        }));
                     }
                 });
 
