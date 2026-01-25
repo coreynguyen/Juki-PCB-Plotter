@@ -37,6 +37,12 @@ namespace PCBPlotter.Controls
             public int CircleInstanceVbo;
             public int RectInstanceVbo;
 
+            // Dedicated VAOs for this tile (avoids state conflicts with BatchRenderer)
+            // Each VAO has its own vertex attribute bindings, so we don't interfere
+            // with the shared GeometryCache's VAO state
+            public int CircleVao;
+            public int RectVao;
+
             public bool IsUploaded;
         }
 
@@ -57,6 +63,7 @@ namespace PCBPlotter.Controls
         private int _instancedShader;
         private int _projLoc;
         private int _viewLoc;
+        private int _opacityLoc;
 
         private bool _isInitialized;
         private string _layerId;
@@ -71,13 +78,14 @@ namespace PCBPlotter.Controls
         /// <summary>
         /// Creates a new static layer renderer.
         /// </summary>
-        public StaticLayerRenderer(string layerId, GeometryCache geometryCache, int instancedShader, int projLoc, int viewLoc)
+        public StaticLayerRenderer(string layerId, GeometryCache geometryCache, int instancedShader, int projLoc, int viewLoc, int opacityLoc)
         {
             _layerId = layerId;
             _geometryCache = geometryCache;
             _instancedShader = instancedShader;
             _projLoc = projLoc;
             _viewLoc = viewLoc;
+            _opacityLoc = opacityLoc;
         }
 
         /// <summary>
@@ -112,14 +120,18 @@ namespace PCBPlotter.Controls
             float area = boundsWidth * boundsHeight;
             float density = totalPrimitives / Math.Max(area, 1f);
 
-            // Target ~1000-2000 primitives per tile
-            float targetPrimsPerTile = 1500f;
+            // MEGA-TILE FIX: Target ~50000 primitives per tile instead of 1500
+            // Modern GPUs prefer large batches - 50k instances per draw call is much better
+            // than thousands of small draw calls with 1.5k instances each.
+            // This reduces draw call overhead by ~30x.
+            float targetPrimsPerTile = 50000f;
             float targetTileArea = targetPrimsPerTile / Math.Max(density, 0.001f);
             _tileSize = (float)Math.Sqrt(targetTileArea);
 
             // Clamp tile size to reasonable bounds
-            _tileSize = Math.Max(_tileSize, Math.Max(boundsWidth, boundsHeight) / 50f); // At least 50 tiles
-            _tileSize = Math.Min(_tileSize, Math.Max(boundsWidth, boundsHeight) / 2f);   // At most 4 tiles
+            // With 50k target, we want fewer, larger tiles
+            _tileSize = Math.Max(_tileSize, Math.Max(boundsWidth, boundsHeight) / 10f); // At most 10x10 = 100 tiles
+            _tileSize = Math.Min(_tileSize, Math.Max(boundsWidth, boundsHeight));        // At least 1 tile
             _tileSize = Math.Max(_tileSize, 10f); // Minimum 10mm tiles
 
             _originX = boundsX;
@@ -128,10 +140,12 @@ namespace PCBPlotter.Controls
             _tilesX = Math.Max(1, (int)Math.Ceiling(boundsWidth / _tileSize));
             _tilesY = Math.Max(1, (int)Math.Ceiling(boundsHeight / _tileSize));
 
-            // Cap total tiles at 2500 (50x50 grid)
-            if (_tilesX * _tilesY > 2500)
+            // Cap total tiles at 100 (10x10 grid) for mega-tile approach
+            // With 50k primitives per tile target, 100 tiles can handle 5M primitives
+            // This drastically reduces draw call overhead
+            if (_tilesX * _tilesY > 100)
             {
-                float scale = (float)Math.Sqrt(2500.0 / (_tilesX * _tilesY));
+                float scale = (float)Math.Sqrt(100.0 / (_tilesX * _tilesY));
                 _tilesX = Math.Max(1, (int)(_tilesX * scale));
                 _tilesY = Math.Max(1, (int)(_tilesY * scale));
                 _tileSize = Math.Max(boundsWidth / _tilesX, boundsHeight / _tilesY);
@@ -216,7 +230,9 @@ namespace PCBPlotter.Controls
                         tile.CircleInstances[offset + 4] = _layerColor.X; // R
                         tile.CircleInstances[offset + 5] = _layerColor.Y; // G
                         tile.CircleInstances[offset + 6] = _layerColor.Z; // B
-                        tile.CircleInstances[offset + 7] = _layerColor.W; // A
+                        // Store alpha = 1.0, opacity is applied via shader uniform
+                        // This allows changing opacity without rebuilding GPU buffers
+                        tile.CircleInstances[offset + 7] = 1.0f;
                     }
                     _tilesWithData++;
                 }
@@ -235,7 +251,8 @@ namespace PCBPlotter.Controls
                         tile.RectInstances[offset + 4] = _layerColor.X; // R
                         tile.RectInstances[offset + 5] = _layerColor.Y; // G
                         tile.RectInstances[offset + 6] = _layerColor.Z; // B
-                        tile.RectInstances[offset + 7] = _layerColor.W; // A
+                        // Store alpha = 1.0, opacity is applied via shader uniform
+                        tile.RectInstances[offset + 7] = 1.0f;
                     }
                     if (tile.CircleCount == 0) _tilesWithData++;
                 }
@@ -261,16 +278,21 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Uploads tile instance data to GPU. Call this from the GL context.
+        /// Uploads tile instance data to GPU and creates dedicated VAOs.
         /// This is done lazily on first render, not during Initialize().
+        /// Creating dedicated VAOs avoids state conflicts with BatchRenderer's shared VAOs.
         /// </summary>
         private void UploadTileToGpu(Tile tile)
         {
             if (tile.IsUploaded) return;
 
-            // Upload circle instances
+            var circleBuffer = _geometryCache.CircleBuffer;
+            var rectBuffer = _geometryCache.RectangleBuffer;
+
+            // Upload circle instances and create dedicated VAO
             if (tile.CircleCount > 0 && tile.CircleInstances != null)
             {
+                // Create instance VBO
                 tile.CircleInstanceVbo = GL.GenBuffer();
                 GL.BindBuffer(BufferTarget.ArrayBuffer, tile.CircleInstanceVbo);
                 GL.BufferData(BufferTarget.ArrayBuffer,
@@ -278,19 +300,112 @@ namespace PCBPlotter.Controls
                     tile.CircleInstances,
                     BufferUsageHint.StaticDraw);
 
+                // Create dedicated VAO for this tile's circles
+                tile.CircleVao = GL.GenVertexArray();
+                GL.BindVertexArray(tile.CircleVao);
+
+                // Bind the base circle geometry VBO and set up vertex attributes
+                // (We need to get the VBO from the original VAO, but since GeometryBuffer
+                // stores it, we can access the VAO and rebind)
+                // For now, we bind the original VAO to copy the EBO binding
+                GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0); // Will rebind below
+
+                // Get the VBO handle - GeometryBuffer doesn't expose it directly,
+                // so we work around by querying the VAO state
+                // Actually, let's use a different approach: we manually set up the vertex format
+
+                // For position/texcoord, we need to bind the original VBO
+                // Since GeometryBuffer initializes with specific VBO, we need to access it
+                // Let's modify the approach: bind the shared VAO's buffers explicitly
+
+                // Bind shared circle geometry VBO for position/texcoord (locations 0, 1)
+                int originalVao = circleBuffer.VAO;
+                int[] vboBinding = new int[1];
+                GL.GetVertexArrayIndexediv(originalVao, 0, VertexArrayIntegerParameter.VertexAttribRelativeOffset, out int _);
+
+                // Actually, let's just manually rebind what we need:
+                // The GeometryBuffer VAO has the EBO bound, so we can query it
+                GL.BindVertexArray(originalVao);
+                GL.GetInteger(GetPName.ElementArrayBufferBinding, out int eboId);
+                GL.GetVertexAttrib(0, VertexAttribParameter.ArrayBufferBinding, out int vboId);
+
+                // Now set up our dedicated VAO
+                GL.BindVertexArray(tile.CircleVao);
+
+                // Bind the shared vertex VBO and set up vertex attributes
+                GL.BindBuffer(BufferTarget.ArrayBuffer, vboId);
+                GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 4 * sizeof(float), 0);
+                GL.EnableVertexAttribArray(0);
+                GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 4 * sizeof(float), 2 * sizeof(float));
+                GL.EnableVertexAttribArray(1);
+
+                // Bind our tile-specific instance VBO and set up instance attributes
+                GL.BindBuffer(BufferTarget.ArrayBuffer, tile.CircleInstanceVbo);
+                GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 0);
+                GL.EnableVertexAttribArray(2);
+                GL.VertexAttribDivisor(2, 1);
+                GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 2 * sizeof(float));
+                GL.EnableVertexAttribArray(3);
+                GL.VertexAttribDivisor(3, 1);
+                GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 4 * sizeof(float));
+                GL.EnableVertexAttribArray(4);
+                GL.VertexAttribDivisor(4, 1);
+
+                // Bind shared EBO
+                GL.BindBuffer(BufferTarget.ElementArrayBuffer, eboId);
+
+                GL.BindVertexArray(0);
+
                 // Free CPU memory after GPU upload
                 tile.CircleInstances = null;
             }
 
-            // Upload rectangle instances
+            // Upload rectangle instances and create dedicated VAO
             if (tile.RectCount > 0 && tile.RectInstances != null)
             {
+                // Create instance VBO
                 tile.RectInstanceVbo = GL.GenBuffer();
                 GL.BindBuffer(BufferTarget.ArrayBuffer, tile.RectInstanceVbo);
                 GL.BufferData(BufferTarget.ArrayBuffer,
                     tile.RectInstances.Length * sizeof(float),
                     tile.RectInstances,
                     BufferUsageHint.StaticDraw);
+
+                // Create dedicated VAO for this tile's rectangles
+                tile.RectVao = GL.GenVertexArray();
+
+                // Get VBO/EBO from original rectangle VAO
+                int originalRectVao = rectBuffer.VAO;
+                GL.BindVertexArray(originalRectVao);
+                GL.GetInteger(GetPName.ElementArrayBufferBinding, out int rectEboId);
+                GL.GetVertexAttrib(0, VertexAttribParameter.ArrayBufferBinding, out int rectVboId);
+
+                // Set up our dedicated VAO
+                GL.BindVertexArray(tile.RectVao);
+
+                // Bind shared vertex VBO
+                GL.BindBuffer(BufferTarget.ArrayBuffer, rectVboId);
+                GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 4 * sizeof(float), 0);
+                GL.EnableVertexAttribArray(0);
+                GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 4 * sizeof(float), 2 * sizeof(float));
+                GL.EnableVertexAttribArray(1);
+
+                // Bind tile-specific instance VBO
+                GL.BindBuffer(BufferTarget.ArrayBuffer, tile.RectInstanceVbo);
+                GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 0);
+                GL.EnableVertexAttribArray(2);
+                GL.VertexAttribDivisor(2, 1);
+                GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 2 * sizeof(float));
+                GL.EnableVertexAttribArray(3);
+                GL.VertexAttribDivisor(3, 1);
+                GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 4 * sizeof(float));
+                GL.EnableVertexAttribArray(4);
+                GL.VertexAttribDivisor(4, 1);
+
+                // Bind shared EBO
+                GL.BindBuffer(BufferTarget.ElementArrayBuffer, rectEboId);
+
+                GL.BindVertexArray(0);
 
                 // Free CPU memory after GPU upload
                 tile.RectInstances = null;
@@ -303,8 +418,9 @@ namespace PCBPlotter.Controls
         /// Renders visible tiles using pre-built GPU buffers.
         /// This is the hot path - no per-primitive C# iteration, just draw calls.
         /// </summary>
+        /// <param name="opacity">Layer opacity (0.0 to 1.0) - applied via shader uniform</param>
         /// <returns>Number of draw calls issued</returns>
-        public int Render(Matrix4 projection, Matrix4 view, float viewLeft, float viewBottom, float viewRight, float viewTop, float minVisibleSize, RenderStateCache stateCache)
+        public int Render(Matrix4 projection, Matrix4 view, float viewLeft, float viewBottom, float viewRight, float viewTop, float minVisibleSize, RenderStateCache stateCache, float opacity = 1.0f)
         {
             if (!_isInitialized || _tiles.Count == 0) return 0;
 
@@ -314,6 +430,9 @@ namespace PCBPlotter.Controls
             stateCache.UseProgram(_instancedShader);
             stateCache.SetProjectionMatrix(_projLoc, ref projection);
             stateCache.SetViewMatrix(_viewLoc, ref view);
+
+            // Set opacity uniform - allows changing layer opacity without rebuilding GPU buffers
+            GL.Uniform1(_opacityLoc, opacity);
 
             // Calculate visible tile range (O(1) calculation)
             int minTileX = Math.Max(0, (int)((viewLeft - _originX) / _tileSize));
@@ -359,32 +478,13 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Draws circles in a tile using pre-uploaded instance VBO.
+        /// Draws circles in a tile using dedicated VAO with pre-uploaded instance VBO.
+        /// Using dedicated VAO avoids state conflicts with BatchRenderer.
         /// </summary>
         private void DrawTileCircles(Tile tile)
         {
-            var circleBuffer = _geometryCache.CircleBuffer;
-
-            // Bind the circle base geometry VAO
-            GL.BindVertexArray(circleBuffer.VAO);
-
-            // Bind our tile-specific instance VBO and set up attributes
-            GL.BindBuffer(BufferTarget.ArrayBuffer, tile.CircleInstanceVbo);
-
-            // Instance position (location 2)
-            GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 0);
-            GL.EnableVertexAttribArray(2);
-            GL.VertexAttribDivisor(2, 1);
-
-            // Instance scale (location 3)
-            GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 2 * sizeof(float));
-            GL.EnableVertexAttribArray(3);
-            GL.VertexAttribDivisor(3, 1);
-
-            // Instance color (location 4)
-            GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 4 * sizeof(float));
-            GL.EnableVertexAttribArray(4);
-            GL.VertexAttribDivisor(4, 1);
+            // Bind our dedicated VAO (already has all attribute bindings set up)
+            GL.BindVertexArray(tile.CircleVao);
 
             // Draw all circles in this tile with one call
             // Circle has 32 segments * 3 indices = 96 indices
@@ -394,32 +494,13 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
-        /// Draws rectangles in a tile using pre-uploaded instance VBO.
+        /// Draws rectangles in a tile using dedicated VAO with pre-uploaded instance VBO.
+        /// Using dedicated VAO avoids state conflicts with BatchRenderer.
         /// </summary>
         private void DrawTileRectangles(Tile tile)
         {
-            var rectBuffer = _geometryCache.RectangleBuffer;
-
-            // Bind the rectangle base geometry VAO
-            GL.BindVertexArray(rectBuffer.VAO);
-
-            // Bind our tile-specific instance VBO and set up attributes
-            GL.BindBuffer(BufferTarget.ArrayBuffer, tile.RectInstanceVbo);
-
-            // Instance position (location 2)
-            GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 0);
-            GL.EnableVertexAttribArray(2);
-            GL.VertexAttribDivisor(2, 1);
-
-            // Instance scale (location 3)
-            GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 2 * sizeof(float));
-            GL.EnableVertexAttribArray(3);
-            GL.VertexAttribDivisor(3, 1);
-
-            // Instance color (location 4)
-            GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, INSTANCE_SIZE * sizeof(float), 4 * sizeof(float));
-            GL.EnableVertexAttribArray(4);
-            GL.VertexAttribDivisor(4, 1);
+            // Bind our dedicated VAO (already has all attribute bindings set up)
+            GL.BindVertexArray(tile.RectVao);
 
             // Draw all rectangles in this tile with one call
             // Rectangle has 6 indices
@@ -489,6 +570,7 @@ namespace PCBPlotter.Controls
         {
             foreach (var tile in _tiles)
             {
+                // Delete instance VBOs
                 if (tile.CircleInstanceVbo != 0)
                 {
                     GL.DeleteBuffer(tile.CircleInstanceVbo);
@@ -497,16 +579,25 @@ namespace PCBPlotter.Controls
                 {
                     GL.DeleteBuffer(tile.RectInstanceVbo);
                 }
+                // Delete dedicated VAOs
+                if (tile.CircleVao != 0)
+                {
+                    GL.DeleteVertexArray(tile.CircleVao);
+                }
+                if (tile.RectVao != 0)
+                {
+                    GL.DeleteVertexArray(tile.RectVao);
+                }
             }
             _tiles.Clear();
             _isInitialized = false;
         }
 #else
         // Stub implementation when OpenGL is not available
-        public StaticLayerRenderer(string layerId, GeometryCache geometryCache, int instancedShader, int projLoc, int viewLoc) { }
+        public StaticLayerRenderer(string layerId, GeometryCache geometryCache, int instancedShader, int projLoc, int viewLoc, int opacityLoc) { }
         public void Initialize(IList<CachedCircle> circles, IList<CachedRectangle> rectangles,
             float boundsX, float boundsY, float boundsWidth, float boundsHeight, object layerColor) { }
-        public int Render(object projection, object view, float viewLeft, float viewBottom, float viewRight, float viewTop, float minVisibleSize, RenderStateCache stateCache) => 0;
+        public int Render(object projection, object view, float viewLeft, float viewBottom, float viewRight, float viewTop, float minVisibleSize, RenderStateCache stateCache, float opacity = 1.0f) => 0;
         public void UpdateColor(object newColor) { }
         public bool IsInitialized => false;
         public int TotalCircles => 0;

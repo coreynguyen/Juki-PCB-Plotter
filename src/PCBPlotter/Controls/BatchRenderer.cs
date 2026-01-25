@@ -28,6 +28,7 @@ namespace PCBPlotter.Controls
         // Uniform locations
         private int _instancedProjLoc;
         private int _instancedViewLoc;
+        private int _instancedOpacityLoc;
         private int _solidProjLoc;
         private int _solidViewLoc;
         private int _solidColorLoc;
@@ -127,19 +128,24 @@ void main()
 }
 ";
 
+            // Fragment shader with opacity uniform to allow changing layer opacity
+            // without rebuilding instance data
             string fragmentSource = @"#version 330 core
 in vec4 vertexColor;
 out vec4 FragColor;
 
+uniform float opacity;
+
 void main()
 {
-    FragColor = vertexColor;
+    FragColor = vec4(vertexColor.rgb, vertexColor.a * opacity);
 }
 ";
 
             _instancedShader = CreateShaderProgram(vertexSource, fragmentSource);
             _instancedProjLoc = GL.GetUniformLocation(_instancedShader, "projection");
             _instancedViewLoc = GL.GetUniformLocation(_instancedShader, "view");
+            _instancedOpacityLoc = GL.GetUniformLocation(_instancedShader, "opacity");
         }
 
         private void CreateSolidShader()
@@ -765,6 +771,12 @@ void main()
         public int InstancedViewLocation => _instancedViewLoc;
 
         /// <summary>
+        /// Gets the opacity uniform location for the instanced shader.
+        /// Allows changing layer opacity without rebuilding instance data.
+        /// </summary>
+        public int InstancedOpacityLocation => _instancedOpacityLoc;
+
+        /// <summary>
         /// Gets the geometry cache containing base primitives (unit circle, unit rectangle).
         /// </summary>
         public GeometryCache GeometryCache => _geometryCache;
@@ -858,6 +870,7 @@ void main()
         public int SolidShader => 0;
         public int InstancedProjectionLocation => 0;
         public int InstancedViewLocation => 0;
+        public int InstancedOpacityLocation => 0;
         public GeometryCache GeometryCache => null;
         public RenderStateCache StateCache => null;
         public void Dispose() { }

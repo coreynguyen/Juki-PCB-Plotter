@@ -56,10 +56,16 @@ namespace PCBPlotter.Controls
         private int _quadVao;
         private int _quadVbo;
 
-        // Uniform locations
+        // Uniform locations (basic shader)
         private int _projectionLoc;
         private int _viewLoc;
         private int _colorLoc;
+
+        // Cached uniform locations for screen blend shader (avoid GetUniformLocation in render loop)
+        private int _screenBlendBaseTextureLoc;
+        private int _screenBlendBlendTextureLoc;
+        private int _screenBlendModeLoc;
+        private int _screenBlendOpacityLoc;
 
         // Geometry batches for different primitive types
         private List<float> _circleVertices = new List<float>();
@@ -559,6 +565,12 @@ void main()
 ";
 
             _screenBlendShader = CreateShaderProgram(vertexSource, fragmentSource);
+
+            // Cache uniform locations to avoid GetUniformLocation calls in render loop
+            _screenBlendBaseTextureLoc = GL.GetUniformLocation(_screenBlendShader, "baseTexture");
+            _screenBlendBlendTextureLoc = GL.GetUniformLocation(_screenBlendShader, "blendTexture");
+            _screenBlendModeLoc = GL.GetUniformLocation(_screenBlendShader, "blendMode");
+            _screenBlendOpacityLoc = GL.GetUniformLocation(_screenBlendShader, "opacity");
         }
 
         private void InitializeQuadVAO()
@@ -901,11 +913,8 @@ void main()
                 _batchRenderer.SetViewBounds(visibleBounds, Zoom);
             }
 
-            // Cache uniform locations to avoid repeated lookups
-            int baseTextureLoc = GL.GetUniformLocation(_screenBlendShader, "baseTexture");
-            int blendTextureLoc = GL.GetUniformLocation(_screenBlendShader, "blendTexture");
-            int blendModeLoc = GL.GetUniformLocation(_screenBlendShader, "blendMode");
-            int opacityLoc = GL.GetUniformLocation(_screenBlendShader, "opacity");
+            // Use cached uniform locations (initialized in InitializeScreenBlendShader)
+            // This avoids expensive GL.GetUniformLocation calls in the render loop
 
             foreach (var layer in GerberLayers)
             {
@@ -946,14 +955,14 @@ void main()
 
                 GL.ActiveTexture(TextureUnit.Texture0);
                 GL.BindTexture(TextureTarget.Texture2D, srcTexture);
-                GL.Uniform1(baseTextureLoc, 0);
+                GL.Uniform1(_screenBlendBaseTextureLoc, 0);
 
                 GL.ActiveTexture(TextureUnit.Texture1);
                 GL.BindTexture(TextureTarget.Texture2D, _layerTexture);
-                GL.Uniform1(blendTextureLoc, 1);
+                GL.Uniform1(_screenBlendBlendTextureLoc, 1);
 
-                GL.Uniform1(blendModeLoc, 1); // Screen blend
-                GL.Uniform1(opacityLoc, (float)layer.Opacity);
+                GL.Uniform1(_screenBlendModeLoc, 1); // Screen blend
+                GL.Uniform1(_screenBlendOpacityLoc, (float)layer.Opacity);
 
                 GL.BindVertexArray(_quadVao);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -971,13 +980,13 @@ void main()
 
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2D, finalTexture);
-            GL.Uniform1(baseTextureLoc, 0);
+            GL.Uniform1(_screenBlendBaseTextureLoc, 0);
 
             // Use a 1x1 transparent texture for blend instead of null (more reliable)
             GL.ActiveTexture(TextureUnit.Texture1);
             GL.BindTexture(TextureTarget.Texture2D, _layerTexture); // Reuse layer texture
-            GL.Uniform1(blendModeLoc, 0); // Normal (just copy)
-            GL.Uniform1(opacityLoc, 0.0f); // Zero opacity = pure passthrough
+            GL.Uniform1(_screenBlendModeLoc, 0); // Normal (just copy)
+            GL.Uniform1(_screenBlendOpacityLoc, 0.0f); // Zero opacity = pure passthrough
 
             GL.BindVertexArray(_quadVao);
             GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -1081,19 +1090,17 @@ void main()
             // Use static layer renderer for circles/rectangles (zero per-primitive C# iteration)
             if (_useStaticRendering && cache.Circles.Count + cache.Rectangles.Count > 0)
             {
-                // Check if we need to rebuild static renderer due to color/opacity change
-                bool needsStaticRebuild = false;
+                // Check if we need to rebuild static renderer due to COLOR change
+                // (Opacity is now handled via shader uniform, so no rebuild needed for opacity changes)
                 if (_staticLayerRenderers.TryGetValue(layer.Id, out var existingRenderer))
                 {
-                    // Color is baked into instance data, so we need to rebuild if it changed
-                    if (cache.ColorArgb != layer.ColorArgb || Math.Abs(cache.Opacity - layer.Opacity) > 0.001)
+                    // Only rebuild if color changed (opacity is handled via uniform)
+                    if (cache.ColorArgb != layer.ColorArgb)
                     {
                         existingRenderer.Dispose();
                         _staticLayerRenderers.Remove(layer.Id);
                         // Update cache color info
                         cache.ColorArgb = layer.ColorArgb;
-                        cache.Opacity = layer.Opacity;
-                        needsStaticRebuild = true;
                     }
                 }
 
@@ -1105,9 +1112,12 @@ void main()
                         _batchRenderer.GeometryCache,
                         _batchRenderer.InstancedShader,
                         _batchRenderer.InstancedProjectionLocation,
-                        _batchRenderer.InstancedViewLocation);
+                        _batchRenderer.InstancedViewLocation,
+                        _batchRenderer.InstancedOpacityLocation);
 
                     // Get layer bounds for tile partitioning
+                    // Note: color.W (opacity) is NOT baked into instance data anymore
+                    // It's applied via shader uniform in Render() for instant opacity changes
                     var bounds = layer.Bounds;
                     staticRenderer.Initialize(
                         cache.Circles,
@@ -1120,7 +1130,8 @@ void main()
                 }
 
                 // Render circles and rectangles using pre-uploaded GPU buffers
-                staticRenderer.Render(_projection, _view, viewLeft, viewBottom, viewRight, viewTop, minVisibleSize, _batchRenderer.StateCache);
+                // Pass layer opacity as uniform - allows instant opacity changes without rebuild
+                staticRenderer.Render(_projection, _view, viewLeft, viewBottom, viewRight, viewTop, minVisibleSize, _batchRenderer.StateCache, (float)layer.Opacity);
 
                 // Still render lines/polygons using existing static mesh system
                 RenderStaticMeshesOnly(cache, color);
