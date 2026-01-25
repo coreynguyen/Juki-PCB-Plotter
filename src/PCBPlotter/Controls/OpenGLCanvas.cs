@@ -110,6 +110,10 @@ namespace PCBPlotter.Controls
         // Quadtrees for spatial indexing (parallel building)
         private Dictionary<string, GerberQuadtree> _layerQuadtrees = new Dictionary<string, GerberQuadtree>();
 
+        // Async cache building - track which layers are being built in background
+        private HashSet<string> _pendingCacheBuilds = new HashSet<string>();
+        private object _cacheLock = new object();
+
         // Mouse interaction
         private Point _lastMousePosition;
         private Point _panStart;
@@ -234,8 +238,14 @@ namespace PCBPlotter.Controls
             var canvas = (OpenGLCanvas)d;
             canvas._needsRebuild = true;
             canvas._layerQuadtrees.Clear();
-            canvas._layerGeometryCache.Clear();
             canvas._geometryCacheDirty = true;
+
+            // Clear pending cache builds and geometry cache (thread-safe)
+            lock (canvas._cacheLock)
+            {
+                canvas._pendingCacheBuilds.Clear();
+                canvas._layerGeometryCache.Clear();
+            }
 
             // Dispose and clear static layer renderers
             foreach (var renderer in canvas._staticLayerRenderers.Values)
@@ -1109,29 +1119,89 @@ void main()
             LayerGeometryCache cache;
             bool needsRebuild = false;
 
-            if (!_layerGeometryCache.TryGetValue(layer.Id, out cache))
+            lock (_cacheLock)
             {
-                cache = new LayerGeometryCache { LayerId = layer.Id };
-                _layerGeometryCache[layer.Id] = cache;
-                needsRebuild = true;
-            }
-            else if (!cache.IsValid || cache.PrimitiveCount != layer.Primitives.Count)
-            {
-                needsRebuild = true;
+                if (!_layerGeometryCache.TryGetValue(layer.Id, out cache))
+                {
+                    needsRebuild = true;
+                }
+                else if (!cache.IsValid || cache.PrimitiveCount != layer.Primitives.Count)
+                {
+                    needsRebuild = true;
+                }
             }
 
-            // Build cache if needed (only once per layer, not every frame!)
+            // Build cache if needed - ASYNC to prevent UI freeze
             if (needsRebuild)
             {
-                BuildLayerGeometryCache(layer, cache);
-                // Invalidate static GPU buffers when cache is rebuilt
-                _batchRenderer.InvalidateStaticBuffers(layer.Id);
-
-                // Invalidate static layer renderer when cache is rebuilt
-                if (_staticLayerRenderers.TryGetValue(layer.Id, out var oldRenderer))
+                // Check if already building in background
+                lock (_cacheLock)
                 {
-                    oldRenderer.Dispose();
-                    _staticLayerRenderers.Remove(layer.Id);
+                    if (_pendingCacheBuilds.Contains(layer.Id))
+                    {
+                        // Already building - skip rendering this frame
+                        return;
+                    }
+                    _pendingCacheBuilds.Add(layer.Id);
+                }
+
+                // Snapshot data needed for background thread (avoid threading issues)
+                var layerId = layer.Id;
+                var primitivesSnapshot = new List<GerberPrimitive>(layer.Primitives);
+                var bounds = layer.Bounds;
+                var layerColorArgb = layer.ColorArgb;
+                var layerOpacity = layer.Opacity;
+
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        // Heavy math happens here (off UI thread)
+                        var newCache = new LayerGeometryCache { LayerId = layerId };
+                        BuildLayerGeometryCacheInternal(primitivesSnapshot, bounds, newCache, layerColorArgb, layerOpacity);
+
+                        // Update UI on main thread
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            lock (_cacheLock)
+                            {
+                                _layerGeometryCache[layerId] = newCache;
+
+                                // Invalidate static GPU buffers when cache is rebuilt
+                                _batchRenderer.InvalidateStaticBuffers(layerId);
+
+                                // Invalidate static layer renderer when cache is rebuilt
+                                if (_staticLayerRenderers.TryGetValue(layerId, out var oldRenderer))
+                                {
+                                    oldRenderer.Dispose();
+                                    _staticLayerRenderers.Remove(layerId);
+                                }
+
+                                _pendingCacheBuilds.Remove(layerId);
+                            }
+                            Invalidate(); // Trigger redraw
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error building cache for layer {layerId}: {ex.Message}");
+                        lock (_cacheLock)
+                        {
+                            _pendingCacheBuilds.Remove(layerId);
+                        }
+                    }
+                });
+
+                // Skip rendering this layer for this frame (will "pop in" when ready)
+                return;
+            }
+
+            // Get the cache again (it may have been set while we were checking)
+            lock (_cacheLock)
+            {
+                if (!_layerGeometryCache.TryGetValue(layer.Id, out cache) || !cache.IsValid)
+                {
+                    return; // Cache not ready yet
                 }
             }
 
@@ -1484,6 +1554,134 @@ void main()
         }
 
         /// <summary>
+        /// Thread-safe version of BuildLayerGeometryCache that takes a snapshot of primitives.
+        /// Can be called from a background thread without accessing UI-bound objects.
+        /// </summary>
+        private void BuildLayerGeometryCacheInternal(
+            List<GerberPrimitive> primitives,
+            Rect bounds,
+            LayerGeometryCache cache,
+            uint colorArgb,
+            double opacity)
+        {
+            cache.Clear();
+            cache.PrimitiveCount = primitives.Count;
+            cache.ColorArgb = colorArgb;
+            cache.Opacity = opacity;
+
+            // Pre-allocate lists based on expected counts
+            int estimatedCount = primitives.Count;
+            cache.Circles = new List<CachedCircle>(estimatedCount / 2);
+            cache.Rectangles = new List<CachedRectangle>(estimatedCount / 4);
+            cache.Lines = new List<CachedLine>(estimatedCount / 4);
+            cache.Polygons = new List<CachedPolygon>(estimatedCount / 10);
+
+            // Build cache from primitives (done once, not every frame)
+            foreach (var prim in primitives)
+            {
+                // Skip clear/negative primitives
+                if (!prim.IsDark)
+                    continue;
+
+                switch (prim.Type)
+                {
+                    case GerberPrimitiveType.Circle:
+                    case GerberPrimitiveType.Flash:
+                        cache.Circles.Add(new CachedCircle
+                        {
+                            X = (float)prim.X,
+                            Y = (float)prim.Y,
+                            Radius = (float)(prim.Width / 2)
+                        });
+                        break;
+
+                    case GerberPrimitiveType.Rectangle:
+                        cache.Rectangles.Add(new CachedRectangle
+                        {
+                            X = (float)prim.X,
+                            Y = (float)prim.Y,
+                            Width = (float)prim.Width,
+                            Height = (float)prim.Height
+                        });
+                        break;
+
+                    case GerberPrimitiveType.Obround:
+                        // Decompose obround into rect + 2 circles (cached)
+                        float hw = (float)(prim.Width / 2);
+                        float hh = (float)(prim.Height / 2);
+                        if (prim.Width > prim.Height)
+                        {
+                            float radius = hh;
+                            float rectHw = hw - radius;
+                            cache.Rectangles.Add(new CachedRectangle
+                            {
+                                X = (float)prim.X,
+                                Y = (float)prim.Y,
+                                Width = rectHw * 2,
+                                Height = (float)prim.Height
+                            });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
+                        }
+                        else
+                        {
+                            float radius = hw;
+                            float rectHh = hh - radius;
+                            cache.Rectangles.Add(new CachedRectangle
+                            {
+                                X = (float)prim.X,
+                                Y = (float)prim.Y,
+                                Width = (float)prim.Width,
+                                Height = rectHh * 2
+                            });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
+                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Line:
+                        if (prim.Points != null && prim.Points.Count >= 2)
+                        {
+                            var p1 = prim.Points[0];
+                            var p2 = prim.Points[1];
+                            cache.Lines.Add(new CachedLine
+                            {
+                                X1 = (float)p1.X,
+                                Y1 = (float)p1.Y,
+                                X2 = (float)p2.X,
+                                Y2 = (float)p2.Y,
+                                Width = (float)prim.Width
+                            });
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Contour:
+                    case GerberPrimitiveType.Polygon:
+                        if (prim.Points != null && prim.Points.Count >= 3)
+                        {
+                            // Copy points to avoid threading issues
+                            cache.Polygons.Add(new CachedPolygon { Points = new List<Point>(prim.Points) });
+                        }
+                        break;
+                }
+            }
+
+            cache.CircleCount = cache.Circles.Count;
+            cache.RectangleCount = cache.Rectangles.Count;
+            cache.LineCount = cache.Lines.Count;
+            cache.PolygonCount = cache.Polygons.Count;
+
+            // Build tile-based spatial index for O(visible) rendering
+            BuildTileIndex(cache, bounds);
+
+            // Pre-triangulate lines and polygons for static GPU rendering
+            BuildStaticLineMesh(cache);
+            BuildStaticPolygonMesh(cache);
+
+            cache.IsValid = true;
+        }
+
+        /// <summary>
         /// Pre-triangulate all lines into a static mesh (built once, not per-frame).
         /// Lines are converted to quads + circle caps.
         /// </summary>
@@ -1594,6 +1792,10 @@ void main()
         {
             if (cache.Polygons.Count == 0) return;
 
+            // Maximum polygon size for full ear-clipping triangulation
+            // Larger polygons use fast triangle fan (may look wrong for concave shapes but won't freeze)
+            const int MAX_EAR_CLIP_VERTICES = 2000;
+
             // Use lists since ear clipping may produce varying triangle counts
             var allVertices = new List<float>();
             var allIndices = new List<uint>();
@@ -1611,8 +1813,27 @@ void main()
                     allVertices.Add((float)pt.Y);
                 }
 
-                // Triangulate using ear clipping (handles concave polygons correctly)
-                var polyIndices = Triangulator.Triangulate(poly.Points);
+                List<int> polyIndices;
+
+                // SAFETY VALVE: If polygon is massive, use simple triangle fan (instant)
+                // This prevents app freeze on complex ground planes with thousands of vertices
+                // May render incorrectly for deeply concave shapes, but better than freezing
+                if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
+                {
+                    // Simple triangle fan from first vertex - O(n) instead of O(n³)
+                    polyIndices = new List<int>((poly.Points.Count - 2) * 3);
+                    for (int i = 1; i < poly.Points.Count - 1; i++)
+                    {
+                        polyIndices.Add(0);
+                        polyIndices.Add(i);
+                        polyIndices.Add(i + 1);
+                    }
+                }
+                else
+                {
+                    // Full ear clipping for high-quality concave polygon support
+                    polyIndices = Triangulator.Triangulate(poly.Points);
+                }
 
                 // Add indices offset by the current base vertex
                 foreach (int index in polyIndices)

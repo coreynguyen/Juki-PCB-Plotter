@@ -87,13 +87,25 @@ namespace PCBPlotter.Controls
             // Check if the triangle is convex (not a reflex angle)
             if (CrossProduct(A, B, C) <= 0) return false;
 
+            // OPTIMIZATION: Calculate bounding box of the triangle for fast rejection
+            double minX = Math.Min(A.X, Math.Min(B.X, C.X));
+            double maxX = Math.Max(A.X, Math.Max(B.X, C.X));
+            double minY = Math.Min(A.Y, Math.Min(B.Y, C.Y));
+            double maxY = Math.Max(A.Y, Math.Max(B.Y, C.Y));
+
             // Check if any other vertex is inside this triangle
             for (int i = 0; i < vertList.Count; i++)
             {
                 int pIndex = vertList[i];
                 if (pIndex == a || pIndex == b || pIndex == c) continue;
 
-                if (IsPointInTriangle(points[pIndex], A, B, C))
+                Point p = points[pIndex];
+
+                // FAST REJECTION: If point is outside bounding box, skip expensive math
+                if (p.X < minX || p.X > maxX || p.Y < minY || p.Y > maxY)
+                    continue;
+
+                if (IsPointInTriangle(p, A, B, C))
                     return false;
             }
 
