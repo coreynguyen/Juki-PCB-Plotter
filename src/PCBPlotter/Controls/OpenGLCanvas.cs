@@ -39,6 +39,11 @@ namespace PCBPlotter.Controls
         private int _ebo;
         private int _instanceVbo;
 
+        // Modern batch renderer
+        private BatchRenderer _batchRenderer;
+        private bool _useModernPipeline = true;
+        private RenderStats _lastRenderStats;
+
         // Framebuffers for layer compositing
         private int _layerFbo;
         private int _layerTexture;
@@ -129,6 +134,10 @@ namespace PCBPlotter.Controls
             DependencyProperty.Register("GridSpacing", typeof(double), typeof(OpenGLCanvas),
                 new PropertyMetadata(1.0, OnViewChanged));
 
+        public static readonly DependencyProperty UseModernPipelineProperty =
+            DependencyProperty.Register("UseModernPipeline", typeof(bool), typeof(OpenGLCanvas),
+                new PropertyMetadata(true, OnPipelineChanged));
+
         public double Zoom
         {
             get => (double)GetValue(ZoomProperty);
@@ -177,6 +186,12 @@ namespace PCBPlotter.Controls
             set => SetValue(GridSpacingProperty, value);
         }
 
+        public bool UseModernPipeline
+        {
+            get => (bool)GetValue(UseModernPipelineProperty);
+            set => SetValue(UseModernPipelineProperty, value);
+        }
+
         #endregion
 
         private static void OnViewChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -191,6 +206,15 @@ namespace PCBPlotter.Controls
             canvas._needsRebuild = true;
             canvas._layerQuadtrees.Clear();
             canvas.Invalidate();
+        }
+
+        private static void OnPipelineChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+#if USE_OPENGL
+            var canvas = (OpenGLCanvas)d;
+            canvas._useModernPipeline = (bool)e.NewValue;
+            canvas.Invalidate();
+#endif
         }
 
         public OpenGLCanvas()
@@ -327,6 +351,9 @@ namespace PCBPlotter.Controls
                 if (_compositeTextureA != 0) GL.DeleteTexture(_compositeTextureA);
                 if (_compositeFboB != 0) GL.DeleteFramebuffer(_compositeFboB);
                 if (_compositeTextureB != 0) GL.DeleteTexture(_compositeTextureB);
+
+                // Cleanup batch renderer
+                _batchRenderer?.Dispose();
             }
 
             _host?.Dispose();
@@ -344,6 +371,19 @@ namespace PCBPlotter.Controls
             InitializeShaders();
             InitializeScreenBlendShader();
             InitializeQuadVAO();
+
+            // Initialize batch renderer for modern pipeline
+            try
+            {
+                _batchRenderer = new BatchRenderer();
+                _batchRenderer.Initialize();
+                System.Diagnostics.Debug.WriteLine("BatchRenderer initialized successfully");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"BatchRenderer initialization failed: {ex.Message}");
+                _useModernPipeline = false;
+            }
 
             // Enable required states
             GL.Enable(EnableCap.Blend);
@@ -667,23 +707,39 @@ void main()
 
         private void RenderLayersNormal()
         {
-            // Use fixed-function pipeline for immediate mode rendering
-            GL.UseProgram(0);
-
-            // Set up matrices for fixed-function pipeline
-            GL.MatrixMode(MatrixMode.Projection);
-            GL.LoadMatrix(ref _projection);
-            GL.MatrixMode(MatrixMode.Modelview);
-            GL.LoadMatrix(ref _view);
-
             // Get visible bounds
             var visibleBounds = GetVisibleBounds();
 
-            foreach (var layer in GerberLayers)
+            if (_useModernPipeline && _batchRenderer != null)
             {
-                if (!layer.IsVisible) continue;
+                // Modern batched rendering
+                _batchRenderer.BeginFrame();
 
-                RenderLayer(layer, visibleBounds);
+                foreach (var layer in GerberLayers)
+                {
+                    if (!layer.IsVisible) continue;
+                    RenderLayerBatched(layer, visibleBounds);
+                }
+
+                _batchRenderer.Render(_projection, _view);
+                _lastRenderStats = _batchRenderer.EndFrame();
+            }
+            else
+            {
+                // Legacy fixed-function pipeline for immediate mode rendering
+                GL.UseProgram(0);
+
+                // Set up matrices for fixed-function pipeline
+                GL.MatrixMode(MatrixMode.Projection);
+                GL.LoadMatrix(ref _projection);
+                GL.MatrixMode(MatrixMode.Modelview);
+                GL.LoadMatrix(ref _view);
+
+                foreach (var layer in GerberLayers)
+                {
+                    if (!layer.IsVisible) continue;
+                    RenderLayer(layer, visibleBounds);
+                }
             }
         }
 
@@ -709,14 +765,25 @@ void main()
                 GL.ClearColor(0, 0, 0, 0);
                 GL.Clear(ClearBufferMask.ColorBufferBit);
 
-                // Use fixed-function pipeline for immediate mode rendering
-                GL.UseProgram(0);
-                GL.MatrixMode(MatrixMode.Projection);
-                GL.LoadMatrix(ref _projection);
-                GL.MatrixMode(MatrixMode.Modelview);
-                GL.LoadMatrix(ref _view);
+                if (_useModernPipeline && _batchRenderer != null)
+                {
+                    // Modern batched rendering
+                    _batchRenderer.BeginFrame();
+                    RenderLayerBatched(layer, visibleBounds);
+                    _batchRenderer.Render(_projection, _view);
+                    _lastRenderStats = _batchRenderer.EndFrame();
+                }
+                else
+                {
+                    // Use fixed-function pipeline for immediate mode rendering
+                    GL.UseProgram(0);
+                    GL.MatrixMode(MatrixMode.Projection);
+                    GL.LoadMatrix(ref _projection);
+                    GL.MatrixMode(MatrixMode.Modelview);
+                    GL.LoadMatrix(ref _view);
 
-                RenderLayer(layer, visibleBounds);
+                    RenderLayer(layer, visibleBounds);
+                }
 
                 // Ping-pong: read from current composite, write to other
                 int srcTexture = _useCompositeA ? _compositeTextureA : _compositeTextureB;
@@ -807,6 +874,82 @@ void main()
                     continue;
 
                 RenderPrimitive(prim, color, (float)layer.Opacity);
+            }
+        }
+
+        private void RenderLayerBatched(GerberLayer layer, Rect visibleBounds)
+        {
+            if (layer.Primitives == null || layer.Primitives.Count == 0)
+                return;
+
+            // Build quadtree if needed
+            if (!_layerQuadtrees.ContainsKey(layer.Id))
+            {
+                BuildLayerQuadtreeAsync(layer);
+            }
+
+            // Get visible primitives using quadtree spatial query
+            List<GerberPrimitive> visiblePrimitives;
+            if (_layerQuadtrees.TryGetValue(layer.Id, out var quadtree))
+            {
+                var wpfRect = new System.Windows.Rect(visibleBounds.X, visibleBounds.Y, visibleBounds.Width, visibleBounds.Height);
+                visiblePrimitives = quadtree.QueryRect(wpfRect);
+            }
+            else
+            {
+                visiblePrimitives = layer.Primitives;
+            }
+
+            // Get layer color as Vector4
+            var color = GetColorFromArgb(layer.ColorArgb);
+            color.W *= (float)layer.Opacity;
+
+            // Minimum size for LOD filtering
+            float minSize = (float)(0.5 / Zoom);
+
+            // Batch primitives into the renderer
+            foreach (var prim in visiblePrimitives)
+            {
+                // Skip clear/negative primitives
+                if (!prim.IsDark)
+                    continue;
+
+                // LOD culling for small primitives
+                float size = (float)Math.Max(prim.Width, prim.Height);
+                if (size < minSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
+                    continue;
+
+                switch (prim.Type)
+                {
+                    case GerberPrimitiveType.Circle:
+                        _batchRenderer.AddCircle((float)prim.X, (float)prim.Y, (float)(prim.Width / 2), color);
+                        break;
+
+                    case GerberPrimitiveType.Rectangle:
+                        _batchRenderer.AddRectangle((float)prim.X, (float)prim.Y, (float)prim.Width, (float)prim.Height, color);
+                        break;
+
+                    case GerberPrimitiveType.Obround:
+                        _batchRenderer.AddObround((float)prim.X, (float)prim.Y, (float)prim.Width, (float)prim.Height, color);
+                        break;
+
+                    case GerberPrimitiveType.Line:
+                        if (prim.Points != null && prim.Points.Count >= 2)
+                        {
+                            var p1 = prim.Points[0];
+                            var p2 = prim.Points[1];
+                            _batchRenderer.AddLine((float)p1.X, (float)p1.Y, (float)p2.X, (float)p2.Y, (float)prim.Width, color);
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Contour:
+                    case GerberPrimitiveType.Polygon:
+                        if (prim.Points != null && prim.Points.Count >= 3)
+                        {
+                            _batchRenderer.AddPolygon(prim.Points, color);
+                        }
+                        break;
+                }
             }
         }
 
@@ -1199,6 +1342,18 @@ void main()
 
             PanX = bounds.X + bounds.Width / 2;
             PanY = bounds.Y + bounds.Height / 2;
+        }
+
+        /// <summary>
+        /// Gets the last frame's render statistics
+        /// </summary>
+        public RenderStats GetRenderStats()
+        {
+#if USE_OPENGL
+            return _lastRenderStats;
+#else
+            return new RenderStats();
+#endif
         }
 
         #endregion
