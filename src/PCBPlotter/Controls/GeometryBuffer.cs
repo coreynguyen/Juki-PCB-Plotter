@@ -358,6 +358,8 @@ namespace PCBPlotter.Controls
         public int InstanceCount => _instanceCount;
         public bool IsDirty => _isDirty;
         public int VAO => _vao;
+        public int VBO => _vbo;
+        public int EBO => _ebo;
 
         /// <summary>
         /// Returns true if the buffer has valid data uploaded to the GPU.

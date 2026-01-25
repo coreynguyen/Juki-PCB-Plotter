@@ -318,14 +318,9 @@ namespace PCBPlotter.Controls
                 // Since GeometryBuffer initializes with specific VBO, we need to access it
                 // Let's modify the approach: bind the shared VAO's buffers explicitly
 
-                // Bind shared circle geometry VBO for position/texcoord (locations 0, 1)
-                int originalVao = circleBuffer.VAO;
-
-                // Query the original VAO's buffers (uses OpenGL 2.0+ compatible calls)
-                // The GeometryBuffer VAO has the EBO bound, so we can query it
-                GL.BindVertexArray(originalVao);
-                GL.GetInteger(GetPName.ElementArrayBufferBinding, out int eboId);
-                GL.GetVertexAttrib(0, VertexAttribParameter.ArrayBufferBinding, out int vboId);
+                // Get shared circle geometry VBO/EBO directly from GeometryBuffer
+                int vboId = circleBuffer.VBO;
+                int eboId = circleBuffer.EBO;
 
                 // Now set up our dedicated VAO
                 GL.BindVertexArray(tile.CircleVao);
@@ -372,11 +367,9 @@ namespace PCBPlotter.Controls
                 // Create dedicated VAO for this tile's rectangles
                 tile.RectVao = GL.GenVertexArray();
 
-                // Get VBO/EBO from original rectangle VAO
-                int originalRectVao = rectBuffer.VAO;
-                GL.BindVertexArray(originalRectVao);
-                GL.GetInteger(GetPName.ElementArrayBufferBinding, out int rectEboId);
-                GL.GetVertexAttrib(0, VertexAttribParameter.ArrayBufferBinding, out int rectVboId);
+                // Get shared rectangle geometry VBO/EBO directly from GeometryBuffer
+                int rectVboId = rectBuffer.VBO;
+                int rectEboId = rectBuffer.EBO;
 
                 // Set up our dedicated VAO
                 GL.BindVertexArray(tile.RectVao);
