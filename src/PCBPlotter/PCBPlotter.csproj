@@ -229,6 +229,7 @@
     <Compile Include="Controls\RenderStateCache.cs" />
     <Compile Include="Controls\GeometryBuffer.cs" />
     <Compile Include="Controls\StaticLayerRenderer.cs" />
+    <Compile Include="Controls\Triangulator.cs" />
     <Compile Include="Behaviors\DataGridZoomBehavior.cs" />
     <Compile Include="Converters\BoolToVisibilityConverter.cs" />
     <Compile Include="Converters\EnumToBoolConverter.cs" />

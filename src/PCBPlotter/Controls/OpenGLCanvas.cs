@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
@@ -242,7 +244,64 @@ namespace PCBPlotter.Controls
             }
             canvas._staticLayerRenderers.Clear();
 
+            // Unsubscribe from old collection events
+            if (e.OldValue is ObservableCollection<GerberLayer> oldCollection)
+            {
+                oldCollection.CollectionChanged -= canvas.OnLayerCollectionChanged;
+                foreach (var layer in oldCollection)
+                {
+                    layer.PropertyChanged -= canvas.OnLayerPropertyChanged;
+                }
+            }
+
+            // Subscribe to new collection events
+            if (e.NewValue is ObservableCollection<GerberLayer> newCollection)
+            {
+                newCollection.CollectionChanged += canvas.OnLayerCollectionChanged;
+                foreach (var layer in newCollection)
+                {
+                    layer.PropertyChanged += canvas.OnLayerPropertyChanged;
+                }
+            }
+
             canvas.Invalidate();
+        }
+
+        private void OnLayerCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            // Unsubscribe from removed layers
+            if (e.OldItems != null)
+            {
+                foreach (GerberLayer layer in e.OldItems)
+                {
+                    layer.PropertyChanged -= OnLayerPropertyChanged;
+                }
+            }
+
+            // Subscribe to new layers
+            if (e.NewItems != null)
+            {
+                foreach (GerberLayer layer in e.NewItems)
+                {
+                    layer.PropertyChanged += OnLayerPropertyChanged;
+                }
+            }
+
+            // Mark for rebuild when layers are added/removed
+            _needsRebuild = true;
+            _geometryCacheDirty = true;
+            Invalidate();
+        }
+
+        private void OnLayerPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            // Invalidate on visibility, color, or opacity changes
+            if (e.PropertyName == nameof(GerberLayer.IsVisible) ||
+                e.PropertyName == nameof(GerberLayer.ColorArgb) ||
+                e.PropertyName == nameof(GerberLayer.Opacity))
+            {
+                Invalidate();
+            }
         }
 
         private static void OnPipelineChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -1529,53 +1588,44 @@ void main()
 
         /// <summary>
         /// Pre-triangulate all polygons into a static mesh.
-        /// Uses simple ear-clipping for non-convex polygon support.
+        /// Uses ear-clipping algorithm for correct concave polygon support.
         /// </summary>
         private void BuildStaticPolygonMesh(LayerGeometryCache cache)
         {
             if (cache.Polygons.Count == 0) return;
 
-            // Calculate rough buffer sizes (overestimate for safety)
-            int totalVertices = 0;
-            int totalIndices = 0;
-            foreach (var poly in cache.Polygons)
-            {
-                totalVertices += poly.Points.Count;
-                totalIndices += (poly.Points.Count - 2) * 3; // n-2 triangles per polygon
-            }
-
-            var mesh = new StaticMeshData();
-            mesh.Vertices = new float[totalVertices * 2];
-            mesh.Indices = new uint[totalIndices];
-
-            int vIdx = 0;
-            int iIdx = 0;
+            // Use lists since ear clipping may produce varying triangle counts
+            var allVertices = new List<float>();
+            var allIndices = new List<uint>();
 
             foreach (var poly in cache.Polygons)
             {
                 if (poly.Points.Count < 3) continue;
 
-                uint baseVertex = (uint)(vIdx / 2);
+                uint baseVertex = (uint)(allVertices.Count / 2);
 
                 // Add vertices
                 foreach (var pt in poly.Points)
                 {
-                    mesh.Vertices[vIdx++] = (float)pt.X;
-                    mesh.Vertices[vIdx++] = (float)pt.Y;
+                    allVertices.Add((float)pt.X);
+                    allVertices.Add((float)pt.Y);
                 }
 
-                // Simple triangle fan (works for convex polygons)
-                // TODO: Implement proper ear-clipping for non-convex polygons
-                for (int i = 1; i < poly.Points.Count - 1; i++)
+                // Triangulate using ear clipping (handles concave polygons correctly)
+                var polyIndices = Triangulator.Triangulate(poly.Points);
+
+                // Add indices offset by the current base vertex
+                foreach (int index in polyIndices)
                 {
-                    mesh.Indices[iIdx++] = baseVertex;
-                    mesh.Indices[iIdx++] = baseVertex + (uint)i;
-                    mesh.Indices[iIdx++] = baseVertex + (uint)(i + 1);
+                    allIndices.Add(baseVertex + (uint)index);
                 }
             }
 
-            mesh.VertexCount = vIdx / 2;
-            mesh.IndexCount = iIdx;
+            var mesh = new StaticMeshData();
+            mesh.Vertices = allVertices.ToArray();
+            mesh.Indices = allIndices.ToArray();
+            mesh.VertexCount = allVertices.Count / 2;
+            mesh.IndexCount = allIndices.Count;
             cache.PolygonMesh = mesh;
         }
 
