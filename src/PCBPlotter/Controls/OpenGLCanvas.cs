@@ -568,7 +568,7 @@ void main()
             // Create layer render target
             _layerTexture = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, _layerTexture);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, _lastWidth, _lastHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, _lastWidth, _lastHeight, 0, OpenTK.Graphics.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
 
@@ -579,7 +579,7 @@ void main()
             // Create composite render target
             _compositeTexture = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, _compositeTexture);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, _lastWidth, _lastHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, _lastWidth, _lastHeight, 0, OpenTK.Graphics.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
 
@@ -765,7 +765,7 @@ void main()
                     continue;
 
                 // LOD culling
-                float size = Math.Max(prim.Width, prim.Height);
+                float size = (float)Math.Max(prim.Width, prim.Height);
                 if (size < minSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
                     continue;
 
