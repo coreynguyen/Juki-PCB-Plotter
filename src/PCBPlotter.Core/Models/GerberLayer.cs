@@ -300,6 +300,7 @@ namespace PCBPlotter.Core.Models
                     return new Rect(X - Width / 2, Y - Height / 2, Width, Height);
 
                 case GerberPrimitiveType.Line:
+                case GerberPrimitiveType.Arc:  // Arcs have Points[] containing polyline segments
                 case GerberPrimitiveType.Contour:
                 case GerberPrimitiveType.Polygon:  // FIX: Polygons need bounds from Points, not X/Y/Width/Height
                     if (Points != null && Points.Count > 0)
@@ -313,8 +314,8 @@ namespace PCBPlotter.Core.Models
                             if (pt.X > maxX) maxX = pt.X;
                             if (pt.Y > maxY) maxY = pt.Y;
                         }
-                        // Add stroke width (for lines/contours)
-                        if (Type == GerberPrimitiveType.Line || Type == GerberPrimitiveType.Contour)
+                        // Add stroke width (for lines/arcs/contours)
+                        if (Type == GerberPrimitiveType.Line || Type == GerberPrimitiveType.Arc || Type == GerberPrimitiveType.Contour)
                         {
                             minX -= Width / 2;
                             minY -= Width / 2;

@@ -1576,6 +1576,26 @@ void main()
                         }
                         break;
 
+                    case GerberPrimitiveType.Arc:
+                        // Arcs are stored as polylines - add each segment
+                        if (prim.Points != null && prim.Points.Count >= 2)
+                        {
+                            for (int i = 0; i < prim.Points.Count - 1; i++)
+                            {
+                                var p1 = prim.Points[i];
+                                var p2 = prim.Points[i + 1];
+                                cache.Lines.Add(new CachedLine
+                                {
+                                    X1 = (float)p1.X,
+                                    Y1 = (float)p1.Y,
+                                    X2 = (float)p2.X,
+                                    Y2 = (float)p2.Y,
+                                    Width = (float)prim.Width
+                                });
+                            }
+                        }
+                        break;
+
                     case GerberPrimitiveType.Contour:
                     case GerberPrimitiveType.Polygon:
                         if (prim.Points != null && prim.Points.Count >= 3)
@@ -1701,6 +1721,26 @@ void main()
                                 Y2 = (float)p2.Y,
                                 Width = (float)prim.Width
                             });
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Arc:
+                        // Arcs are stored as polylines - add each segment
+                        if (prim.Points != null && prim.Points.Count >= 2)
+                        {
+                            for (int i = 0; i < prim.Points.Count - 1; i++)
+                            {
+                                var p1 = prim.Points[i];
+                                var p2 = prim.Points[i + 1];
+                                cache.Lines.Add(new CachedLine
+                                {
+                                    X1 = (float)p1.X,
+                                    Y1 = (float)p1.Y,
+                                    X2 = (float)p2.X,
+                                    Y2 = (float)p2.Y,
+                                    Width = (float)prim.Width
+                                });
+                            }
                         }
                         break;
 
