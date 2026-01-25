@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using PCBPlotter.Controls;
 using PCBPlotter.Core.Models;
 using PCBPlotter.ViewModels;
 
@@ -13,6 +14,7 @@ namespace PCBPlotter.Views
     /// </summary>
     public partial class GerberViewerView : UserControl
     {
+        private bool _useOpenGL = false;
         // Preset colors for quick layer color selection
         private static readonly Color[] _presetColors = new[]
         {
@@ -203,6 +205,69 @@ namespace PCBPlotter.Views
             contextMenu.IsOpen = true;
 
             e.Handled = true;
+        }
+
+        private void RendererComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!IsLoaded) return;
+
+            var comboBox = sender as ComboBox;
+            if (comboBox == null) return;
+
+            bool useOpenGL = comboBox.SelectedIndex == 1;
+
+            if (useOpenGL != _useOpenGL)
+            {
+                _useOpenGL = useOpenGL;
+                SwitchRenderer(useOpenGL);
+            }
+        }
+
+        private void SwitchRenderer(bool useOpenGL)
+        {
+            if (useOpenGL)
+            {
+                // Switch to OpenGL
+                GerberCanvas.Visibility = Visibility.Collapsed;
+                OpenGLCanvas.Visibility = Visibility.Visible;
+
+                // Apply screen blend setting
+                OpenGLCanvas.UseScreenBlend = ScreenBlendCheckBox?.IsChecked ?? true;
+            }
+            else
+            {
+                // Switch to WPF
+                OpenGLCanvas.Visibility = Visibility.Collapsed;
+                GerberCanvas.Visibility = Visibility.Visible;
+
+                // Apply screen blend setting
+                GerberCanvas.UseScreenBlend = ScreenBlendCheckBox?.IsChecked ?? true;
+            }
+        }
+
+        private void ScreenBlendCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            var checkBox = sender as CheckBox;
+            if (checkBox == null) return;
+
+            bool useScreenBlend = checkBox.IsChecked ?? true;
+
+            if (_useOpenGL)
+            {
+                OpenGLCanvas.UseScreenBlend = useScreenBlend;
+            }
+            else
+            {
+                GerberCanvas.UseScreenBlend = useScreenBlend;
+            }
+        }
+
+        /// <summary>
+        /// Gets GPU information for display in settings or diagnostics
+        /// </summary>
+        public static GpuInfo GetGpuInfo()
+        {
+            return OpenGLCanvas.GetGpuInfo();
         }
     }
 }
