@@ -1006,17 +1006,16 @@ namespace PCBPlotter.Controls
             double minWorldSize = screenPixelThreshold / currentZoom;
 
             // --- Step 3: Render Loop (Optimized) ---
-            // First pass: render dark (additive) primitives
-            // Second pass: render clear (subtractive) primitives as holes
+            // CRITICAL: Render primitives IN ORDER to respect Gerber polarity semantics.
+            // Clear primitives erase what came BEFORE them, not what comes AFTER.
+            // Each primitive uses either the layer brush (dark) or hole brush (clear).
             // We ONLY batch Polygons/Contours and rotated shapes.
             // Lines, Arcs, Pads, and Rects are drawn DIRECTLY for maximum speed.
-
-            // Separate clear primitives for second pass (render holes after solid shapes)
-            var clearPrimitives = new List<GerberPrimitive>();
 
             StreamGeometry polyBatch = null;
             StreamGeometryContext polyCtx = null;
             int polyCount = 0;
+            SolidColorBrush currentBatchBrush = brush; // Track which brush the current batch uses
 
             foreach (var prim in visiblePrimitives)
             {
@@ -1042,12 +1041,20 @@ namespace PCBPlotter.Controls
                     double.IsNaN(prim.Y) || double.IsInfinity(prim.Y))
                     continue;
 
-                // Clear/negative polarity primitives are rendered in a second pass as holes
-                if (!prim.IsDark)
+                // Select brush based on polarity - dark primitives add, clear primitives erase
+                SolidColorBrush primBrush = prim.IsDark ? brush : holeBrush;
+
+                // If polarity changed, flush the polygon batch before continuing
+                if (polyBatch != null && primBrush != currentBatchBrush)
                 {
-                    clearPrimitives.Add(prim);
-                    continue;
+                    polyCtx.Close();
+                    polyBatch.Freeze();
+                    dc.DrawGeometry(currentBatchBrush, null, polyBatch);
+                    polyBatch = null;
+                    polyCtx = null;
+                    polyCount = 0;
                 }
+                currentBatchBrush = primBrush;
 
                 Point screenPos = WorldToScreen(new Point(prim.X, prim.Y));
                 double screenWidth = prim.Width * currentZoom;
@@ -1058,16 +1065,36 @@ namespace PCBPlotter.Controls
                     // ===== FASTEST: Direct Drawing for Simple Shapes =====
                     case GerberPrimitiveType.Circle:
                     case GerberPrimitiveType.Flash:
+                        // Flush polygon batch before direct drawing (different geometry type)
+                        if (polyBatch != null)
+                        {
+                            polyCtx.Close();
+                            polyBatch.Freeze();
+                            dc.DrawGeometry(currentBatchBrush, null, polyBatch);
+                            polyBatch = null;
+                            polyCtx = null;
+                            polyCount = 0;
+                        }
                         double r = Math.Max(screenWidth / 2, 0.5);
-                        dc.DrawEllipse(brush, null, screenPos, r, r);
+                        dc.DrawEllipse(primBrush, null, screenPos, r, r);
                         break;
 
                     case GerberPrimitiveType.Rectangle:
                         if (prim.Rotation == 0)
                         {
+                            // Flush polygon batch before direct drawing
+                            if (polyBatch != null)
+                            {
+                                polyCtx.Close();
+                                polyBatch.Freeze();
+                                dc.DrawGeometry(currentBatchBrush, null, polyBatch);
+                                polyBatch = null;
+                                polyCtx = null;
+                                polyCount = 0;
+                            }
                             double rw = Math.Max(screenWidth, 0.5);
                             double rh = Math.Max(screenHeight, 0.5);
-                            dc.DrawRectangle(brush, null, new Rect(screenPos.X - rw / 2, screenPos.Y - rh / 2, rw, rh));
+                            dc.DrawRectangle(primBrush, null, new Rect(screenPos.X - rw / 2, screenPos.Y - rh / 2, rw, rh));
                         }
                         else
                         {
@@ -1077,6 +1104,7 @@ namespace PCBPlotter.Controls
                                 polyBatch = new StreamGeometry();
                                 polyBatch.FillRule = FillRule.Nonzero;
                                 polyCtx = polyBatch.Open();
+                                currentBatchBrush = primBrush;
                             }
                             AddRotatedRectToContext(polyCtx, screenPos, screenWidth, screenHeight, prim.Rotation);
                             polyCount++;
@@ -1086,10 +1114,20 @@ namespace PCBPlotter.Controls
                     case GerberPrimitiveType.Obround:
                         if (prim.Rotation == 0)
                         {
+                            // Flush polygon batch before direct drawing
+                            if (polyBatch != null)
+                            {
+                                polyCtx.Close();
+                                polyBatch.Freeze();
+                                dc.DrawGeometry(currentBatchBrush, null, polyBatch);
+                                polyBatch = null;
+                                polyCtx = null;
+                                polyCount = 0;
+                            }
                             double ow = Math.Max(screenWidth, 0.5);
                             double oh = Math.Max(screenHeight, 0.5);
                             double cr = Math.Min(ow, oh) / 2;
-                            dc.DrawRoundedRectangle(brush, null, new Rect(screenPos.X - ow / 2, screenPos.Y - oh / 2, ow, oh), cr, cr);
+                            dc.DrawRoundedRectangle(primBrush, null, new Rect(screenPos.X - ow / 2, screenPos.Y - oh / 2, ow, oh), cr, cr);
                         }
                         else
                         {
@@ -1099,6 +1137,7 @@ namespace PCBPlotter.Controls
                                 polyBatch = new StreamGeometry();
                                 polyBatch.FillRule = FillRule.Nonzero;
                                 polyCtx = polyBatch.Open();
+                                currentBatchBrush = primBrush;
                             }
                             double w = Math.Max(screenWidth, 0.5) / 2;
                             double h = Math.Max(screenHeight, 0.5) / 2;
@@ -1114,8 +1153,18 @@ namespace PCBPlotter.Controls
                     case GerberPrimitiveType.Line:
                         if (prim.Points != null && prim.Points.Count >= 2)
                         {
+                            // Flush polygon batch before direct drawing
+                            if (polyBatch != null)
+                            {
+                                polyCtx.Close();
+                                polyBatch.Freeze();
+                                dc.DrawGeometry(currentBatchBrush, null, polyBatch);
+                                polyBatch = null;
+                                polyCtx = null;
+                                polyCount = 0;
+                            }
                             // Get a cached pen for this thickness (round caps built-in)
-                            var pen = GetCachedPen(brush, Math.Max(screenWidth, 1.0));
+                            var pen = GetCachedPen(primBrush, Math.Max(screenWidth, 1.0));
 
                             Point p1 = WorldToScreen(prim.Points[0]);
                             Point p2 = WorldToScreen(prim.Points[1]);
@@ -1127,7 +1176,17 @@ namespace PCBPlotter.Controls
                         // Arcs are polylines - draw each segment directly
                         if (prim.Points != null && prim.Points.Count >= 2)
                         {
-                            var pen = GetCachedPen(brush, Math.Max(screenWidth, 1.0));
+                            // Flush polygon batch before direct drawing
+                            if (polyBatch != null)
+                            {
+                                polyCtx.Close();
+                                polyBatch.Freeze();
+                                dc.DrawGeometry(currentBatchBrush, null, polyBatch);
+                                polyBatch = null;
+                                polyCtx = null;
+                                polyCount = 0;
+                            }
+                            var pen = GetCachedPen(primBrush, Math.Max(screenWidth, 1.0));
                             Point lastPt = WorldToScreen(prim.Points[0]);
                             for (int i = 1; i < prim.Points.Count; i++)
                             {
@@ -1148,6 +1207,7 @@ namespace PCBPlotter.Controls
                                 polyBatch = new StreamGeometry();
                                 polyBatch.FillRule = FillRule.Nonzero;
                                 polyCtx = polyBatch.Open();
+                                currentBatchBrush = primBrush;
                             }
 
                             polyCtx.BeginFigure(WorldToScreen(prim.Points[0]), true, true);
@@ -1165,7 +1225,7 @@ namespace PCBPlotter.Controls
                 {
                     polyCtx.Close();
                     polyBatch.Freeze();
-                    dc.DrawGeometry(brush, null, polyBatch);
+                    dc.DrawGeometry(currentBatchBrush, null, polyBatch);
                     polyBatch = null;
                     polyCtx = null;
                     polyCount = 0;
@@ -1177,72 +1237,7 @@ namespace PCBPlotter.Controls
             {
                 polyCtx.Close();
                 polyBatch.Freeze();
-                dc.DrawGeometry(brush, null, polyBatch);
-            }
-
-            // --- Second Pass: Render Clear Polarity (Holes) ---
-            // Clear primitives are rendered with background color to create cutouts
-            foreach (var prim in clearPrimitives)
-            {
-                Point screenPos = WorldToScreen(new Point(prim.X, prim.Y));
-                double screenWidth = prim.Width * currentZoom;
-                double screenHeight = prim.Height * currentZoom;
-
-                switch (prim.Type)
-                {
-                    case GerberPrimitiveType.Circle:
-                    case GerberPrimitiveType.Flash:
-                        double r = Math.Max(screenWidth / 2, 0.5);
-                        dc.DrawEllipse(holeBrush, null, screenPos, r, r);
-                        break;
-
-                    case GerberPrimitiveType.Rectangle:
-                        double rw = Math.Max(screenWidth, 0.5);
-                        double rh = Math.Max(screenHeight, 0.5);
-                        if (prim.Rotation != 0)
-                        {
-                            dc.PushTransform(new RotateTransform(-prim.Rotation, screenPos.X, screenPos.Y));
-                        }
-                        dc.DrawRectangle(holeBrush, null, new Rect(screenPos.X - rw / 2, screenPos.Y - rh / 2, rw, rh));
-                        if (prim.Rotation != 0)
-                        {
-                            dc.Pop();
-                        }
-                        break;
-
-                    case GerberPrimitiveType.Obround:
-                        double ow = Math.Max(screenWidth, 0.5);
-                        double oh = Math.Max(screenHeight, 0.5);
-                        double cr = Math.Min(ow, oh) / 2;
-                        if (prim.Rotation != 0)
-                        {
-                            dc.PushTransform(new RotateTransform(-prim.Rotation, screenPos.X, screenPos.Y));
-                        }
-                        dc.DrawRoundedRectangle(holeBrush, null, new Rect(screenPos.X - ow / 2, screenPos.Y - oh / 2, ow, oh), cr, cr);
-                        if (prim.Rotation != 0)
-                        {
-                            dc.Pop();
-                        }
-                        break;
-
-                    case GerberPrimitiveType.Contour:
-                    case GerberPrimitiveType.Polygon:
-                        if (prim.Points != null && prim.Points.Count >= 3)
-                        {
-                            var holeGeometry = new StreamGeometry();
-                            using (var ctx = holeGeometry.Open())
-                            {
-                                ctx.BeginFigure(WorldToScreen(prim.Points[0]), true, true);
-                                for (int i = 1; i < prim.Points.Count; i++)
-                                {
-                                    ctx.LineTo(WorldToScreen(prim.Points[i]), false, false);
-                                }
-                            }
-                            holeGeometry.Freeze();
-                            dc.DrawGeometry(holeBrush, null, holeGeometry);
-                        }
-                        break;
-                }
+                dc.DrawGeometry(currentBatchBrush, null, polyBatch);
             }
 
             if (hasOpacity)

@@ -72,10 +72,14 @@ namespace PCBPlotter.Controls
             double midX = _bounds.X + _bounds.Width / 2;
             double midY = _bounds.Y + _bounds.Height / 2;
 
-            bool fitsLeft = primBounds.Right <= midX;
-            bool fitsRight = primBounds.Left >= midX;
-            bool fitsBottom = primBounds.Top <= midY;
-            bool fitsTop = primBounds.Bottom >= midY;
+            // FIX: Check if primitive is ENTIRELY within one quadrant
+            // For left/right: use Left/Right which are min/max X
+            // For bottom/top: use Top/Bottom which are min/max Y in WPF Rect
+            // (WPF Rect.Top is min Y, Rect.Bottom is max Y)
+            bool fitsLeft = primBounds.Right <= midX;     // entire shape is left of midX
+            bool fitsRight = primBounds.Left >= midX;     // entire shape is right of midX
+            bool fitsBottom = primBounds.Bottom <= midY;  // entire shape is below midY (max Y < midY)
+            bool fitsTop = primBounds.Top >= midY;        // entire shape is above midY (min Y >= midY)
 
             // Child layout: 0=bottomLeft, 1=bottomRight, 2=topLeft, 3=topRight
             if (fitsLeft && fitsBottom) return 0;

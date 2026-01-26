@@ -10,6 +10,9 @@ namespace PCBPlotter.Controls
     /// </summary>
     public static class Triangulator
     {
+        // Tolerance for numerical comparisons (handles floating point errors)
+        private const double EPSILON = 1e-10;
+
         /// <summary>
         /// Triangulates a polygon using the Ear Clipping algorithm.
         /// </summary>
@@ -20,19 +23,27 @@ namespace PCBPlotter.Controls
             List<int> indices = new List<int>();
             if (points == null || points.Count < 3) return indices;
 
+            // Pre-process: remove duplicate consecutive vertices that can cause issues
+            var cleanedPoints = RemoveDuplicateVertices(points);
+            if (cleanedPoints.Count < 3) return indices;
+
             // Create a linked list of vertex indices
-            List<int> vertList = new List<int>(points.Count);
-            if (IsCounterClockwise(points))
+            List<int> vertList = new List<int>(cleanedPoints.Count);
+            if (IsCounterClockwise(cleanedPoints))
             {
-                for (int i = 0; i < points.Count; i++) vertList.Add(i);
+                for (int i = 0; i < cleanedPoints.Count; i++) vertList.Add(i);
             }
             else
             {
-                for (int i = 0; i < points.Count; i++) vertList.Add(points.Count - 1 - i);
+                for (int i = 0; i < cleanedPoints.Count; i++) vertList.Add(cleanedPoints.Count - 1 - i);
             }
 
+            // Track failed ear searches to detect infinite loops
+            int failedSearches = 0;
+            int maxFailedSearches = vertList.Count * 2; // Safety limit
+
             // Loop until we have removed enough vertices
-            while (vertList.Count > 3)
+            while (vertList.Count > 3 && failedSearches < maxFailedSearches)
             {
                 bool earFound = false;
 
@@ -45,7 +56,7 @@ namespace PCBPlotter.Controls
                     int b = vertList[i];
                     int c = vertList[iNext];
 
-                    if (IsEar(a, b, c, points, vertList))
+                    if (IsEar(a, b, c, cleanedPoints, vertList))
                     {
                         // Add triangle indices
                         indices.Add(a);
@@ -55,26 +66,48 @@ namespace PCBPlotter.Controls
                         // Remove the ear vertex
                         vertList.RemoveAt(i);
                         earFound = true;
+                        failedSearches = 0; // Reset counter on success
                         break;
                     }
                 }
 
                 if (!earFound)
                 {
-                    // Failed to find an ear (degenerate polygon or self-intersecting)
-                    // Fallback: use triangle fan for remaining vertices
-                    // This may look wrong for concave shapes but ensures SOMETHING renders
-                    if (vertList.Count >= 3)
+                    failedSearches++;
+
+                    // Try with relaxed constraints (allow slightly reflex vertices)
+                    if (failedSearches == 1)
                     {
-                        int firstVert = vertList[0];
-                        for (int i = 1; i < vertList.Count - 1; i++)
+                        // First failure - try to find a "nearly convex" ear
+                        for (int i = 0; i < vertList.Count; i++)
                         {
-                            indices.Add(firstVert);
-                            indices.Add(vertList[i]);
-                            indices.Add(vertList[i + 1]);
+                            int iPrev = (i == 0) ? vertList.Count - 1 : i - 1;
+                            int iNext = (i == vertList.Count - 1) ? 0 : i + 1;
+
+                            int a = vertList[iPrev];
+                            int b = vertList[i];
+                            int c = vertList[iNext];
+
+                            if (IsEarRelaxed(a, b, c, cleanedPoints, vertList))
+                            {
+                                indices.Add(a);
+                                indices.Add(b);
+                                indices.Add(c);
+                                vertList.RemoveAt(i);
+                                earFound = true;
+                                failedSearches = 0;
+                                break;
+                            }
                         }
                     }
-                    break;
+
+                    if (!earFound && failedSearches >= maxFailedSearches)
+                    {
+                        // Still no ear found after many attempts - polygon is likely degenerate
+                        // Use convex decomposition as fallback (better than triangle fan)
+                        TriangulateConvexHullFallback(vertList, cleanedPoints, indices);
+                        break;
+                    }
                 }
             }
 
@@ -89,6 +122,71 @@ namespace PCBPlotter.Controls
             return indices;
         }
 
+        /// <summary>
+        /// Remove consecutive duplicate vertices that can cause triangulation issues.
+        /// </summary>
+        private static List<Point> RemoveDuplicateVertices(IList<Point> points)
+        {
+            var result = new List<Point>(points.Count);
+            for (int i = 0; i < points.Count; i++)
+            {
+                var current = points[i];
+                var next = points[(i + 1) % points.Count];
+
+                // Only add if not a duplicate of the next vertex
+                double dx = current.X - next.X;
+                double dy = current.Y - next.Y;
+                if (dx * dx + dy * dy > EPSILON * EPSILON)
+                {
+                    result.Add(current);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Fallback triangulation using convex hull approach.
+        /// Better than triangle fan for self-intersecting polygons.
+        /// </summary>
+        private static void TriangulateConvexHullFallback(List<int> vertList, IList<Point> points, List<int> indices)
+        {
+            if (vertList.Count < 3) return;
+
+            // Find the vertex with minimum Y (and minimum X as tiebreaker) - guaranteed to be convex
+            int minIdx = 0;
+            Point minPt = points[vertList[0]];
+            for (int i = 1; i < vertList.Count; i++)
+            {
+                Point pt = points[vertList[i]];
+                if (pt.Y < minPt.Y || (Math.Abs(pt.Y - minPt.Y) < EPSILON && pt.X < minPt.X))
+                {
+                    minIdx = i;
+                    minPt = pt;
+                }
+            }
+
+            // Use this vertex as the fan center - it's guaranteed to be on the convex hull
+            int centerVert = vertList[minIdx];
+
+            // Create triangles from the center to each edge
+            for (int i = 0; i < vertList.Count; i++)
+            {
+                if (i == minIdx) continue;
+                int nextI = (i + 1) % vertList.Count;
+                if (nextI == minIdx) nextI = (nextI + 1) % vertList.Count;
+                if (nextI == minIdx || i == nextI) continue;
+
+                // Only add triangles with positive area (skip degenerate/inverted ones)
+                double area = CrossProduct(points[centerVert], points[vertList[i]], points[vertList[nextI]]);
+                if (area > EPSILON)
+                {
+                    indices.Add(centerVert);
+                    indices.Add(vertList[i]);
+                    indices.Add(vertList[nextI]);
+                }
+            }
+        }
+
         private static bool IsEar(int a, int b, int c, IList<Point> points, List<int> vertList)
         {
             Point A = points[a];
@@ -96,7 +194,8 @@ namespace PCBPlotter.Controls
             Point C = points[c];
 
             // Check if the triangle is convex (not a reflex angle)
-            if (CrossProduct(A, B, C) <= 0) return false;
+            double cross = CrossProduct(A, B, C);
+            if (cross <= EPSILON) return false;
 
             // OPTIMIZATION: Calculate bounding box of the triangle for fast rejection
             double minX = Math.Min(A.X, Math.Min(B.X, C.X));
@@ -113,7 +212,8 @@ namespace PCBPlotter.Controls
                 Point p = points[pIndex];
 
                 // FAST REJECTION: If point is outside bounding box, skip expensive math
-                if (p.X < minX || p.X > maxX || p.Y < minY || p.Y > maxY)
+                if (p.X < minX - EPSILON || p.X > maxX + EPSILON ||
+                    p.Y < minY - EPSILON || p.Y > maxY + EPSILON)
                     continue;
 
                 if (IsPointInTriangle(p, A, B, C))
@@ -121,6 +221,61 @@ namespace PCBPlotter.Controls
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Relaxed ear test that accepts nearly-flat triangles.
+        /// Used as fallback when strict ear test fails.
+        /// </summary>
+        private static bool IsEarRelaxed(int a, int b, int c, IList<Point> points, List<int> vertList)
+        {
+            Point A = points[a];
+            Point B = points[b];
+            Point C = points[c];
+
+            // Accept nearly-flat triangles (cross product close to zero)
+            double cross = CrossProduct(A, B, C);
+            if (cross < -EPSILON * 100) return false; // Only reject clearly reflex angles
+
+            // Still check for vertices inside
+            for (int i = 0; i < vertList.Count; i++)
+            {
+                int pIndex = vertList[i];
+                if (pIndex == a || pIndex == b || pIndex == c) continue;
+
+                Point p = points[pIndex];
+                if (IsPointInTriangleRelaxed(p, A, B, C))
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Relaxed point-in-triangle test with tolerance.
+        /// </summary>
+        private static bool IsPointInTriangleRelaxed(Point p, Point a, Point b, Point c)
+        {
+            double v0x = c.X - a.X, v0y = c.Y - a.Y;
+            double v1x = b.X - a.X, v1y = b.Y - a.Y;
+            double v2x = p.X - a.X, v2y = p.Y - a.Y;
+
+            double dot00 = v0x * v0x + v0y * v0y;
+            double dot01 = v0x * v1x + v0y * v1y;
+            double dot02 = v0x * v2x + v0y * v2y;
+            double dot11 = v1x * v1x + v1y * v1y;
+            double dot12 = v1x * v2x + v1y * v2y;
+
+            double denom = dot00 * dot11 - dot01 * dot01;
+            if (Math.Abs(denom) < EPSILON) return false;
+
+            double invDenom = 1 / denom;
+            double u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            double v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+            // Use relaxed tolerance for "inside" check
+            double tolerance = 0.001;
+            return (u >= -tolerance) && (v >= -tolerance) && (u + v < 1 + tolerance);
         }
 
         private static bool IsCounterClockwise(IList<Point> points)

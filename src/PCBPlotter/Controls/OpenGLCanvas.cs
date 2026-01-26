@@ -838,7 +838,90 @@ void main()
                 RenderSelectionRect();
             }
 
+            // Show loading indicator when layers are being built in background
+            int pendingCount;
+            lock (_cacheLock)
+            {
+                pendingCount = _pendingCacheBuilds.Count;
+            }
+            if (pendingCount > 0)
+            {
+                RenderLoadingIndicator(pendingCount);
+            }
+
             _glControl.SwapBuffers();
+        }
+
+        /// <summary>
+        /// Renders a loading indicator overlay when layer caches are being built.
+        /// </summary>
+        private void RenderLoadingIndicator(int pendingLayersCount)
+        {
+            // Use fixed-function pipeline for simple overlay
+            GL.UseProgram(0);
+
+            // Set up screen-space orthographic projection
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.PushMatrix();
+            GL.LoadIdentity();
+            GL.Ortho(0, _glControl.Width, _glControl.Height, 0, -1, 1);
+
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.PushMatrix();
+            GL.LoadIdentity();
+
+            // Draw semi-transparent background rectangle in bottom-left corner
+            float boxWidth = 180;
+            float boxHeight = 30;
+            float margin = 10;
+            float x = margin;
+            float y = _glControl.Height - boxHeight - margin;
+
+            // Background box
+            GL.Begin(PrimitiveType.Quads);
+            GL.Color4(0.1f, 0.1f, 0.15f, 0.85f);
+            GL.Vertex2(x, y);
+            GL.Vertex2(x + boxWidth, y);
+            GL.Vertex2(x + boxWidth, y + boxHeight);
+            GL.Vertex2(x, y + boxHeight);
+            GL.End();
+
+            // Border
+            GL.Begin(PrimitiveType.LineLoop);
+            GL.Color4(0.3f, 0.6f, 1.0f, 0.9f);
+            GL.Vertex2(x, y);
+            GL.Vertex2(x + boxWidth, y);
+            GL.Vertex2(x + boxWidth, y + boxHeight);
+            GL.Vertex2(x, y + boxHeight);
+            GL.End();
+
+            // Animated loading spinner (simple rotating line)
+            float spinnerX = x + 15;
+            float spinnerY = y + boxHeight / 2;
+            float spinnerRadius = 8;
+            double angle = (DateTime.Now.Ticks / 500000.0) % (2 * Math.PI); // Rotates over time
+
+            GL.Begin(PrimitiveType.Lines);
+            GL.Color4(0.3f, 0.6f, 1.0f, 1.0f);
+            GL.Vertex2(spinnerX, spinnerY);
+            GL.Vertex2(spinnerX + spinnerRadius * Math.Cos(angle), spinnerY + spinnerRadius * Math.Sin(angle));
+            // Second line at 180 degrees offset
+            GL.Vertex2(spinnerX, spinnerY);
+            GL.Vertex2(spinnerX + spinnerRadius * Math.Cos(angle + Math.PI), spinnerY + spinnerRadius * Math.Sin(angle + Math.PI));
+            GL.End();
+
+            // Note: OpenGL doesn't have built-in text rendering.
+            // The spinner and box provide visual feedback that loading is in progress.
+            // For text, would need bitmap fonts or external library (not adding complexity here).
+
+            // Restore matrices
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.PopMatrix();
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.PopMatrix();
+
+            // Request continuous redraw while loading to animate spinner
+            _needsRedraw = true;
         }
 
         private void RenderSelectionRect()
@@ -2044,9 +2127,9 @@ void main()
         {
             if (cache.Polygons.Count == 0) return;
 
-            // Maximum polygon size for full ear-clipping triangulation
-            // Larger polygons use outline rendering (thick perimeter line)
-            const int MAX_EAR_CLIP_VERTICES = 2000;
+            // Increased threshold - the improved Triangulator handles larger polygons better
+            // with fallback mechanisms for degenerate cases
+            const int MAX_EAR_CLIP_VERTICES = 5000;
 
             // Use lists since ear clipping may produce varying triangle counts
             var allVertices = new List<float>();
@@ -2056,45 +2139,48 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                // For massive polygons (>2000 vertices), ear-clipping is O(n³) and will freeze the app.
-                // Use a simple triangle fan which is O(n) - it works correctly for convex shapes
-                // and provides approximate fill for concave shapes (better than nothing).
-                bool isMassive = poly.Points.Count > MAX_EAR_CLIP_VERTICES;
+                uint baseVertex = (uint)(allVertices.Count / 2);
 
-                if (isMassive)
+                // Add all vertices first
+                foreach (var pt in poly.Points)
                 {
-                    // TRIANGLE FAN MODE: Fast O(n) fallback for massive polygons
-                    // May have visual artifacts on deeply concave shapes, but won't freeze
-                    uint baseVertex = (uint)(allVertices.Count / 2);
+                    allVertices.Add((float)pt.X);
+                    allVertices.Add((float)pt.Y);
+                }
 
-                    // Add all vertices
+                // For extremely large polygons, use convex hull fan as fallback
+                // to avoid potential performance issues
+                if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
+                {
+                    // Find the centroid and create a fan from there
+                    // This is better than corner-based fan for most shapes
+                    double cx = 0, cy = 0;
                     foreach (var pt in poly.Points)
                     {
-                        allVertices.Add((float)pt.X);
-                        allVertices.Add((float)pt.Y);
+                        cx += pt.X;
+                        cy += pt.Y;
                     }
+                    cx /= poly.Points.Count;
+                    cy /= poly.Points.Count;
 
-                    // Create triangle fan from first vertex
-                    for (int i = 1; i < poly.Points.Count - 1; i++)
+                    // Add centroid as extra vertex
+                    uint centroidIdx = (uint)(allVertices.Count / 2);
+                    allVertices.Add((float)cx);
+                    allVertices.Add((float)cy);
+
+                    // Create triangle fan from centroid
+                    for (int i = 0; i < poly.Points.Count; i++)
                     {
-                        allIndices.Add(baseVertex);
+                        int nextI = (i + 1) % poly.Points.Count;
+                        allIndices.Add(centroidIdx);
                         allIndices.Add(baseVertex + (uint)i);
-                        allIndices.Add(baseVertex + (uint)(i + 1));
+                        allIndices.Add(baseVertex + (uint)nextI);
                     }
                 }
                 else
                 {
-                    // FILL MODE: Full ear-clipping triangulation for normal polygons
-                    uint baseVertex = (uint)(allVertices.Count / 2);
-
-                    // Add vertices
-                    foreach (var pt in poly.Points)
-                    {
-                        allVertices.Add((float)pt.X);
-                        allVertices.Add((float)pt.Y);
-                    }
-
                     // Full ear clipping for high-quality concave polygon support
+                    // The improved Triangulator has better fallback handling
                     var polyIndices = Triangulator.Triangulate(poly.Points);
 
                     // Add indices offset by the current base vertex
@@ -2121,9 +2207,8 @@ void main()
         {
             if (cache.ClearPolygons.Count == 0) return;
 
-            // Maximum polygon size for full ear-clipping triangulation
-            // Larger polygons use outline rendering (thick perimeter line)
-            const int MAX_EAR_CLIP_VERTICES = 2000;
+            // Increased threshold - the improved Triangulator handles larger polygons better
+            const int MAX_EAR_CLIP_VERTICES = 5000;
 
             // Use lists since ear clipping may produce varying triangle counts
             var allVertices = new List<float>();
@@ -2133,44 +2218,44 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                // For massive polygons (>2000 vertices), ear-clipping is O(n³) and will freeze the app.
-                // Use a simple triangle fan which is O(n) - it works correctly for convex shapes
-                // and provides approximate fill for concave shapes (better than nothing).
-                bool isMassive = poly.Points.Count > MAX_EAR_CLIP_VERTICES;
+                uint baseVertex = (uint)(allVertices.Count / 2);
 
-                if (isMassive)
+                // Add all vertices first
+                foreach (var pt in poly.Points)
                 {
-                    // TRIANGLE FAN MODE: Fast O(n) fallback for massive polygons
-                    // May have visual artifacts on deeply concave shapes, but won't freeze
-                    uint baseVertex = (uint)(allVertices.Count / 2);
+                    allVertices.Add((float)pt.X);
+                    allVertices.Add((float)pt.Y);
+                }
 
-                    // Add all vertices
+                // For extremely large polygons, use centroid fan as fallback
+                if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
+                {
+                    // Find the centroid and create a fan from there
+                    double cx = 0, cy = 0;
                     foreach (var pt in poly.Points)
                     {
-                        allVertices.Add((float)pt.X);
-                        allVertices.Add((float)pt.Y);
+                        cx += pt.X;
+                        cy += pt.Y;
                     }
+                    cx /= poly.Points.Count;
+                    cy /= poly.Points.Count;
 
-                    // Create triangle fan from first vertex
-                    for (int i = 1; i < poly.Points.Count - 1; i++)
+                    // Add centroid as extra vertex
+                    uint centroidIdx = (uint)(allVertices.Count / 2);
+                    allVertices.Add((float)cx);
+                    allVertices.Add((float)cy);
+
+                    // Create triangle fan from centroid
+                    for (int i = 0; i < poly.Points.Count; i++)
                     {
-                        allIndices.Add(baseVertex);
+                        int nextI = (i + 1) % poly.Points.Count;
+                        allIndices.Add(centroidIdx);
                         allIndices.Add(baseVertex + (uint)i);
-                        allIndices.Add(baseVertex + (uint)(i + 1));
+                        allIndices.Add(baseVertex + (uint)nextI);
                     }
                 }
                 else
                 {
-                    // FILL MODE: Full ear-clipping triangulation for normal polygons
-                    uint baseVertex = (uint)(allVertices.Count / 2);
-
-                    // Add vertices
-                    foreach (var pt in poly.Points)
-                    {
-                        allVertices.Add((float)pt.X);
-                        allVertices.Add((float)pt.Y);
-                    }
-
                     // Full ear clipping for high-quality concave polygon support
                     var polyIndices = Triangulator.Triangulate(poly.Points);
 
