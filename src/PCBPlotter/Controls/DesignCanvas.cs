@@ -1021,14 +1021,20 @@ namespace PCBPlotter.Controls
             foreach (var prim in visiblePrimitives)
             {
                 // LOD: Skip primitives that are too small to see
-                // NOTE: Polygon/Contour types often have Width/Height=0 (they use Points array instead)
-                // so we must exclude them from LOD filtering to avoid hiding macro-generated shapes
+                // For Polygon/Contour types, compute actual bounds from Points since Width/Height may be 0
                 double primSize = Math.Max(prim.Width, prim.Height);
+                if ((prim.Type == GerberPrimitiveType.Polygon || prim.Type == GerberPrimitiveType.Contour) && primSize < minWorldSize)
+                {
+                    // Compute actual size from Points array
+                    if (prim.Points != null && prim.Points.Count >= 3)
+                    {
+                        var bounds = prim.GetBounds();
+                        primSize = Math.Max(bounds.Width, bounds.Height);
+                    }
+                }
                 if (primSize < minWorldSize &&
                     prim.Type != GerberPrimitiveType.Line &&
-                    prim.Type != GerberPrimitiveType.Arc &&
-                    prim.Type != GerberPrimitiveType.Polygon &&
-                    prim.Type != GerberPrimitiveType.Contour)
+                    prim.Type != GerberPrimitiveType.Arc)
                     continue;
 
                 // Coordinate Safety (prevents NaN/Infinity glitches)
