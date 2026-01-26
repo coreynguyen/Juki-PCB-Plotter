@@ -146,9 +146,43 @@ namespace PCBPlotter.Core.Services
 
         private void ParseContentInOrder(string content)
         {
+            // Tokenize the content into extended commands and data blocks while preserving order
+            // This correctly handles LP polarity changes relative to region definitions
+            var tokens = TokenizeContent(content);
+
+            foreach (var token in tokens)
+            {
+                if (token.StartsWith("%") && token.EndsWith("%"))
+                {
+                    // Extended command - extract content between % markers
+                    string cmd = token.Substring(1, token.Length - 2).TrimEnd('*').Trim();
+
+                    // Handle state-changing commands (LP) inline
+                    if (cmd.StartsWith("LP"))
+                    {
+                        ParseLayerPolarity(cmd);
+                    }
+                    // Other extended commands were already handled in ParseDefinitionCommands
+                }
+                else
+                {
+                    // Data block
+                    string block = token.TrimEnd('*').Trim();
+                    if (!string.IsNullOrEmpty(block))
+                    {
+                        ParseDataBlock(block);
+                    }
+                }
+            }
+        }
+
+        private List<string> TokenizeContent(string content)
+        {
             // Split content into tokens: extended commands (%...%) and data blocks (...*)
-            // Process them in order to correctly handle LP polarity changes
+            // Preserves order for correct LP polarity handling
+            var tokens = new List<string>();
             int pos = 0;
+
             while (pos < content.Length)
             {
                 // Skip whitespace
@@ -163,32 +197,56 @@ namespace PCBPlotter.Core.Services
                     int endPos = content.IndexOf('%', pos + 1);
                     if (endPos == -1) break;
 
-                    string cmd = content.Substring(pos + 1, endPos - pos - 1).Trim();
-
-                    // Handle state-changing commands (LP) inline
-                    if (cmd.StartsWith("LP"))
-                    {
-                        ParseLayerPolarity(cmd);
-                    }
-                    // Other extended commands were already handled in ParseDefinitionCommands
-
+                    tokens.Add(content.Substring(pos, endPos - pos + 1));
                     pos = endPos + 1;
                 }
                 else
                 {
                     // Data block - find the closing *
-                    int endPos = content.IndexOf('*', pos);
-                    if (endPos == -1) break;
-
-                    string block = content.Substring(pos, endPos - pos).Trim();
-                    if (!string.IsNullOrEmpty(block))
+                    // Note: In well-formed Gerber, * only appears at end of data blocks
+                    // Extended commands use %...% delimiters
+                    int endPos = pos;
+                    while (endPos < content.Length && content[endPos] != '*' && content[endPos] != '%')
                     {
-                        ParseDataBlock(block);
+                        endPos++;
                     }
 
-                    pos = endPos + 1;
+                    if (endPos < content.Length)
+                    {
+                        if (content[endPos] == '*')
+                        {
+                            // Normal data block ending
+                            string block = content.Substring(pos, endPos - pos + 1);
+                            if (!string.IsNullOrWhiteSpace(block.TrimEnd('*')))
+                            {
+                                tokens.Add(block);
+                            }
+                            pos = endPos + 1;
+                        }
+                        else if (content[endPos] == '%')
+                        {
+                            // Hit an extended command - emit any content before it as a partial block
+                            // (This handles malformed files with missing * terminators)
+                            if (endPos > pos)
+                            {
+                                string partial = content.Substring(pos, endPos - pos).Trim();
+                                if (!string.IsNullOrEmpty(partial))
+                                {
+                                    tokens.Add(partial + "*"); // Add synthetic terminator
+                                }
+                            }
+                            pos = endPos; // Will be handled as extended command next iteration
+                        }
+                    }
+                    else
+                    {
+                        // End of content
+                        break;
+                    }
                 }
             }
+
+            return tokens;
         }
 
         private string RemoveComments(string content)
