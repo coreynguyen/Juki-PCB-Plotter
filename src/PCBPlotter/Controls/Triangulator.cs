@@ -43,6 +43,19 @@ namespace PCBPlotter.Controls
             cleanedPoints = RemoveDuplicateVertices(points);
             if (cleanedPoints.Count < 3) return indices;
 
+            // FAST PATH: Check if polygon is convex - use O(n) triangle fan instead of O(n²) ear clipping
+            if (IsConvexPolygon(cleanedPoints))
+            {
+                // Simple triangle fan from vertex 0
+                for (int i = 1; i < cleanedPoints.Count - 1; i++)
+                {
+                    indices.Add(0);
+                    indices.Add(i);
+                    indices.Add(i + 1);
+                }
+                return indices;
+            }
+
             // Create a linked list of vertex indices
             List<int> vertList = new List<int>(cleanedPoints.Count);
             if (IsCounterClockwise(cleanedPoints))
@@ -304,6 +317,42 @@ namespace PCBPlotter.Controls
                 sum += (p2.X - p1.X) * (p2.Y + p1.Y);
             }
             return sum < 0; // Negative sum means CCW for standard math coordinates
+        }
+
+        /// <summary>
+        /// Check if a polygon is convex. A convex polygon can be triangulated with O(n)
+        /// triangle fan instead of O(n²) ear clipping.
+        /// </summary>
+        private static bool IsConvexPolygon(IList<Point> points)
+        {
+            if (points.Count < 3) return false;
+
+            // A polygon is convex if all cross products have the same sign
+            bool? isPositive = null;
+            int n = points.Count;
+
+            for (int i = 0; i < n; i++)
+            {
+                int iPrev = (i == 0) ? n - 1 : i - 1;
+                int iNext = (i + 1) % n;
+
+                double cross = CrossProduct(points[iPrev], points[i], points[iNext]);
+
+                // Skip nearly-zero cross products (collinear points)
+                if (Math.Abs(cross) < EPSILON) continue;
+
+                if (isPositive == null)
+                {
+                    isPositive = cross > 0;
+                }
+                else if ((cross > 0) != isPositive.Value)
+                {
+                    // Sign changed - polygon is concave
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static double CrossProduct(Point a, Point b, Point c)

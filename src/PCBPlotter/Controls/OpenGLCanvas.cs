@@ -1664,35 +1664,52 @@ void main()
 
                     case GerberPrimitiveType.Obround:
                         // Decompose obround into rect + 2 circles (cached)
-                        float hw = (float)(prim.Width / 2);
-                        float hh = (float)(prim.Height / 2);
-                        if (prim.Width > prim.Height)
+                        // Special case: if Width == Height, treat as a single circle
                         {
-                            float radius = hh;
-                            float rectHw = hw - radius;
-                            cache.Rectangles.Add(new CachedRectangle
+                            float obrHw = (float)(prim.Width / 2);
+                            float obrHh = (float)(prim.Height / 2);
+                            const float tolerance = 0.0001f;
+
+                            if (Math.Abs(prim.Width - prim.Height) < tolerance)
                             {
-                                X = (float)prim.X,
-                                Y = (float)prim.Y,
-                                Width = rectHw * 2,
-                                Height = (float)prim.Height
-                            });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
-                        }
-                        else
-                        {
-                            float radius = hw;
-                            float rectHh = hh - radius;
-                            cache.Rectangles.Add(new CachedRectangle
+                                // Equal dimensions - it's actually a circle
+                                cache.Circles.Add(new CachedCircle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Radius = obrHw
+                                });
+                            }
+                            else if (prim.Width > prim.Height)
                             {
-                                X = (float)prim.X,
-                                Y = (float)prim.Y,
-                                Width = (float)prim.Width,
-                                Height = rectHh * 2
-                            });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                                // Horizontal obround: rect + left/right semicircles
+                                float radius = obrHh;
+                                float rectHw = obrHw - radius;
+                                cache.Rectangles.Add(new CachedRectangle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Width = rectHw * 2,
+                                    Height = (float)prim.Height
+                                });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
+                            }
+                            else
+                            {
+                                // Vertical obround: rect + top/bottom semicircles
+                                float radius = obrHw;
+                                float rectHh = obrHh - radius;
+                                cache.Rectangles.Add(new CachedRectangle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Width = (float)prim.Width,
+                                    Height = rectHh * 2
+                                });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                            }
                         }
                         break;
 
@@ -1816,35 +1833,52 @@ void main()
 
                         case GerberPrimitiveType.Obround:
                             // Decompose clear obround into clear rect + 2 clear circles
-                            float hw = (float)(prim.Width / 2);
-                            float hh = (float)(prim.Height / 2);
-                            if (prim.Width > prim.Height)
+                            // Special case: if Width == Height, treat as a single circle (not decomposed)
                             {
-                                float radius = hh;
-                                float rectHw = hw - radius;
-                                cache.ClearRectangles.Add(new CachedRectangle
+                                float clrObrHw = (float)(prim.Width / 2);
+                                float clrObrHh = (float)(prim.Height / 2);
+                                const float tolerance = 0.0001f;
+
+                                if (Math.Abs(prim.Width - prim.Height) < tolerance)
                                 {
-                                    X = (float)prim.X,
-                                    Y = (float)prim.Y,
-                                    Width = rectHw * 2,
-                                    Height = (float)prim.Height
-                                });
-                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
-                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
-                            }
-                            else
-                            {
-                                float radius = hw;
-                                float rectHh = hh - radius;
-                                cache.ClearRectangles.Add(new CachedRectangle
+                                    // Equal dimensions - it's actually a circle
+                                    cache.ClearCircles.Add(new CachedCircle
+                                    {
+                                        X = (float)prim.X,
+                                        Y = (float)prim.Y,
+                                        Radius = clrObrHw
+                                    });
+                                }
+                                else if (prim.Width > prim.Height)
                                 {
-                                    X = (float)prim.X,
-                                    Y = (float)prim.Y,
-                                    Width = (float)prim.Width,
-                                    Height = rectHh * 2
-                                });
-                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
-                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                                    // Horizontal obround: rect + left/right semicircles
+                                    float radius = clrObrHh;
+                                    float rectHw = clrObrHw - radius;
+                                    cache.ClearRectangles.Add(new CachedRectangle
+                                    {
+                                        X = (float)prim.X,
+                                        Y = (float)prim.Y,
+                                        Width = rectHw * 2,
+                                        Height = (float)prim.Height
+                                    });
+                                    cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
+                                    cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
+                                }
+                                else
+                                {
+                                    // Vertical obround: rect + top/bottom semicircles
+                                    float radius = clrObrHw;
+                                    float rectHh = clrObrHh - radius;
+                                    cache.ClearRectangles.Add(new CachedRectangle
+                                    {
+                                        X = (float)prim.X,
+                                        Y = (float)prim.Y,
+                                        Width = (float)prim.Width,
+                                        Height = rectHh * 2
+                                    });
+                                    cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
+                                    cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                                }
                             }
                             break;
 
@@ -1884,35 +1918,52 @@ void main()
 
                     case GerberPrimitiveType.Obround:
                         // Decompose obround into rect + 2 circles (cached)
-                        float hw = (float)(prim.Width / 2);
-                        float hh = (float)(prim.Height / 2);
-                        if (prim.Width > prim.Height)
+                        // Special case: if Width == Height, treat as a single circle
                         {
-                            float radius = hh;
-                            float rectHw = hw - radius;
-                            cache.Rectangles.Add(new CachedRectangle
+                            float obrHw = (float)(prim.Width / 2);
+                            float obrHh = (float)(prim.Height / 2);
+                            const float tolerance = 0.0001f;
+
+                            if (Math.Abs(prim.Width - prim.Height) < tolerance)
                             {
-                                X = (float)prim.X,
-                                Y = (float)prim.Y,
-                                Width = rectHw * 2,
-                                Height = (float)prim.Height
-                            });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
-                        }
-                        else
-                        {
-                            float radius = hw;
-                            float rectHh = hh - radius;
-                            cache.Rectangles.Add(new CachedRectangle
+                                // Equal dimensions - it's actually a circle
+                                cache.Circles.Add(new CachedCircle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Radius = obrHw
+                                });
+                            }
+                            else if (prim.Width > prim.Height)
                             {
-                                X = (float)prim.X,
-                                Y = (float)prim.Y,
-                                Width = (float)prim.Width,
-                                Height = rectHh * 2
-                            });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
-                            cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                                // Horizontal obround: rect + left/right semicircles
+                                float radius = obrHh;
+                                float rectHw = obrHw - radius;
+                                cache.Rectangles.Add(new CachedRectangle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Width = rectHw * 2,
+                                    Height = (float)prim.Height
+                                });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
+                            }
+                            else
+                            {
+                                // Vertical obround: rect + top/bottom semicircles
+                                float radius = obrHw;
+                                float rectHh = obrHh - radius;
+                                cache.Rectangles.Add(new CachedRectangle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Width = (float)prim.Width,
+                                    Height = rectHh * 2
+                                });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
+                                cache.Circles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                            }
                         }
                         break;
 
@@ -2149,42 +2200,51 @@ void main()
                 if (!useOutlineFallback)
                 {
                     polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
-                    // If triangulation failed (returned empty), use outline fallback
+                    // If triangulation failed (returned empty), use triangle fan fallback
                     if (polyIndices.Count == 0)
                         useOutlineFallback = true;
                 }
 
                 if (useOutlineFallback)
                 {
-                    // --- OUTLINE RENDERER (Fast & Safe) ---
-                    // Generates a thick line strip around the polygon perimeter.
-                    // No filling, but much faster and no "stray triangle" glitches.
+                    // --- TRIANGLE FAN FALLBACK (Fast & Filled) ---
+                    // Uses a simple triangle fan from centroid - works well for most polygons.
+                    // May have minor artifacts for complex concave shapes but much better than outlines.
 
-                    float lineWidth = 0.05f; // Thin outline
+                    var points = poly.Points;
+                    if (points.Count < 3) continue;
 
-                    for (int i = 0; i < poly.Points.Count; i++)
+                    // Calculate centroid
+                    double cx = 0, cy = 0;
+                    foreach (var pt in points)
                     {
-                        var p1 = poly.Points[i];
-                        var p2 = poly.Points[(i + 1) % poly.Points.Count];
+                        cx += pt.X;
+                        cy += pt.Y;
+                    }
+                    cx /= points.Count;
+                    cy /= points.Count;
 
-                        float dx = (float)(p2.X - p1.X);
-                        float dy = (float)(p2.Y - p1.Y);
-                        float len = (float)Math.Sqrt(dx * dx + dy * dy);
-                        if (len < 0.00001f) continue;
+                    uint baseVertex = (uint)(allVertices.Count / 2);
 
-                        float nx = -dy / len * lineWidth;
-                        float ny = dx / len * lineWidth;
+                    // Add centroid vertex first
+                    allVertices.Add((float)cx);
+                    allVertices.Add((float)cy);
 
-                        uint vBase = (uint)(allVertices.Count / 2);
+                    // Add all polygon vertices
+                    foreach (var pt in points)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
 
-                        // Add Quad (2 Triangles) for the line segment
-                        allVertices.Add((float)p1.X - nx); allVertices.Add((float)p1.Y - ny);
-                        allVertices.Add((float)p1.X + nx); allVertices.Add((float)p1.Y + ny);
-                        allVertices.Add((float)p2.X + nx); allVertices.Add((float)p2.Y + ny);
-                        allVertices.Add((float)p2.X - nx); allVertices.Add((float)p2.Y - ny);
-
-                        allIndices.Add(vBase);     allIndices.Add(vBase + 1); allIndices.Add(vBase + 2);
-                        allIndices.Add(vBase);     allIndices.Add(vBase + 2); allIndices.Add(vBase + 3);
+                    // Create triangle fan from centroid to each edge
+                    for (int i = 0; i < points.Count; i++)
+                    {
+                        int nextI = (i + 1) % points.Count;
+                        // Triangle: centroid, vertex[i], vertex[i+1]
+                        allIndices.Add(baseVertex);           // centroid
+                        allIndices.Add(baseVertex + 1 + (uint)i);       // current vertex
+                        allIndices.Add(baseVertex + 1 + (uint)nextI);   // next vertex
                     }
                 }
                 else
@@ -2249,42 +2309,51 @@ void main()
                 if (!useOutlineFallback)
                 {
                     polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
-                    // If triangulation failed (returned empty), use outline fallback
+                    // If triangulation failed (returned empty), use triangle fan fallback
                     if (polyIndices.Count == 0)
                         useOutlineFallback = true;
                 }
 
                 if (useOutlineFallback)
                 {
-                    // --- OUTLINE RENDERER (Fast & Safe) ---
-                    // Generates a thick line strip around the polygon perimeter.
-                    // No filling, but much faster and no "stray triangle" glitches.
+                    // --- TRIANGLE FAN FALLBACK (Fast & Filled) ---
+                    // Uses a simple triangle fan from centroid - works well for most polygons.
+                    // Critical for clear polygons to properly render as filled hole shapes.
 
-                    float lineWidth = 0.05f; // Thin outline
+                    var points = poly.Points;
+                    if (points.Count < 3) continue;
 
-                    for (int i = 0; i < poly.Points.Count; i++)
+                    // Calculate centroid
+                    double cx = 0, cy = 0;
+                    foreach (var pt in points)
                     {
-                        var p1 = poly.Points[i];
-                        var p2 = poly.Points[(i + 1) % poly.Points.Count];
+                        cx += pt.X;
+                        cy += pt.Y;
+                    }
+                    cx /= points.Count;
+                    cy /= points.Count;
 
-                        float dx = (float)(p2.X - p1.X);
-                        float dy = (float)(p2.Y - p1.Y);
-                        float len = (float)Math.Sqrt(dx * dx + dy * dy);
-                        if (len < 0.00001f) continue;
+                    uint baseVertex = (uint)(allVertices.Count / 2);
 
-                        float nx = -dy / len * lineWidth;
-                        float ny = dx / len * lineWidth;
+                    // Add centroid vertex first
+                    allVertices.Add((float)cx);
+                    allVertices.Add((float)cy);
 
-                        uint vBase = (uint)(allVertices.Count / 2);
+                    // Add all polygon vertices
+                    foreach (var pt in points)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
 
-                        // Add Quad (2 Triangles) for the line segment
-                        allVertices.Add((float)p1.X - nx); allVertices.Add((float)p1.Y - ny);
-                        allVertices.Add((float)p1.X + nx); allVertices.Add((float)p1.Y + ny);
-                        allVertices.Add((float)p2.X + nx); allVertices.Add((float)p2.Y + ny);
-                        allVertices.Add((float)p2.X - nx); allVertices.Add((float)p2.Y - ny);
-
-                        allIndices.Add(vBase);     allIndices.Add(vBase + 1); allIndices.Add(vBase + 2);
-                        allIndices.Add(vBase);     allIndices.Add(vBase + 2); allIndices.Add(vBase + 3);
+                    // Create triangle fan from centroid to each edge
+                    for (int i = 0; i < points.Count; i++)
+                    {
+                        int nextI = (i + 1) % points.Count;
+                        // Triangle: centroid, vertex[i], vertex[i+1]
+                        allIndices.Add(baseVertex);           // centroid
+                        allIndices.Add(baseVertex + 1 + (uint)i);       // current vertex
+                        allIndices.Add(baseVertex + 1 + (uint)nextI);   // next vertex
                     }
                 }
                 else
