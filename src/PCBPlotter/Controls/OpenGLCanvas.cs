@@ -2139,19 +2139,19 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                uint baseVertex = (uint)(allVertices.Count / 2);
-
-                // Add all vertices first
-                foreach (var pt in poly.Points)
-                {
-                    allVertices.Add((float)pt.X);
-                    allVertices.Add((float)pt.Y);
-                }
-
                 // For extremely large polygons, use convex hull fan as fallback
                 // to avoid potential performance issues
                 if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
                 {
+                    uint baseVertex = (uint)(allVertices.Count / 2);
+
+                    // Add all vertices first (use original points for centroid fan)
+                    foreach (var pt in poly.Points)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
+
                     // Find the centroid and create a fan from there
                     // This is better than corner-based fan for most shapes
                     double cx = 0, cy = 0;
@@ -2180,8 +2180,23 @@ void main()
                 else
                 {
                     // Full ear clipping for high-quality concave polygon support
-                    // The improved Triangulator has better fallback handling
-                    var polyIndices = Triangulator.Triangulate(poly.Points);
+                    // IMPORTANT: Use TriangulateWithCleanedPoints to get both cleaned vertices
+                    // and indices that match. The triangulator removes duplicate consecutive
+                    // vertices, so we must use the cleaned points for the vertex buffer.
+                    List<Point> cleanedPoints;
+                    var polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
+
+                    if (cleanedPoints.Count < 3 || polyIndices.Count == 0)
+                        continue;
+
+                    uint baseVertex = (uint)(allVertices.Count / 2);
+
+                    // Add cleaned vertices (not original points - indices are into cleaned list)
+                    foreach (var pt in cleanedPoints)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
 
                     // Add indices offset by the current base vertex
                     foreach (int index in polyIndices)
@@ -2218,18 +2233,18 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                uint baseVertex = (uint)(allVertices.Count / 2);
-
-                // Add all vertices first
-                foreach (var pt in poly.Points)
-                {
-                    allVertices.Add((float)pt.X);
-                    allVertices.Add((float)pt.Y);
-                }
-
                 // For extremely large polygons, use centroid fan as fallback
                 if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
                 {
+                    uint baseVertex = (uint)(allVertices.Count / 2);
+
+                    // Add all vertices first (use original points for centroid fan)
+                    foreach (var pt in poly.Points)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
+
                     // Find the centroid and create a fan from there
                     double cx = 0, cy = 0;
                     foreach (var pt in poly.Points)
@@ -2257,7 +2272,23 @@ void main()
                 else
                 {
                     // Full ear clipping for high-quality concave polygon support
-                    var polyIndices = Triangulator.Triangulate(poly.Points);
+                    // IMPORTANT: Use TriangulateWithCleanedPoints to get both cleaned vertices
+                    // and indices that match. The triangulator removes duplicate consecutive
+                    // vertices, so we must use the cleaned points for the vertex buffer.
+                    List<Point> cleanedPoints;
+                    var polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
+
+                    if (cleanedPoints.Count < 3 || polyIndices.Count == 0)
+                        continue;
+
+                    uint baseVertex = (uint)(allVertices.Count / 2);
+
+                    // Add cleaned vertices (not original points - indices are into cleaned list)
+                    foreach (var pt in cleanedPoints)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
 
                     // Add indices offset by the current base vertex
                     foreach (int index in polyIndices)

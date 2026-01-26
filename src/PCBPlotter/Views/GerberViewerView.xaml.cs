@@ -177,7 +177,10 @@ namespace PCBPlotter.Views
             if (vm != null)
             {
                 bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
-                vm.SelectPrimitiveAtPoint(worldPos, addToSelection);
+                // Calculate hit radius in world units (5 pixels converted to world space)
+                // This matches the CPU canvas behavior which uses hitRadius / Zoom
+                double hitRadiusWorld = 5.0 / OpenGLCanvas.Zoom;
+                vm.SelectPrimitiveAtPoint(worldPos, addToSelection, hitRadiusWorld);
             }
         }
 

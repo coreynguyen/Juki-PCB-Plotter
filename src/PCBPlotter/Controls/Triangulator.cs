@@ -15,16 +15,32 @@ namespace PCBPlotter.Controls
 
         /// <summary>
         /// Triangulates a polygon using the Ear Clipping algorithm.
+        /// NOTE: This method internally removes duplicate consecutive vertices.
+        /// Use TriangulateWithCleanedPoints if you need the cleaned vertex list.
         /// </summary>
         /// <param name="points">The polygon vertices</param>
-        /// <returns>List of triangle indices (3 per triangle)</returns>
+        /// <returns>List of triangle indices (3 per triangle) into the CLEANED point list</returns>
         public static List<int> Triangulate(IList<Point> points)
         {
+            List<Point> cleanedPoints;
+            return TriangulateWithCleanedPoints(points, out cleanedPoints);
+        }
+
+        /// <summary>
+        /// Triangulates a polygon using the Ear Clipping algorithm, also returning the cleaned points.
+        /// Use this when you need to add vertices to a mesh buffer, as the indices are into cleanedPoints.
+        /// </summary>
+        /// <param name="points">The polygon vertices</param>
+        /// <param name="cleanedPoints">Output: the cleaned polygon vertices (duplicates removed)</param>
+        /// <returns>List of triangle indices (3 per triangle) into cleanedPoints</returns>
+        public static List<int> TriangulateWithCleanedPoints(IList<Point> points, out List<Point> cleanedPoints)
+        {
             List<int> indices = new List<int>();
+            cleanedPoints = new List<Point>();
             if (points == null || points.Count < 3) return indices;
 
             // Pre-process: remove duplicate consecutive vertices that can cause issues
-            var cleanedPoints = RemoveDuplicateVertices(points);
+            cleanedPoints = RemoveDuplicateVertices(points);
             if (cleanedPoints.Count < 3) return indices;
 
             // Create a linked list of vertex indices

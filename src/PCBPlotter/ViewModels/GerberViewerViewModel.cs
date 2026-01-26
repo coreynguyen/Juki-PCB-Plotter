@@ -708,11 +708,14 @@ namespace PCBPlotter.ViewModels
         /// <summary>
         /// Selects a primitive at the specified world position (for GPU canvas click handling)
         /// </summary>
-        public void SelectPrimitiveAtPoint(Point worldPos, bool addToSelection = false)
+        /// <param name="worldPos">Click position in world coordinates</param>
+        /// <param name="addToSelection">If true, toggles selection; if false, replaces selection</param>
+        /// <param name="hitRadiusWorld">Hit radius in world units (default 0.5, but should be zoom-adjusted)</param>
+        public void SelectPrimitiveAtPoint(Point worldPos, bool addToSelection = false, double hitRadiusWorld = 0.5)
         {
             if (SelectedLayer == null) return;
 
-            const double hitRadius = 0.5; // World units hit radius
+            double hitRadius = hitRadiusWorld;
 
             GerberPrimitive closestPrimitive = null;
             double closestDistance = double.MaxValue;
