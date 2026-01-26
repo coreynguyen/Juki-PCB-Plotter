@@ -1555,7 +1555,7 @@ namespace PCBPlotter.Core.Services
                     if (int.TryParse(varPart, out int paramIndex))
                     {
                         // Gerber parameters are 1-based
-                        return (variables != null && variables.TryGetValue(paramIndex, out double val)) ? val : 0;
+                        return (variables != null && variables.TryGetValue(paramIndex, out double paramVal)) ? paramVal : 0;
                     }
                     return 0;
                 }
