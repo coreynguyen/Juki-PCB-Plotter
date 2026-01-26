@@ -545,12 +545,30 @@ void main()
             // Upload instanced geometry
             _geometryCache.Upload();
 
-            // Use state cache for efficient state management
+            // RENDER ORDER FIX: Gerber files typically define regions (polygons) first,
+            // then clear cutouts, then flashes (circles/rectangles) on top.
+            // Rendering polygons first ensures board outlines don't cover pads.
+
+            // 1. Render static polygon meshes FIRST (board outlines, copper pours)
+            RenderStaticPolygonMeshes(projection, view);
+
+            // 2. Render static clear polygon meshes (holes/cutouts in the polygons)
+            RenderStaticClearPolygonMeshes(projection, view);
+
+            // 3. Render static line meshes (traces)
+            RenderStaticLineMeshes(projection, view);
+
+            // 4. Render dynamic lines (fallback)
+            RenderLines(projection, view);
+
+            // 5. Render dynamic polygons (fallback)
+            RenderPolygons(projection, view);
+
+            // 6. Render instanced circles (pads, flashes) - ON TOP of polygons
             _stateCache.UseProgram(_instancedShader);
             _stateCache.SetProjectionMatrix(_instancedProjLoc, ref projection);
             _stateCache.SetViewMatrix(_instancedViewLoc, ref view);
 
-            // Render instanced circles
             _geometryCache.DrawCircles();
             if (_geometryCache.CircleCount > 0)
             {
@@ -558,28 +576,13 @@ void main()
                 _trianglesRendered += _geometryCache.CircleCount * CIRCLE_SEGMENTS;
             }
 
-            // Render instanced rectangles (same shader, no state change needed)
+            // 7. Render instanced rectangles - ON TOP of polygons
             _geometryCache.DrawRectangles();
             if (_geometryCache.RectangleCount > 0)
             {
                 _drawCalls++;
                 _trianglesRendered += _geometryCache.RectangleCount * 2;
             }
-
-            // Render dynamic lines (fallback)
-            RenderLines(projection, view);
-
-            // Render dynamic polygons (fallback)
-            RenderPolygons(projection, view);
-
-            // Render static line meshes (pre-triangulated, no per-frame rebuild)
-            RenderStaticLineMeshes(projection, view);
-
-            // Render static polygon meshes (pre-triangulated, no per-frame rebuild)
-            RenderStaticPolygonMeshes(projection, view);
-
-            // Render static clear polygon meshes (holes/cutouts) - last since they create visual cutouts
-            RenderStaticClearPolygonMeshes(projection, view);
         }
 
         private void RenderStaticLineMeshes(Matrix4 projection, Matrix4 view)
