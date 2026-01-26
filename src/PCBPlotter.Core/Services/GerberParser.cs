@@ -29,6 +29,7 @@ namespace PCBPlotter.Core.Services
         private bool _regionMode;
         private bool _darkPolarity = true;  // true = dark (add), false = clear (subtract)
         private QuadrantMode _quadrantMode = QuadrantMode.Multi;
+        private int _lastDCode = 2;  // Last D operation (1=draw, 2=move, 3=flash) - default to move
 
         // Apertures and macros
         private Dictionary<int, Aperture> _apertures = new Dictionary<int, Aperture>();
@@ -121,6 +122,7 @@ namespace PCBPlotter.Core.Services
             _regionMode = false;
             _darkPolarity = true;
             _quadrantMode = QuadrantMode.Multi;
+            _lastDCode = 2;
             _apertures.Clear();
             _macros.Clear();
             _primitives.Clear();
@@ -381,8 +383,9 @@ namespace PCBPlotter.Core.Services
             }
             else if (block.StartsWith("X") || block.StartsWith("Y"))
             {
-                // Coordinate without explicit D code - use last D code
-                ParseCoordinateMove(block, _regionMode ? 1 : 2); // Region mode continues drawing
+                // Coordinate without explicit D code - use the last D code (Gerber spec)
+                // This is critical: X...Y...* without D-code continues the previous operation
+                ParseCoordinateMove(block, _lastDCode);
             }
 
             // Handle M-codes
@@ -455,16 +458,19 @@ namespace PCBPlotter.Core.Services
             else if (dCode == 1)
             {
                 // D01 - Interpolate (draw)
+                _lastDCode = 1;
                 ParseCoordinateMove(block, 1);
             }
             else if (dCode == 2)
             {
                 // D02 - Move
+                _lastDCode = 2;
                 ParseCoordinateMove(block, 2);
             }
             else if (dCode == 3)
             {
                 // D03 - Flash
+                _lastDCode = 3;
                 ParseCoordinateMove(block, 3);
             }
         }
