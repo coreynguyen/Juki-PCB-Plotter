@@ -1323,6 +1323,60 @@ void main()
                 // Fallback to O(N) iteration if no tile index
                 RenderWithFullIteration(cache, color, minVisibleSize, viewLeft, viewBottom, viewRight, viewTop);
             }
+
+            // --- Second Pass: Render Clear Polarity (Holes) ---
+            // Clear primitives are rendered with background color to create cutouts
+            RenderClearPrimitives(cache, viewLeft, viewBottom, viewRight, viewTop, minVisibleSize);
+        }
+
+        /// <summary>
+        /// Renders clear polarity primitives (holes) with background color.
+        /// Called after dark primitives to create cutout effect.
+        /// </summary>
+        private void RenderClearPrimitives(LayerGeometryCache cache, float viewLeft, float viewBottom, float viewRight, float viewTop, float minVisibleSize)
+        {
+            // Skip if no clear primitives
+            if (cache.ClearCircles.Count == 0 && cache.ClearRectangles.Count == 0)
+                return;
+
+            // Use background color for holes (creates visual cutout effect)
+            var bg = BackgroundColor;
+            var holeColor = new OpenTK.Vector4(bg.R / 255f, bg.G / 255f, bg.B / 255f, 1.0f);
+
+            // Render clear circles (holes)
+            foreach (var circle in cache.ClearCircles)
+            {
+                float r = circle.Radius;
+
+                // Frustum culling
+                if (circle.X + r < viewLeft || circle.X - r > viewRight ||
+                    circle.Y + r < viewBottom || circle.Y - r > viewTop)
+                    continue;
+
+                // LOD filtering
+                if (r * 2 < minVisibleSize)
+                    continue;
+
+                _batchRenderer.AddCircle(circle.X, circle.Y, circle.Radius, holeColor);
+            }
+
+            // Render clear rectangles (holes)
+            foreach (var rect in cache.ClearRectangles)
+            {
+                float hw = rect.Width / 2;
+                float hh = rect.Height / 2;
+
+                // Frustum culling
+                if (rect.X + hw < viewLeft || rect.X - hw > viewRight ||
+                    rect.Y + hh < viewBottom || rect.Y - hh > viewTop)
+                    continue;
+
+                // LOD filtering
+                if (Math.Max(rect.Width, rect.Height) < minVisibleSize)
+                    continue;
+
+                _batchRenderer.AddRectangle(rect.X, rect.Y, rect.Width, rect.Height, holeColor);
+            }
         }
 
         /// <summary>
@@ -1331,15 +1385,13 @@ void main()
         private void RenderStaticMeshesOnly(LayerGeometryCache cache, OpenTK.Vector4 color)
         {
             // Render lines using static mesh (no per-frame geometry rebuild)
-            // Skip during panning for performance
-            if (!_isPanning && cache.LineMesh != null && cache.LineMesh.HasData)
+            if (cache.LineMesh != null && cache.LineMesh.HasData)
             {
                 _batchRenderer.RenderStaticLineMesh(cache.LayerId, color);
             }
 
             // Render polygons using static mesh (no per-frame geometry rebuild)
-            // Skip during panning for performance
-            if (!_isPanning && cache.PolygonMesh != null && cache.PolygonMesh.HasData)
+            if (cache.PolygonMesh != null && cache.PolygonMesh.HasData)
             {
                 _batchRenderer.RenderStaticPolygonMesh(cache.LayerId, color);
             }
@@ -1414,15 +1466,13 @@ void main()
             }
 
             // Render lines using static mesh (no per-frame geometry rebuild)
-            // Skip during panning for performance
-            if (!_isPanning && cache.LineMesh != null && cache.LineMesh.HasData)
+            if (cache.LineMesh != null && cache.LineMesh.HasData)
             {
                 _batchRenderer.RenderStaticLineMesh(cache.LayerId, color);
             }
 
             // Render polygons using static mesh (no per-frame geometry rebuild)
-            // Skip during panning for performance
-            if (!_isPanning && cache.PolygonMesh != null && cache.PolygonMesh.HasData)
+            if (cache.PolygonMesh != null && cache.PolygonMesh.HasData)
             {
                 _batchRenderer.RenderStaticPolygonMesh(cache.LayerId, color);
             }
@@ -1467,19 +1517,15 @@ void main()
                 _batchRenderer.AddRectangle(rect.X, rect.Y, rect.Width, rect.Height, color);
             }
 
-            // Lines and polygons - use static meshes for no per-frame geometry rebuild
-            // Skip during panning for performance
-            if (!_isPanning)
+            // Lines and polygons - use static meshes (no per-frame geometry rebuild)
+            if (cache.LineMesh != null && cache.LineMesh.HasData)
             {
-                if (cache.LineMesh != null && cache.LineMesh.HasData)
-                {
-                    _batchRenderer.RenderStaticLineMesh(cache.LayerId, color);
-                }
+                _batchRenderer.RenderStaticLineMesh(cache.LayerId, color);
+            }
 
-                if (cache.PolygonMesh != null && cache.PolygonMesh.HasData)
-                {
-                    _batchRenderer.RenderStaticPolygonMesh(cache.LayerId, color);
-                }
+            if (cache.PolygonMesh != null && cache.PolygonMesh.HasData)
+            {
+                _batchRenderer.RenderStaticPolygonMesh(cache.LayerId, color);
             }
         }
 
@@ -1644,13 +1690,74 @@ void main()
             cache.Rectangles = new List<CachedRectangle>(estimatedCount / 4);
             cache.Lines = new List<CachedLine>(estimatedCount / 4);
             cache.Polygons = new List<CachedPolygon>(estimatedCount / 10);
+            cache.ClearCircles = new List<CachedCircle>();
+            cache.ClearRectangles = new List<CachedRectangle>();
 
             // Build cache from primitives (done once, not every frame)
             foreach (var prim in primitives)
             {
-                // Skip clear/negative primitives
+                // Handle clear/negative polarity primitives separately (for hole rendering)
                 if (!prim.IsDark)
+                {
+                    // Store clear primitives for second-pass hole rendering
+                    switch (prim.Type)
+                    {
+                        case GerberPrimitiveType.Circle:
+                        case GerberPrimitiveType.Flash:
+                            cache.ClearCircles.Add(new CachedCircle
+                            {
+                                X = (float)prim.X,
+                                Y = (float)prim.Y,
+                                Radius = (float)(prim.Width / 2)
+                            });
+                            break;
+
+                        case GerberPrimitiveType.Rectangle:
+                            cache.ClearRectangles.Add(new CachedRectangle
+                            {
+                                X = (float)prim.X,
+                                Y = (float)prim.Y,
+                                Width = (float)prim.Width,
+                                Height = (float)prim.Height
+                            });
+                            break;
+
+                        case GerberPrimitiveType.Obround:
+                            // Decompose clear obround into clear rect + 2 clear circles
+                            float hw = (float)(prim.Width / 2);
+                            float hh = (float)(prim.Height / 2);
+                            if (prim.Width > prim.Height)
+                            {
+                                float radius = hh;
+                                float rectHw = hw - radius;
+                                cache.ClearRectangles.Add(new CachedRectangle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Width = rectHw * 2,
+                                    Height = (float)prim.Height
+                                });
+                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X - rectHw, Y = (float)prim.Y, Radius = radius });
+                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X + rectHw, Y = (float)prim.Y, Radius = radius });
+                            }
+                            else
+                            {
+                                float radius = hw;
+                                float rectHh = hh - radius;
+                                cache.ClearRectangles.Add(new CachedRectangle
+                                {
+                                    X = (float)prim.X,
+                                    Y = (float)prim.Y,
+                                    Width = (float)prim.Width,
+                                    Height = rectHh * 2
+                                });
+                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
+                                cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                            }
+                            break;
+                    }
                     continue;
+                }
 
                 switch (prim.Type)
                 {
@@ -2626,11 +2733,15 @@ void main()
         public double Opacity { get; set; }
         public bool IsValid { get; set; }
 
-        // Cached primitive data for quick re-rendering
+        // Cached primitive data for quick re-rendering (dark/additive polarity)
         public List<CachedCircle> Circles { get; set; } = new List<CachedCircle>();
         public List<CachedRectangle> Rectangles { get; set; } = new List<CachedRectangle>();
         public List<CachedLine> Lines { get; set; } = new List<CachedLine>();
         public List<CachedPolygon> Polygons { get; set; } = new List<CachedPolygon>();
+
+        // Cached clear/subtractive polarity primitives (rendered as holes with background color)
+        public List<CachedCircle> ClearCircles { get; set; } = new List<CachedCircle>();
+        public List<CachedRectangle> ClearRectangles { get; set; } = new List<CachedRectangle>();
 
         // Tile-based spatial index for O(visible) instead of O(N) iteration
         public TileIndex TileIndex { get; set; }
@@ -2656,6 +2767,8 @@ void main()
             Rectangles.Clear();
             Lines.Clear();
             Polygons.Clear();
+            ClearCircles.Clear();
+            ClearRectangles.Clear();
             CircleCount = 0;
             RectangleCount = 0;
             LineCount = 0;

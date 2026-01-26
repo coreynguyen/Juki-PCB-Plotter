@@ -851,9 +851,8 @@ namespace PCBPlotter.Controls
                                 foreach (var prim in primitives)
                                 {
                                     if (_isDisposed) return;
-                                    // Only index dark primitives - clear ones are not selectable
-                                    if (prim.IsDark)
-                                        quadtree.Insert(prim);
+                                    // Index all primitives for rendering (selection is filtered by IsDark elsewhere)
+                                    quadtree.Insert(prim);
                                 }
 
                                 // Update on UI thread
@@ -993,6 +992,8 @@ namespace PCBPlotter.Controls
 
             // --- Step 2: Setup Resources ---
             var brush = GetLayerBrush(layer.ColorArgb);
+            var holeBrush = new SolidColorBrush(BackgroundColor);
+            holeBrush.Freeze();
             bool hasOpacity = layer.Opacity < 1.0;
             if (hasOpacity)
             {
@@ -1005,8 +1006,13 @@ namespace PCBPlotter.Controls
             double minWorldSize = screenPixelThreshold / currentZoom;
 
             // --- Step 3: Render Loop (Optimized) ---
+            // First pass: render dark (additive) primitives
+            // Second pass: render clear (subtractive) primitives as holes
             // We ONLY batch Polygons/Contours and rotated shapes.
             // Lines, Arcs, Pads, and Rects are drawn DIRECTLY for maximum speed.
+
+            // Separate clear primitives for second pass (render holes after solid shapes)
+            var clearPrimitives = new List<GerberPrimitive>();
 
             StreamGeometry polyBatch = null;
             StreamGeometryContext polyCtx = null;
@@ -1024,10 +1030,12 @@ namespace PCBPlotter.Controls
                     double.IsNaN(prim.Y) || double.IsInfinity(prim.Y))
                     continue;
 
-                // Skip clear/negative polarity primitives - they represent cutouts/holes
-                // and should not be rendered as solid shapes (they're for boolean subtraction)
+                // Clear/negative polarity primitives are rendered in a second pass as holes
                 if (!prim.IsDark)
+                {
+                    clearPrimitives.Add(prim);
                     continue;
+                }
 
                 Point screenPos = WorldToScreen(new Point(prim.X, prim.Y));
                 double screenWidth = prim.Width * currentZoom;
@@ -1158,6 +1166,71 @@ namespace PCBPlotter.Controls
                 polyCtx.Close();
                 polyBatch.Freeze();
                 dc.DrawGeometry(brush, null, polyBatch);
+            }
+
+            // --- Second Pass: Render Clear Polarity (Holes) ---
+            // Clear primitives are rendered with background color to create cutouts
+            foreach (var prim in clearPrimitives)
+            {
+                Point screenPos = WorldToScreen(new Point(prim.X, prim.Y));
+                double screenWidth = prim.Width * currentZoom;
+                double screenHeight = prim.Height * currentZoom;
+
+                switch (prim.Type)
+                {
+                    case GerberPrimitiveType.Circle:
+                    case GerberPrimitiveType.Flash:
+                        double r = Math.Max(screenWidth / 2, 0.5);
+                        dc.DrawEllipse(holeBrush, null, screenPos, r, r);
+                        break;
+
+                    case GerberPrimitiveType.Rectangle:
+                        double rw = Math.Max(screenWidth, 0.5);
+                        double rh = Math.Max(screenHeight, 0.5);
+                        if (prim.Rotation != 0)
+                        {
+                            dc.PushTransform(new RotateTransform(-prim.Rotation, screenPos.X, screenPos.Y));
+                        }
+                        dc.DrawRectangle(holeBrush, null, new Rect(screenPos.X - rw / 2, screenPos.Y - rh / 2, rw, rh));
+                        if (prim.Rotation != 0)
+                        {
+                            dc.Pop();
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Obround:
+                        double ow = Math.Max(screenWidth, 0.5);
+                        double oh = Math.Max(screenHeight, 0.5);
+                        double cr = Math.Min(ow, oh) / 2;
+                        if (prim.Rotation != 0)
+                        {
+                            dc.PushTransform(new RotateTransform(-prim.Rotation, screenPos.X, screenPos.Y));
+                        }
+                        dc.DrawRoundedRectangle(holeBrush, null, new Rect(screenPos.X - ow / 2, screenPos.Y - oh / 2, ow, oh), cr, cr);
+                        if (prim.Rotation != 0)
+                        {
+                            dc.Pop();
+                        }
+                        break;
+
+                    case GerberPrimitiveType.Contour:
+                    case GerberPrimitiveType.Polygon:
+                        if (prim.Points != null && prim.Points.Count >= 3)
+                        {
+                            var holeGeometry = new StreamGeometry();
+                            using (var ctx = holeGeometry.Open())
+                            {
+                                ctx.BeginFigure(WorldToScreen(prim.Points[0]), true, true);
+                                for (int i = 1; i < prim.Points.Count; i++)
+                                {
+                                    ctx.LineTo(WorldToScreen(prim.Points[i]), false, false);
+                                }
+                            }
+                            holeGeometry.Freeze();
+                            dc.DrawGeometry(holeBrush, null, holeGeometry);
+                        }
+                        break;
+                }
             }
 
             if (hasOpacity)

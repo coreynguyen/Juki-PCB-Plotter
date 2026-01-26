@@ -683,6 +683,23 @@ namespace PCBPlotter.Core.Services
             }
 
             _primitives.Add(prim);
+
+            // Create hole primitive if aperture has a hole
+            // Holes are rendered as clear (subtractive) polarity circles
+            if (aperture.HoleDiameter > 0 && _darkPolarity)
+            {
+                var holePrim = new GerberPrimitive
+                {
+                    Type = GerberPrimitiveType.Circle,
+                    X = x,
+                    Y = y,
+                    Width = aperture.HoleDiameter,
+                    Height = aperture.HoleDiameter,
+                    ApertureIndex = _currentAperture,
+                    IsDark = false  // Clear polarity - subtracts material
+                };
+                _primitives.Add(holePrim);
+            }
         }
 
         private void CreateLinePrimitive(double x1, double y1, double x2, double y2, double i, double j)
