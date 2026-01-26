@@ -2122,14 +2122,15 @@ void main()
         /// <summary>
         /// Pre-triangulate all polygons into a static mesh.
         /// Uses ear-clipping algorithm for correct concave polygon support.
+        /// Falls back to outline rendering for large or problematic polygons.
         /// </summary>
         private void BuildStaticPolygonMesh(LayerGeometryCache cache)
         {
             if (cache.Polygons.Count == 0) return;
 
-            // Increased threshold - the improved Triangulator handles larger polygons better
-            // with fallback mechanisms for degenerate cases
-            const int MAX_EAR_CLIP_VERTICES = 5000;
+            // Lowered threshold for better performance - large polygons (like ground planes)
+            // are better rendered as outlines than triangulated
+            const int MAX_EAR_CLIP_VERTICES = 500;
 
             // Use lists since ear clipping may produce varying triangle counts
             var allVertices = new List<float>();
@@ -2139,54 +2140,58 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                // For extremely large polygons, use convex hull fan as fallback
-                // to avoid potential performance issues
-                if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
+                // Check if we should triangulate or just draw outline
+                bool useOutlineFallback = poly.Points.Count > MAX_EAR_CLIP_VERTICES;
+
+                // Try triangulation for smaller polygons
+                List<int> polyIndices = null;
+                List<Point> cleanedPoints = null;
+                if (!useOutlineFallback)
                 {
-                    uint baseVertex = (uint)(allVertices.Count / 2);
+                    polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
+                    // If triangulation failed (returned empty), use outline fallback
+                    if (polyIndices.Count == 0)
+                        useOutlineFallback = true;
+                }
 
-                    // Add all vertices first (use original points for centroid fan)
-                    foreach (var pt in poly.Points)
-                    {
-                        allVertices.Add((float)pt.X);
-                        allVertices.Add((float)pt.Y);
-                    }
+                if (useOutlineFallback)
+                {
+                    // --- OUTLINE RENDERER (Fast & Safe) ---
+                    // Generates a thick line strip around the polygon perimeter.
+                    // No filling, but much faster and no "stray triangle" glitches.
 
-                    // Find the centroid and create a fan from there
-                    // This is better than corner-based fan for most shapes
-                    double cx = 0, cy = 0;
-                    foreach (var pt in poly.Points)
-                    {
-                        cx += pt.X;
-                        cy += pt.Y;
-                    }
-                    cx /= poly.Points.Count;
-                    cy /= poly.Points.Count;
+                    float lineWidth = 0.05f; // Thin outline
 
-                    // Add centroid as extra vertex
-                    uint centroidIdx = (uint)(allVertices.Count / 2);
-                    allVertices.Add((float)cx);
-                    allVertices.Add((float)cy);
-
-                    // Create triangle fan from centroid
                     for (int i = 0; i < poly.Points.Count; i++)
                     {
-                        int nextI = (i + 1) % poly.Points.Count;
-                        allIndices.Add(centroidIdx);
-                        allIndices.Add(baseVertex + (uint)i);
-                        allIndices.Add(baseVertex + (uint)nextI);
+                        var p1 = poly.Points[i];
+                        var p2 = poly.Points[(i + 1) % poly.Points.Count];
+
+                        float dx = (float)(p2.X - p1.X);
+                        float dy = (float)(p2.Y - p1.Y);
+                        float len = (float)Math.Sqrt(dx * dx + dy * dy);
+                        if (len < 0.00001f) continue;
+
+                        float nx = -dy / len * lineWidth;
+                        float ny = dx / len * lineWidth;
+
+                        uint vBase = (uint)(allVertices.Count / 2);
+
+                        // Add Quad (2 Triangles) for the line segment
+                        allVertices.Add((float)p1.X - nx); allVertices.Add((float)p1.Y - ny);
+                        allVertices.Add((float)p1.X + nx); allVertices.Add((float)p1.Y + ny);
+                        allVertices.Add((float)p2.X + nx); allVertices.Add((float)p2.Y + ny);
+                        allVertices.Add((float)p2.X - nx); allVertices.Add((float)p2.Y - ny);
+
+                        allIndices.Add(vBase);     allIndices.Add(vBase + 1); allIndices.Add(vBase + 2);
+                        allIndices.Add(vBase);     allIndices.Add(vBase + 2); allIndices.Add(vBase + 3);
                     }
                 }
                 else
                 {
+                    // --- STANDARD FILL RENDERER ---
                     // Full ear clipping for high-quality concave polygon support
-                    // IMPORTANT: Use TriangulateWithCleanedPoints to get both cleaned vertices
-                    // and indices that match. The triangulator removes duplicate consecutive
-                    // vertices, so we must use the cleaned points for the vertex buffer.
-                    List<Point> cleanedPoints;
-                    var polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
-
-                    if (cleanedPoints.Count < 3 || polyIndices.Count == 0)
+                    if (cleanedPoints.Count < 3)
                         continue;
 
                     uint baseVertex = (uint)(allVertices.Count / 2);
@@ -2217,13 +2222,15 @@ void main()
         /// <summary>
         /// Pre-triangulate all clear polygons into a static mesh.
         /// Uses ear-clipping algorithm for correct concave polygon support.
+        /// Falls back to outline rendering for large or problematic polygons.
         /// </summary>
         private void BuildStaticClearPolygonMesh(LayerGeometryCache cache)
         {
             if (cache.ClearPolygons.Count == 0) return;
 
-            // Increased threshold - the improved Triangulator handles larger polygons better
-            const int MAX_EAR_CLIP_VERTICES = 5000;
+            // Lowered threshold for better performance - large polygons are better
+            // rendered as outlines than triangulated
+            const int MAX_EAR_CLIP_VERTICES = 500;
 
             // Use lists since ear clipping may produce varying triangle counts
             var allVertices = new List<float>();
@@ -2233,52 +2240,58 @@ void main()
             {
                 if (poly.Points.Count < 3) continue;
 
-                // For extremely large polygons, use centroid fan as fallback
-                if (poly.Points.Count > MAX_EAR_CLIP_VERTICES)
+                // Check if we should triangulate or just draw outline
+                bool useOutlineFallback = poly.Points.Count > MAX_EAR_CLIP_VERTICES;
+
+                // Try triangulation for smaller polygons
+                List<int> polyIndices = null;
+                List<Point> cleanedPoints = null;
+                if (!useOutlineFallback)
                 {
-                    uint baseVertex = (uint)(allVertices.Count / 2);
+                    polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
+                    // If triangulation failed (returned empty), use outline fallback
+                    if (polyIndices.Count == 0)
+                        useOutlineFallback = true;
+                }
 
-                    // Add all vertices first (use original points for centroid fan)
-                    foreach (var pt in poly.Points)
-                    {
-                        allVertices.Add((float)pt.X);
-                        allVertices.Add((float)pt.Y);
-                    }
+                if (useOutlineFallback)
+                {
+                    // --- OUTLINE RENDERER (Fast & Safe) ---
+                    // Generates a thick line strip around the polygon perimeter.
+                    // No filling, but much faster and no "stray triangle" glitches.
 
-                    // Find the centroid and create a fan from there
-                    double cx = 0, cy = 0;
-                    foreach (var pt in poly.Points)
-                    {
-                        cx += pt.X;
-                        cy += pt.Y;
-                    }
-                    cx /= poly.Points.Count;
-                    cy /= poly.Points.Count;
+                    float lineWidth = 0.05f; // Thin outline
 
-                    // Add centroid as extra vertex
-                    uint centroidIdx = (uint)(allVertices.Count / 2);
-                    allVertices.Add((float)cx);
-                    allVertices.Add((float)cy);
-
-                    // Create triangle fan from centroid
                     for (int i = 0; i < poly.Points.Count; i++)
                     {
-                        int nextI = (i + 1) % poly.Points.Count;
-                        allIndices.Add(centroidIdx);
-                        allIndices.Add(baseVertex + (uint)i);
-                        allIndices.Add(baseVertex + (uint)nextI);
+                        var p1 = poly.Points[i];
+                        var p2 = poly.Points[(i + 1) % poly.Points.Count];
+
+                        float dx = (float)(p2.X - p1.X);
+                        float dy = (float)(p2.Y - p1.Y);
+                        float len = (float)Math.Sqrt(dx * dx + dy * dy);
+                        if (len < 0.00001f) continue;
+
+                        float nx = -dy / len * lineWidth;
+                        float ny = dx / len * lineWidth;
+
+                        uint vBase = (uint)(allVertices.Count / 2);
+
+                        // Add Quad (2 Triangles) for the line segment
+                        allVertices.Add((float)p1.X - nx); allVertices.Add((float)p1.Y - ny);
+                        allVertices.Add((float)p1.X + nx); allVertices.Add((float)p1.Y + ny);
+                        allVertices.Add((float)p2.X + nx); allVertices.Add((float)p2.Y + ny);
+                        allVertices.Add((float)p2.X - nx); allVertices.Add((float)p2.Y - ny);
+
+                        allIndices.Add(vBase);     allIndices.Add(vBase + 1); allIndices.Add(vBase + 2);
+                        allIndices.Add(vBase);     allIndices.Add(vBase + 2); allIndices.Add(vBase + 3);
                     }
                 }
                 else
                 {
+                    // --- STANDARD FILL RENDERER ---
                     // Full ear clipping for high-quality concave polygon support
-                    // IMPORTANT: Use TriangulateWithCleanedPoints to get both cleaned vertices
-                    // and indices that match. The triangulator removes duplicate consecutive
-                    // vertices, so we must use the cleaned points for the vertex buffer.
-                    List<Point> cleanedPoints;
-                    var polyIndices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
-
-                    if (cleanedPoints.Count < 3 || polyIndices.Count == 0)
+                    if (cleanedPoints.Count < 3)
                         continue;
 
                     uint baseVertex = (uint)(allVertices.Count / 2);

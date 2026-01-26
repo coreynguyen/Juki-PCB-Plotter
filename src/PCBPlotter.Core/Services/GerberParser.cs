@@ -1521,7 +1521,8 @@ namespace PCBPlotter.Core.Services
 
         /// <summary>
         /// Evaluate a macro expression with variable substitution and basic arithmetic.
-        /// Supports: +, -, x (multiply), /, and $n variable references
+        /// Supports: +, -, x (multiply), /, and $n variable references.
+        /// Uses LastIndexOf for correct left-to-right operator associativity.
         /// </summary>
         private double EvaluateMacroExpression(string expression, Dictionary<int, double> variables)
         {
@@ -1530,81 +1531,114 @@ namespace PCBPlotter.Core.Services
 
             expression = expression.Trim();
 
-            // Direct number
-            if (double.TryParse(expression, NumberStyles.Any, CultureInfo.InvariantCulture, out double directValue))
-            {
-                // Convert to mm if needed
-                if (_units == Units.Inches)
-                    directValue *= 25.4;
-                return directValue;
-            }
-
-            // Variable reference: $n
+            // 1. Handle Parameter Substitution ($1, $2...)
             if (expression.StartsWith("$"))
             {
+                // Check if it's just a simple variable reference like $1
                 string varPart = expression.Substring(1);
-                // Handle $n+expression or $n-expression etc.
-                int opIndex = varPart.IndexOfAny(new[] { '+', '-', 'x', 'X', '/' });
-                if (opIndex > 0)
-                {
-                    string varNum = varPart.Substring(0, opIndex);
-                    char op = varPart[opIndex];
-                    string rest = varPart.Substring(opIndex + 1);
 
-                    if (int.TryParse(varNum, out int idx) && variables.TryGetValue(idx, out double varVal))
+                // Find if there's an operator after the variable number
+                int opIndex = -1;
+                for (int i = 0; i < varPart.Length; i++)
+                {
+                    char c = varPart[i];
+                    if (c == '+' || c == '-' || c == 'x' || c == 'X' || c == '/')
                     {
-                        double rightVal = EvaluateMacroExpression(rest, variables);
-                        return ApplyOperator(varVal, op, rightVal);
+                        opIndex = i;
+                        break;
                     }
                 }
-                else
+
+                if (opIndex <= 0)
                 {
-                    if (int.TryParse(varPart, out int idx) && variables.TryGetValue(idx, out double varVal))
-                        return varVal;
+                    // Simple variable reference: $n
+                    if (int.TryParse(varPart, out int paramIndex))
+                    {
+                        // Gerber parameters are 1-based
+                        return (variables != null && variables.TryGetValue(paramIndex, out double val)) ? val : 0;
+                    }
+                    return 0;
+                }
+
+                // Variable with operation: $n+expr, $n-expr, etc.
+                // Parse as full expression by substituting variable value
+                string varNum = varPart.Substring(0, opIndex);
+                if (int.TryParse(varNum, out int idx) && variables.TryGetValue(idx, out double varVal))
+                {
+                    // Replace $n with its value and re-parse the full expression
+                    string newExpr = varVal.ToString(CultureInfo.InvariantCulture) + varPart.Substring(opIndex);
+                    return EvaluateMacroExpression(newExpr, variables);
                 }
                 return 0;
             }
 
-            // Try to parse expressions with operators
-            // Handle multiplication (x or X in Gerber)
-            int xIdx = expression.IndexOf('x');
-            if (xIdx < 0) xIdx = expression.IndexOf('X');
-            if (xIdx > 0)
-            {
-                double left = EvaluateMacroExpression(expression.Substring(0, xIdx), variables);
-                double right = EvaluateMacroExpression(expression.Substring(xIdx + 1), variables);
-                return left * right;
-            }
+            // 2. Handle Arithmetic Operators (+ - x / X)
+            // Use LastIndexOf for correct left-to-right associativity.
+            // Process lowest precedence operators first (+ and -), then higher precedence (x and /).
 
-            // Handle division
-            int divIdx = expression.IndexOf('/');
-            if (divIdx > 0)
+            // Find the rightmost + or - (lowest precedence, left-to-right)
+            // Be careful not to match negative numbers (- after another operator or at start)
+            int addSubIndex = -1;
+            char addSubOp = '\0';
+            for (int i = expression.Length - 1; i > 0; i--)
             {
-                double left = EvaluateMacroExpression(expression.Substring(0, divIdx), variables);
-                double right = EvaluateMacroExpression(expression.Substring(divIdx + 1), variables);
-                return right != 0 ? left / right : 0;
-            }
-
-            // Handle addition (be careful not to match negative numbers)
-            for (int i = 1; i < expression.Length; i++)
-            {
-                if (expression[i] == '+')
+                char c = expression[i];
+                if (c == '+' || c == '-')
                 {
-                    double left = EvaluateMacroExpression(expression.Substring(0, i), variables);
-                    double right = EvaluateMacroExpression(expression.Substring(i + 1), variables);
-                    return left + right;
+                    // Make sure this isn't a negative sign (preceded by another operator)
+                    char prev = expression[i - 1];
+                    if (prev != '+' && prev != '-' && prev != 'x' && prev != 'X' && prev != '/')
+                    {
+                        addSubIndex = i;
+                        addSubOp = c;
+                        break;
+                    }
                 }
             }
 
-            // Handle subtraction (be careful not to match negative numbers)
-            for (int i = 1; i < expression.Length; i++)
+            if (addSubIndex > 0)
             {
-                if (expression[i] == '-' && i > 0 && !IsOperator(expression[i - 1]))
+                string leftStr = expression.Substring(0, addSubIndex);
+                string rightStr = expression.Substring(addSubIndex + 1);
+                double left = EvaluateMacroExpression(leftStr, variables);
+                double right = EvaluateMacroExpression(rightStr, variables);
+                return addSubOp == '+' ? left + right : left - right;
+            }
+
+            // Find the rightmost x, X, or / (higher precedence)
+            int mulDivIndex = -1;
+            char mulDivOp = '\0';
+            for (int i = expression.Length - 1; i > 0; i--)
+            {
+                char c = expression[i];
+                if (c == 'x' || c == 'X' || c == '/')
                 {
-                    double left = EvaluateMacroExpression(expression.Substring(0, i), variables);
-                    double right = EvaluateMacroExpression(expression.Substring(i + 1), variables);
-                    return left - right;
+                    mulDivIndex = i;
+                    mulDivOp = c;
+                    break;
                 }
+            }
+
+            if (mulDivIndex > 0)
+            {
+                string leftStr = expression.Substring(0, mulDivIndex);
+                string rightStr = expression.Substring(mulDivIndex + 1);
+                double left = EvaluateMacroExpression(leftStr, variables);
+                double right = EvaluateMacroExpression(rightStr, variables);
+
+                if (mulDivOp == '/')
+                    return right != 0 ? left / right : 0;
+                else
+                    return left * right;
+            }
+
+            // 3. Handle Literals
+            if (double.TryParse(expression, NumberStyles.Any, CultureInfo.InvariantCulture, out double val))
+            {
+                // Convert to mm if needed
+                if (_units == Units.Inches)
+                    val *= 25.4;
+                return val;
             }
 
             return 0;

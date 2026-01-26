@@ -120,9 +120,9 @@ namespace PCBPlotter.Controls
                     if (!earFound && failedSearches >= maxFailedSearches)
                     {
                         // Still no ear found after many attempts - polygon is likely degenerate
-                        // Use convex decomposition as fallback (better than triangle fan)
-                        TriangulateConvexHullFallback(vertList, cleanedPoints, indices);
-                        break;
+                        // or self-intersecting. Return empty list to signal failure,
+                        // allowing the caller (OpenGLCanvas) to use outline rendering fallback.
+                        return new List<int>();
                     }
                 }
             }
