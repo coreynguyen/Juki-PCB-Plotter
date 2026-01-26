@@ -1336,7 +1336,8 @@ void main()
         private void RenderClearPrimitives(LayerGeometryCache cache, float viewLeft, float viewBottom, float viewRight, float viewTop, float minVisibleSize)
         {
             // Skip if no clear primitives
-            if (cache.ClearCircles.Count == 0 && cache.ClearRectangles.Count == 0)
+            bool hasClearPolygons = cache.ClearPolygonMesh != null && cache.ClearPolygonMesh.HasData;
+            if (cache.ClearCircles.Count == 0 && cache.ClearRectangles.Count == 0 && !hasClearPolygons)
                 return;
 
             // Use background color for holes (creates visual cutout effect)
@@ -1376,6 +1377,12 @@ void main()
                     continue;
 
                 _batchRenderer.AddRectangle(rect.X, rect.Y, rect.Width, rect.Height, holeColor);
+            }
+
+            // Render clear polygons (holes) using pre-triangulated static mesh
+            if (hasClearPolygons)
+            {
+                _batchRenderer.RenderStaticClearPolygonMesh(cache.LayerId, holeColor);
             }
         }
 
@@ -1664,6 +1671,7 @@ void main()
             // Pre-triangulate lines and polygons for static GPU rendering
             BuildStaticLineMesh(cache);
             BuildStaticPolygonMesh(cache);
+            BuildStaticClearPolygonMesh(cache);
 
             cache.IsValid = true;
         }
@@ -1692,6 +1700,7 @@ void main()
             cache.Polygons = new List<CachedPolygon>(estimatedCount / 10);
             cache.ClearCircles = new List<CachedCircle>();
             cache.ClearRectangles = new List<CachedRectangle>();
+            cache.ClearPolygons = new List<CachedPolygon>();
 
             // Build cache from primitives (done once, not every frame)
             foreach (var prim in primitives)
@@ -1753,6 +1762,15 @@ void main()
                                 });
                                 cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y - rectHh, Radius = radius });
                                 cache.ClearCircles.Add(new CachedCircle { X = (float)prim.X, Y = (float)prim.Y + rectHh, Radius = radius });
+                            }
+                            break;
+
+                        case GerberPrimitiveType.Contour:
+                        case GerberPrimitiveType.Polygon:
+                            if (prim.Points != null && prim.Points.Count >= 3)
+                            {
+                                // Copy points to avoid threading issues
+                                cache.ClearPolygons.Add(new CachedPolygon { Points = new List<Point>(prim.Points) });
                             }
                             break;
                     }
@@ -1873,6 +1891,7 @@ void main()
             // Pre-triangulate lines and polygons for static GPU rendering
             BuildStaticLineMesh(cache);
             BuildStaticPolygonMesh(cache);
+            BuildStaticClearPolygonMesh(cache);
 
             // ASYNC FIX: Prepare StaticLayerRenderer tile data HERE on background thread
             // This moves the heavy allocation/sorting work off the UI thread
@@ -2095,6 +2114,83 @@ void main()
         }
 
         /// <summary>
+        /// Pre-triangulate all clear polygons into a static mesh.
+        /// Uses ear-clipping algorithm for correct concave polygon support.
+        /// </summary>
+        private void BuildStaticClearPolygonMesh(LayerGeometryCache cache)
+        {
+            if (cache.ClearPolygons.Count == 0) return;
+
+            // Maximum polygon size for full ear-clipping triangulation
+            // Larger polygons use outline rendering (thick perimeter line)
+            const int MAX_EAR_CLIP_VERTICES = 2000;
+
+            // Use lists since ear clipping may produce varying triangle counts
+            var allVertices = new List<float>();
+            var allIndices = new List<uint>();
+
+            foreach (var poly in cache.ClearPolygons)
+            {
+                if (poly.Points.Count < 3) continue;
+
+                // For massive polygons (>2000 vertices), ear-clipping is O(n³) and will freeze the app.
+                // Use a simple triangle fan which is O(n) - it works correctly for convex shapes
+                // and provides approximate fill for concave shapes (better than nothing).
+                bool isMassive = poly.Points.Count > MAX_EAR_CLIP_VERTICES;
+
+                if (isMassive)
+                {
+                    // TRIANGLE FAN MODE: Fast O(n) fallback for massive polygons
+                    // May have visual artifacts on deeply concave shapes, but won't freeze
+                    uint baseVertex = (uint)(allVertices.Count / 2);
+
+                    // Add all vertices
+                    foreach (var pt in poly.Points)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
+
+                    // Create triangle fan from first vertex
+                    for (int i = 1; i < poly.Points.Count - 1; i++)
+                    {
+                        allIndices.Add(baseVertex);
+                        allIndices.Add(baseVertex + (uint)i);
+                        allIndices.Add(baseVertex + (uint)(i + 1));
+                    }
+                }
+                else
+                {
+                    // FILL MODE: Full ear-clipping triangulation for normal polygons
+                    uint baseVertex = (uint)(allVertices.Count / 2);
+
+                    // Add vertices
+                    foreach (var pt in poly.Points)
+                    {
+                        allVertices.Add((float)pt.X);
+                        allVertices.Add((float)pt.Y);
+                    }
+
+                    // Full ear clipping for high-quality concave polygon support
+                    var polyIndices = Triangulator.Triangulate(poly.Points);
+
+                    // Add indices offset by the current base vertex
+                    foreach (int index in polyIndices)
+                    {
+                        allIndices.Add(baseVertex + (uint)index);
+                    }
+                }
+            }
+
+            var mesh = new StaticMeshData();
+            mesh.Vertices = allVertices.ToArray();
+            mesh.Indices = allIndices.ToArray();
+            mesh.VertexCount = allVertices.Count / 2;
+            mesh.IndexCount = allIndices.Count;
+            cache.ClearPolygonMesh = mesh;
+        }
+
+        /// <summary>
         /// Upload static mesh data to GPU if not already uploaded.
         /// This is called once per layer, not per-frame.
         /// </summary>
@@ -2122,6 +2218,18 @@ void main()
                         cache.PolygonMesh.Indices, cache.PolygonMesh.IndexCount);
                 }
                 cache.PolygonMesh.NeedsUpload = false;
+            }
+
+            // Upload static clear polygon mesh if needed (for holes/cutouts)
+            if (cache.ClearPolygonMesh != null && cache.ClearPolygonMesh.HasData && cache.ClearPolygonMesh.NeedsUpload)
+            {
+                if (!_batchRenderer.HasStaticClearPolygonMesh(layerId))
+                {
+                    _batchRenderer.UploadStaticClearPolygonMesh(layerId,
+                        cache.ClearPolygonMesh.Vertices, cache.ClearPolygonMesh.VertexCount,
+                        cache.ClearPolygonMesh.Indices, cache.ClearPolygonMesh.IndexCount);
+                }
+                cache.ClearPolygonMesh.NeedsUpload = false;
             }
         }
 
@@ -2747,6 +2855,7 @@ void main()
         // Cached clear/subtractive polarity primitives (rendered as holes with background color)
         public List<CachedCircle> ClearCircles { get; set; } = new List<CachedCircle>();
         public List<CachedRectangle> ClearRectangles { get; set; } = new List<CachedRectangle>();
+        public List<CachedPolygon> ClearPolygons { get; set; } = new List<CachedPolygon>();
 
         // Tile-based spatial index for O(visible) instead of O(N) iteration
         public TileIndex TileIndex { get; set; }
@@ -2754,6 +2863,7 @@ void main()
         // Pre-triangulated static mesh data for lines and polygons (built once, uploaded once)
         public StaticMeshData LineMesh { get; set; }
         public StaticMeshData PolygonMesh { get; set; }
+        public StaticMeshData ClearPolygonMesh { get; set; }
 
         // Pre-computed tile data for StaticLayerRenderer (prepared on background thread)
         public List<StaticLayerRenderer.PreparedTileData> PrecomputedTiles { get; set; }
@@ -2774,6 +2884,7 @@ void main()
             Polygons.Clear();
             ClearCircles.Clear();
             ClearRectangles.Clear();
+            ClearPolygons.Clear();
             CircleCount = 0;
             RectangleCount = 0;
             LineCount = 0;
@@ -2784,6 +2895,8 @@ void main()
             LineMesh = null;
             PolygonMesh?.Clear();
             PolygonMesh = null;
+            ClearPolygonMesh?.Clear();
+            ClearPolygonMesh = null;
             // Clear precomputed tile data
             PrecomputedTiles = null;
             TilesX = 0;

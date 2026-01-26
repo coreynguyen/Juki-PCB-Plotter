@@ -51,6 +51,7 @@ namespace PCBPlotter.Controls
         // Pending static mesh renders for the current frame
         private List<StaticMeshRender> _pendingStaticLineRenders = new List<StaticMeshRender>();
         private List<StaticMeshRender> _pendingStaticPolygonRenders = new List<StaticMeshRender>();
+        private List<StaticMeshRender> _pendingStaticClearPolygonRenders = new List<StaticMeshRender>();
 
         // Statistics
         private int _drawCalls;
@@ -237,6 +238,7 @@ void main()
             // Clear pending static mesh renders
             _pendingStaticLineRenders.Clear();
             _pendingStaticPolygonRenders.Clear();
+            _pendingStaticClearPolygonRenders.Clear();
 
             _geometryCache.ClearInstances();
             _dynamicBuffer.Clear();
@@ -471,6 +473,59 @@ void main()
         }
 
         /// <summary>
+        /// Uploads static clear polygon mesh data to GPU (only called once per layer).
+        /// Clear polygons are rendered with background color to create cutout/hole effects.
+        /// </summary>
+        public void UploadStaticClearPolygonMesh(string layerId, float[] vertices, int vertexCount, uint[] indices, int indexCount)
+        {
+            if (vertexCount == 0 || indexCount == 0) return;
+
+            if (!_staticLayerBuffers.TryGetValue(layerId, out var layerBuffer))
+            {
+                layerBuffer = new StaticLayerBuffer();
+                _staticLayerBuffers[layerId] = layerBuffer;
+            }
+
+            if (layerBuffer.ClearPolygonBuffer == null)
+            {
+                layerBuffer.ClearPolygonBuffer = new GeometryBuffer(vertexCount, indexCount, 0, BufferUsageHint.StaticDraw);
+                layerBuffer.ClearPolygonBuffer.Initialize();
+            }
+
+            // Add vertices
+            for (int i = 0; i < vertexCount; i++)
+            {
+                layerBuffer.ClearPolygonBuffer.AddVertex(vertices[i * 2], vertices[i * 2 + 1]);
+            }
+
+            // Add indices
+            layerBuffer.ClearPolygonBuffer.AddIndices(indices, indexCount);
+            layerBuffer.ClearPolygonBuffer.Upload();
+            layerBuffer.ClearPolygonBufferReady = true;
+        }
+
+        /// <summary>
+        /// Queues a static clear polygon mesh for rendering.
+        /// </summary>
+        public void RenderStaticClearPolygonMesh(string layerId, Vector4 color)
+        {
+            _pendingStaticClearPolygonRenders.Add(new StaticMeshRender
+            {
+                LayerId = layerId,
+                IsLineMesh = false,
+                Color = color
+            });
+        }
+
+        /// <summary>
+        /// Checks if static clear polygon buffers exist for a layer.
+        /// </summary>
+        public bool HasStaticClearPolygonMesh(string layerId)
+        {
+            return _staticLayerBuffers.TryGetValue(layerId, out var buffer) && buffer.ClearPolygonBufferReady;
+        }
+
+        /// <summary>
         /// Invalidates static buffers for a layer (call when layer data changes).
         /// </summary>
         public void InvalidateStaticBuffers(string layerId)
@@ -522,6 +577,9 @@ void main()
 
             // Render static polygon meshes (pre-triangulated, no per-frame rebuild)
             RenderStaticPolygonMeshes(projection, view);
+
+            // Render static clear polygon meshes (holes/cutouts) - last since they create visual cutouts
+            RenderStaticClearPolygonMeshes(projection, view);
         }
 
         private void RenderStaticLineMeshes(Matrix4 projection, Matrix4 view)
@@ -565,6 +623,32 @@ void main()
                 buffer.PolygonBuffer.Draw();
                 _drawCalls++;
                 _trianglesRendered += buffer.PolygonBuffer.IndexCount / 3;
+            }
+        }
+
+        /// <summary>
+        /// Renders clear polygon meshes (holes/cutouts) with background color.
+        /// Called after dark primitives to create cutout effect.
+        /// </summary>
+        public void RenderStaticClearPolygonMeshes(Matrix4 projection, Matrix4 view)
+        {
+            if (_pendingStaticClearPolygonRenders.Count == 0) return;
+
+            _stateCache.UseProgram(_solidShader);
+            _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
+            _stateCache.SetViewMatrix(_solidViewLoc, ref view);
+
+            foreach (var render in _pendingStaticClearPolygonRenders)
+            {
+                if (!_staticLayerBuffers.TryGetValue(render.LayerId, out var buffer))
+                    continue;
+                if (!buffer.ClearPolygonBufferReady || buffer.ClearPolygonBuffer == null)
+                    continue;
+
+                _stateCache.SetColor(_solidColorLoc, render.Color);
+                buffer.ClearPolygonBuffer.Draw();
+                _drawCalls++;
+                _trianglesRendered += buffer.ClearPolygonBuffer.IndexCount / 3;
             }
         }
 
@@ -847,13 +931,16 @@ void main()
         {
             public GeometryBuffer LineBuffer;
             public GeometryBuffer PolygonBuffer;
+            public GeometryBuffer ClearPolygonBuffer;
             public bool LineBufferReady;
             public bool PolygonBufferReady;
+            public bool ClearPolygonBufferReady;
 
             public void Dispose()
             {
                 LineBuffer?.Dispose();
                 PolygonBuffer?.Dispose();
+                ClearPolygonBuffer?.Dispose();
             }
         }
 #else
