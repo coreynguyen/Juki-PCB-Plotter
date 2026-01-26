@@ -669,10 +669,19 @@ namespace PCBPlotter.Core.Services
                     break;
 
                 case ApertureType.Macro:
-                    // For macros, create a placeholder - would need full macro execution
-                    prim.Type = GerberPrimitiveType.Flash;
-                    prim.Width = aperture.Diameter > 0 ? aperture.Diameter : 0.5;
-                    prim.Height = prim.Width;
+                    // Execute the macro to generate actual primitives
+                    if (_macros.TryGetValue(aperture.MacroName, out ApertureMacro macro))
+                    {
+                        ExecuteMacro(macro, aperture.MacroParameters, x, y);
+                        return; // Don't add placeholder, macro execution adds real primitives
+                    }
+                    else
+                    {
+                        // Fallback: create placeholder if macro not found
+                        prim.Type = GerberPrimitiveType.Flash;
+                        prim.Width = aperture.Diameter > 0 ? aperture.Diameter : 0.5;
+                        prim.Height = prim.Width;
+                    }
                     break;
 
                 default:
@@ -958,6 +967,673 @@ namespace PCBPlotter.Core.Services
                     return _layerColors[_random.Next(_layerColors.Length)];
             }
         }
+
+        #region Macro Execution
+
+        /// <summary>
+        /// Execute an aperture macro to generate actual primitives.
+        /// Gerber macros use codes: 1=Circle, 4=Outline, 5=Polygon, 6=Moire, 7=Thermal,
+        /// 20=Vector Line, 21=Center Line, 22=Lower-Left Line
+        /// </summary>
+        private void ExecuteMacro(ApertureMacro macro, double[] parameters, double flashX, double flashY)
+        {
+            // Variable storage for macro expressions ($1, $2, etc.)
+            // Initialize with aperture parameters (1-indexed in Gerber, 0-indexed in array)
+            var variables = new Dictionary<int, double>();
+            if (parameters != null)
+            {
+                for (int i = 0; i < parameters.Length; i++)
+                {
+                    variables[i + 1] = parameters[i]; // $1 = parameters[0], etc.
+                }
+            }
+
+            foreach (string primitiveLine in macro.Primitives)
+            {
+                string line = primitiveLine.Trim();
+                if (string.IsNullOrEmpty(line)) continue;
+
+                // Handle variable assignment: $n=expression
+                if (line.StartsWith("$"))
+                {
+                    var assignMatch = System.Text.RegularExpressions.Regex.Match(line, @"\$(\d+)=(.+)");
+                    if (assignMatch.Success)
+                    {
+                        int varIndex = int.Parse(assignMatch.Groups[1].Value);
+                        string expression = assignMatch.Groups[2].Value;
+                        variables[varIndex] = EvaluateMacroExpression(expression, variables);
+                    }
+                    continue;
+                }
+
+                // Parse primitive definition: code,param1,param2,...
+                var parts = line.Split(',').Select(s => s.Trim()).ToArray();
+                if (parts.Length == 0) continue;
+
+                if (!int.TryParse(parts[0], out int code))
+                    continue;
+
+                switch (code)
+                {
+                    case 0: // Comment
+                        break;
+
+                    case 1: // Circle: 1,exposure,diameter,centerX,centerY[,rotation]
+                        if (parts.Length >= 5)
+                        {
+                            int exposure = (int)EvaluateMacroExpression(parts[1], variables);
+                            double diameter = EvaluateMacroExpression(parts[2], variables);
+                            double cx = EvaluateMacroExpression(parts[3], variables);
+                            double cy = EvaluateMacroExpression(parts[4], variables);
+                            double rotation = parts.Length > 5 ? EvaluateMacroExpression(parts[5], variables) : 0;
+
+                            // Apply rotation around origin
+                            if (rotation != 0)
+                            {
+                                var (rx, ry) = RotatePoint(cx, cy, rotation);
+                                cx = rx; cy = ry;
+                            }
+
+                            if (exposure == 1) // Dark (additive)
+                            {
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Circle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = diameter,
+                                    Height = diameter,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = _darkPolarity
+                                });
+                            }
+                            else // Clear (subtractive)
+                            {
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Circle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = diameter,
+                                    Height = diameter,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = false // Clear polarity
+                                });
+                            }
+                        }
+                        break;
+
+                    case 20: // Vector Line: 20,exposure,width,startX,startY,endX,endY,rotation
+                        if (parts.Length >= 8)
+                        {
+                            int exposure = (int)EvaluateMacroExpression(parts[1], variables);
+                            double width = EvaluateMacroExpression(parts[2], variables);
+                            double sx = EvaluateMacroExpression(parts[3], variables);
+                            double sy = EvaluateMacroExpression(parts[4], variables);
+                            double ex = EvaluateMacroExpression(parts[5], variables);
+                            double ey = EvaluateMacroExpression(parts[6], variables);
+                            double rotation = EvaluateMacroExpression(parts[7], variables);
+
+                            // Apply rotation
+                            if (rotation != 0)
+                            {
+                                var (rsx, rsy) = RotatePoint(sx, sy, rotation);
+                                var (rex, rey) = RotatePoint(ex, ey, rotation);
+                                sx = rsx; sy = rsy;
+                                ex = rex; ey = rey;
+                            }
+
+                            if (exposure == 1)
+                            {
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Line,
+                                    X = flashX + (sx + ex) / 2,
+                                    Y = flashY + (sy + ey) / 2,
+                                    Width = width,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = _darkPolarity,
+                                    Points = new List<Point>
+                                    {
+                                        new Point(flashX + sx, flashY + sy),
+                                        new Point(flashX + ex, flashY + ey)
+                                    }
+                                });
+                            }
+                        }
+                        break;
+
+                    case 21: // Center Line (Rectangle): 21,exposure,width,height,centerX,centerY,rotation
+                        if (parts.Length >= 7)
+                        {
+                            int exposure = (int)EvaluateMacroExpression(parts[1], variables);
+                            double w = EvaluateMacroExpression(parts[2], variables);
+                            double h = EvaluateMacroExpression(parts[3], variables);
+                            double cx = EvaluateMacroExpression(parts[4], variables);
+                            double cy = EvaluateMacroExpression(parts[5], variables);
+                            double rotation = EvaluateMacroExpression(parts[6], variables);
+
+                            // Apply rotation
+                            if (rotation != 0)
+                            {
+                                var (rx, ry) = RotatePoint(cx, cy, rotation);
+                                cx = rx; cy = ry;
+                            }
+
+                            if (exposure == 1)
+                            {
+                                var rectPrim = new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Rectangle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = w,
+                                    Height = h,
+                                    Rotation = rotation,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = _darkPolarity
+                                };
+
+                                // If rotated, convert to polygon
+                                if (rotation != 0)
+                                {
+                                    rectPrim.Type = GerberPrimitiveType.Polygon;
+                                    rectPrim.Points = CreateRotatedRectangle(flashX + cx, flashY + cy, w, h, rotation);
+                                }
+                                _primitives.Add(rectPrim);
+                            }
+                            else
+                            {
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Rectangle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = w,
+                                    Height = h,
+                                    Rotation = rotation,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = false // Clear
+                                });
+                            }
+                        }
+                        break;
+
+                    case 4: // Outline (polygon): 4,exposure,numVertices,x0,y0,x1,y1,...,xn,yn,rotation
+                        if (parts.Length >= 4)
+                        {
+                            int exposure = (int)EvaluateMacroExpression(parts[1], variables);
+                            int numVertices = (int)EvaluateMacroExpression(parts[2], variables);
+
+                            // Need at least 3 vertices plus start point (which is repeated at end)
+                            // Parts: code, exposure, numVertices, then (numVertices+1)*2 coordinates, then rotation
+                            int expectedParts = 3 + (numVertices + 1) * 2 + 1;
+                            if (parts.Length >= expectedParts - 1) // rotation may be optional
+                            {
+                                var points = new List<Point>();
+                                int coordStart = 3;
+
+                                for (int i = 0; i <= numVertices; i++)
+                                {
+                                    int xIdx = coordStart + i * 2;
+                                    int yIdx = coordStart + i * 2 + 1;
+                                    if (xIdx < parts.Length && yIdx < parts.Length)
+                                    {
+                                        double px = EvaluateMacroExpression(parts[xIdx], variables);
+                                        double py = EvaluateMacroExpression(parts[yIdx], variables);
+                                        points.Add(new Point(px, py));
+                                    }
+                                }
+
+                                // Get rotation (last parameter)
+                                double rotation = 0;
+                                int rotIdx = coordStart + (numVertices + 1) * 2;
+                                if (rotIdx < parts.Length)
+                                {
+                                    rotation = EvaluateMacroExpression(parts[rotIdx], variables);
+                                }
+
+                                // Apply rotation to all points
+                                if (rotation != 0)
+                                {
+                                    for (int i = 0; i < points.Count; i++)
+                                    {
+                                        var (rx, ry) = RotatePoint(points[i].X, points[i].Y, rotation);
+                                        points[i] = new Point(rx, ry);
+                                    }
+                                }
+
+                                // Translate to flash position
+                                for (int i = 0; i < points.Count; i++)
+                                {
+                                    points[i] = new Point(flashX + points[i].X, flashY + points[i].Y);
+                                }
+
+                                // Remove last point if it duplicates first (Gerber requires closed polygon)
+                                if (points.Count > 1 &&
+                                    Math.Abs(points[0].X - points[points.Count - 1].X) < 0.0001 &&
+                                    Math.Abs(points[0].Y - points[points.Count - 1].Y) < 0.0001)
+                                {
+                                    points.RemoveAt(points.Count - 1);
+                                }
+
+                                if (points.Count >= 3)
+                                {
+                                    double sumX = 0, sumY = 0;
+                                    foreach (var pt in points)
+                                    {
+                                        sumX += pt.X;
+                                        sumY += pt.Y;
+                                    }
+
+                                    _primitives.Add(new GerberPrimitive
+                                    {
+                                        Type = GerberPrimitiveType.Contour,
+                                        X = sumX / points.Count,
+                                        Y = sumY / points.Count,
+                                        Points = points,
+                                        ApertureIndex = _currentAperture,
+                                        IsDark = exposure == 1 ? _darkPolarity : false
+                                    });
+                                }
+                            }
+                        }
+                        break;
+
+                    case 5: // Polygon (regular): 5,exposure,numVertices,centerX,centerY,diameter,rotation
+                        if (parts.Length >= 7)
+                        {
+                            int exposure = (int)EvaluateMacroExpression(parts[1], variables);
+                            int numVertices = (int)EvaluateMacroExpression(parts[2], variables);
+                            double cx = EvaluateMacroExpression(parts[3], variables);
+                            double cy = EvaluateMacroExpression(parts[4], variables);
+                            double diameter = EvaluateMacroExpression(parts[5], variables);
+                            double rotation = EvaluateMacroExpression(parts[6], variables);
+
+                            if (numVertices >= 3)
+                            {
+                                double radius = diameter / 2.0;
+                                double startAngle = rotation * Math.PI / 180.0;
+                                var points = new List<Point>(numVertices);
+
+                                for (int i = 0; i < numVertices; i++)
+                                {
+                                    double angle = startAngle + (2.0 * Math.PI * i / numVertices);
+                                    double px = flashX + cx + radius * Math.Cos(angle);
+                                    double py = flashY + cy + radius * Math.Sin(angle);
+                                    points.Add(new Point(px, py));
+                                }
+
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Polygon,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = diameter,
+                                    Height = diameter,
+                                    Rotation = rotation,
+                                    Points = points,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = exposure == 1 ? _darkPolarity : false
+                                });
+                            }
+                        }
+                        break;
+
+                    case 6: // Moire: 6,centerX,centerY,outerDia,ringThickness,ringGap,maxRings,crosshairThickness,crosshairLength,rotation
+                        if (parts.Length >= 10)
+                        {
+                            double cx = EvaluateMacroExpression(parts[1], variables);
+                            double cy = EvaluateMacroExpression(parts[2], variables);
+                            double outerDia = EvaluateMacroExpression(parts[3], variables);
+                            double ringThickness = EvaluateMacroExpression(parts[4], variables);
+                            double ringGap = EvaluateMacroExpression(parts[5], variables);
+                            int maxRings = (int)EvaluateMacroExpression(parts[6], variables);
+                            double crossThickness = EvaluateMacroExpression(parts[7], variables);
+                            double crossLength = EvaluateMacroExpression(parts[8], variables);
+                            double rotation = EvaluateMacroExpression(parts[9], variables);
+
+                            // Draw concentric rings
+                            double currentOuterDia = outerDia;
+                            for (int ring = 0; ring < maxRings && currentOuterDia > 0; ring++)
+                            {
+                                double innerDia = currentOuterDia - ringThickness * 2;
+                                if (innerDia < 0) innerDia = 0;
+
+                                // Outer circle
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Circle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = currentOuterDia,
+                                    Height = currentOuterDia,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = _darkPolarity
+                                });
+
+                                // Inner hole (clear)
+                                if (innerDia > 0)
+                                {
+                                    _primitives.Add(new GerberPrimitive
+                                    {
+                                        Type = GerberPrimitiveType.Circle,
+                                        X = flashX + cx,
+                                        Y = flashY + cy,
+                                        Width = innerDia,
+                                        Height = innerDia,
+                                        ApertureIndex = _currentAperture,
+                                        IsDark = false // Clear
+                                    });
+                                }
+
+                                currentOuterDia = innerDia - ringGap * 2;
+                            }
+
+                            // Draw crosshair
+                            if (crossThickness > 0 && crossLength > 0)
+                            {
+                                double halfLen = crossLength / 2;
+
+                                // Horizontal bar
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Rectangle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = crossLength,
+                                    Height = crossThickness,
+                                    Rotation = rotation,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = _darkPolarity
+                                });
+
+                                // Vertical bar
+                                _primitives.Add(new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Rectangle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = crossThickness,
+                                    Height = crossLength,
+                                    Rotation = rotation,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = _darkPolarity
+                                });
+                            }
+                        }
+                        break;
+
+                    case 7: // Thermal: 7,centerX,centerY,outerDia,innerDia,gapWidth,rotation
+                        if (parts.Length >= 7)
+                        {
+                            double cx = EvaluateMacroExpression(parts[1], variables);
+                            double cy = EvaluateMacroExpression(parts[2], variables);
+                            double outerDia = EvaluateMacroExpression(parts[3], variables);
+                            double innerDia = EvaluateMacroExpression(parts[4], variables);
+                            double gapWidth = EvaluateMacroExpression(parts[5], variables);
+                            double rotation = EvaluateMacroExpression(parts[6], variables);
+
+                            // A thermal is an annular ring with 4 gaps
+                            // Simplest approach: render as circle with cutouts
+                            // But proper approach needs polygon with arc segments
+
+                            // Outer circle
+                            _primitives.Add(new GerberPrimitive
+                            {
+                                Type = GerberPrimitiveType.Circle,
+                                X = flashX + cx,
+                                Y = flashY + cy,
+                                Width = outerDia,
+                                Height = outerDia,
+                                ApertureIndex = _currentAperture,
+                                IsDark = _darkPolarity
+                            });
+
+                            // Inner hole
+                            _primitives.Add(new GerberPrimitive
+                            {
+                                Type = GerberPrimitiveType.Circle,
+                                X = flashX + cx,
+                                Y = flashY + cy,
+                                Width = innerDia,
+                                Height = innerDia,
+                                ApertureIndex = _currentAperture,
+                                IsDark = false // Clear
+                            });
+
+                            // Gap rectangles (4 at 90 degree intervals)
+                            double gapLength = (outerDia - innerDia) / 2 + outerDia * 0.1;
+                            double gapOffset = (outerDia + innerDia) / 4;
+                            double rotRad = rotation * Math.PI / 180.0;
+
+                            for (int i = 0; i < 4; i++)
+                            {
+                                double angle = rotRad + i * Math.PI / 2;
+                                double gx = cx + gapOffset * Math.Cos(angle);
+                                double gy = cy + gapOffset * Math.Sin(angle);
+
+                                var gapPrim = new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Rectangle,
+                                    X = flashX + gx,
+                                    Y = flashY + gy,
+                                    Width = gapLength,
+                                    Height = gapWidth,
+                                    Rotation = rotation + i * 90,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = false // Clear
+                                };
+
+                                // Convert to polygon for proper rotation
+                                if (gapPrim.Rotation != 0)
+                                {
+                                    gapPrim.Type = GerberPrimitiveType.Contour;
+                                    gapPrim.Points = CreateRotatedRectangle(gapPrim.X, gapPrim.Y,
+                                        gapPrim.Width, gapPrim.Height, gapPrim.Rotation);
+                                }
+                                _primitives.Add(gapPrim);
+                            }
+                        }
+                        break;
+
+                    case 22: // Lower-Left Line (Rectangle from corner): 22,exposure,width,height,lowerLeftX,lowerLeftY,rotation
+                        if (parts.Length >= 7)
+                        {
+                            int exposure = (int)EvaluateMacroExpression(parts[1], variables);
+                            double w = EvaluateMacroExpression(parts[2], variables);
+                            double h = EvaluateMacroExpression(parts[3], variables);
+                            double llx = EvaluateMacroExpression(parts[4], variables);
+                            double lly = EvaluateMacroExpression(parts[5], variables);
+                            double rotation = EvaluateMacroExpression(parts[6], variables);
+
+                            // Convert lower-left to center
+                            double cx = llx + w / 2;
+                            double cy = lly + h / 2;
+
+                            // Apply rotation
+                            if (rotation != 0)
+                            {
+                                var (rx, ry) = RotatePoint(cx, cy, rotation);
+                                cx = rx; cy = ry;
+                            }
+
+                            if (exposure == 1)
+                            {
+                                var rectPrim = new GerberPrimitive
+                                {
+                                    Type = GerberPrimitiveType.Rectangle,
+                                    X = flashX + cx,
+                                    Y = flashY + cy,
+                                    Width = w,
+                                    Height = h,
+                                    Rotation = rotation,
+                                    ApertureIndex = _currentAperture,
+                                    IsDark = _darkPolarity
+                                };
+
+                                if (rotation != 0)
+                                {
+                                    rectPrim.Type = GerberPrimitiveType.Polygon;
+                                    rectPrim.Points = CreateRotatedRectangle(flashX + cx, flashY + cy, w, h, rotation);
+                                }
+                                _primitives.Add(rectPrim);
+                            }
+                        }
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Evaluate a macro expression with variable substitution and basic arithmetic.
+        /// Supports: +, -, x (multiply), /, and $n variable references
+        /// </summary>
+        private double EvaluateMacroExpression(string expression, Dictionary<int, double> variables)
+        {
+            if (string.IsNullOrWhiteSpace(expression))
+                return 0;
+
+            expression = expression.Trim();
+
+            // Direct number
+            if (double.TryParse(expression, NumberStyles.Any, CultureInfo.InvariantCulture, out double directValue))
+            {
+                // Convert to mm if needed
+                if (_units == Units.Inches)
+                    directValue *= 25.4;
+                return directValue;
+            }
+
+            // Variable reference: $n
+            if (expression.StartsWith("$"))
+            {
+                string varPart = expression.Substring(1);
+                // Handle $n+expression or $n-expression etc.
+                int opIndex = varPart.IndexOfAny(new[] { '+', '-', 'x', 'X', '/' });
+                if (opIndex > 0)
+                {
+                    string varNum = varPart.Substring(0, opIndex);
+                    char op = varPart[opIndex];
+                    string rest = varPart.Substring(opIndex + 1);
+
+                    if (int.TryParse(varNum, out int idx) && variables.TryGetValue(idx, out double varVal))
+                    {
+                        double rightVal = EvaluateMacroExpression(rest, variables);
+                        return ApplyOperator(varVal, op, rightVal);
+                    }
+                }
+                else
+                {
+                    if (int.TryParse(varPart, out int idx) && variables.TryGetValue(idx, out double varVal))
+                        return varVal;
+                }
+                return 0;
+            }
+
+            // Try to parse expressions with operators
+            // Handle multiplication (x or X in Gerber)
+            int xIdx = expression.IndexOf('x');
+            if (xIdx < 0) xIdx = expression.IndexOf('X');
+            if (xIdx > 0)
+            {
+                double left = EvaluateMacroExpression(expression.Substring(0, xIdx), variables);
+                double right = EvaluateMacroExpression(expression.Substring(xIdx + 1), variables);
+                return left * right;
+            }
+
+            // Handle division
+            int divIdx = expression.IndexOf('/');
+            if (divIdx > 0)
+            {
+                double left = EvaluateMacroExpression(expression.Substring(0, divIdx), variables);
+                double right = EvaluateMacroExpression(expression.Substring(divIdx + 1), variables);
+                return right != 0 ? left / right : 0;
+            }
+
+            // Handle addition (be careful not to match negative numbers)
+            for (int i = 1; i < expression.Length; i++)
+            {
+                if (expression[i] == '+')
+                {
+                    double left = EvaluateMacroExpression(expression.Substring(0, i), variables);
+                    double right = EvaluateMacroExpression(expression.Substring(i + 1), variables);
+                    return left + right;
+                }
+            }
+
+            // Handle subtraction (be careful not to match negative numbers)
+            for (int i = 1; i < expression.Length; i++)
+            {
+                if (expression[i] == '-' && i > 0 && !IsOperator(expression[i - 1]))
+                {
+                    double left = EvaluateMacroExpression(expression.Substring(0, i), variables);
+                    double right = EvaluateMacroExpression(expression.Substring(i + 1), variables);
+                    return left - right;
+                }
+            }
+
+            return 0;
+        }
+
+        private bool IsOperator(char c) => c == '+' || c == '-' || c == 'x' || c == 'X' || c == '/';
+
+        private double ApplyOperator(double left, char op, double right)
+        {
+            switch (op)
+            {
+                case '+': return left + right;
+                case '-': return left - right;
+                case 'x':
+                case 'X': return left * right;
+                case '/': return right != 0 ? left / right : 0;
+                default: return left;
+            }
+        }
+
+        /// <summary>
+        /// Rotate a point around the origin by the given angle in degrees.
+        /// </summary>
+        private (double x, double y) RotatePoint(double x, double y, double angleDegrees)
+        {
+            double angleRad = angleDegrees * Math.PI / 180.0;
+            double cos = Math.Cos(angleRad);
+            double sin = Math.Sin(angleRad);
+            return (x * cos - y * sin, x * sin + y * cos);
+        }
+
+        /// <summary>
+        /// Create a rotated rectangle as a list of 4 corner points.
+        /// </summary>
+        private List<Point> CreateRotatedRectangle(double cx, double cy, double width, double height, double angleDegrees)
+        {
+            double hw = width / 2;
+            double hh = height / 2;
+            double angleRad = angleDegrees * Math.PI / 180.0;
+            double cos = Math.Cos(angleRad);
+            double sin = Math.Sin(angleRad);
+
+            // Corner offsets from center
+            var corners = new[]
+            {
+                (-hw, -hh),
+                (hw, -hh),
+                (hw, hh),
+                (-hw, hh)
+            };
+
+            var points = new List<Point>(4);
+            foreach (var (ox, oy) in corners)
+            {
+                double rx = ox * cos - oy * sin;
+                double ry = ox * sin + oy * cos;
+                points.Add(new Point(cx + rx, cy + ry));
+            }
+
+            return points;
+        }
+
+        #endregion
 
         #region Helper Classes
 

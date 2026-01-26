@@ -321,13 +321,18 @@ void main()
                     return;
             }
 
-            float dx = x2 - x1;
-            float dy = y2 - y1;
-            float len = (float)Math.Sqrt(dx * dx + dy * dy);
-            if (len < 0.0001f) return;
+            // FIX: Use double precision to avoid "thin line" artifacts at large coordinates
+            // Squaring large floats can lose precision before the sqrt
+            double dx = (double)x2 - x1;
+            double dy = (double)y2 - y1;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 0.0001) return;
 
-            float nx = -dy / len * width / 2;
-            float ny = dx / len * width / 2;
+            // Calculate perpendicular normal for line thickness
+            // Width is diameter (full thickness), so offset is width/2
+            double scale = (width / 2.0) / len;
+            float nx = (float)(-dy * scale);
+            float ny = (float)(dx * scale);
 
             // Store line batch for later rendering
             _lineBatches.Add(new LineBatch

@@ -1934,13 +1934,18 @@ void main()
 
             foreach (var line in cache.Lines)
             {
-                float dx = line.X2 - line.X1;
-                float dy = line.Y2 - line.Y1;
-                float len = (float)Math.Sqrt(dx * dx + dy * dy);
-                if (len < 0.0001f) continue;
+                // FIX: Use double precision to avoid "thin line" artifacts at large coordinates
+                // Squaring large floats can lose precision before the sqrt
+                double dx = (double)line.X2 - line.X1;
+                double dy = (double)line.Y2 - line.Y1;
+                double len = Math.Sqrt(dx * dx + dy * dy);
+                if (len < 0.0001) continue;
 
-                float nx = -dy / len * line.Width / 2;
-                float ny = dx / len * line.Width / 2;
+                // Calculate perpendicular normal for line thickness
+                // Width is diameter (full thickness), so offset is width/2
+                double scale = (line.Width / 2.0) / len;
+                float nx = (float)(-dy * scale);
+                float ny = (float)(dx * scale);
 
                 uint baseVertex = (uint)(vIdx / 2);
 
