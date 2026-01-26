@@ -132,25 +132,62 @@ namespace PCBPlotter.Core.Services
 
         private void ParseContent(string content)
         {
-            // Remove comments and split into commands
+            // Remove comments
             content = RemoveComments(content);
 
-            // Parse extended commands first (between % markers)
-            ParseExtendedCommands(content);
+            // Parse definition extended commands first (formats, apertures, attributes)
+            // These don't affect primitive creation order
+            ParseDefinitionCommands(content);
 
-            // Remove extended command blocks from content before splitting into data blocks.
-            // This prevents trailing '%' from extended commands (e.g., %LPD*%) from being
-            // attached to the following data block and causing it to be filtered out.
-            content = Regex.Replace(content, @"%[^%]*%", "");
+            // Now parse the content in order, handling state-changing extended commands
+            // (like LP - layer polarity) inline with data blocks
+            ParseContentInOrder(content);
+        }
 
-            // Parse data blocks (lines ending with *)
-            var dataBlocks = Regex.Split(content, @"\*")
-                .Select(s => s.Trim())
-                .Where(s => !string.IsNullOrEmpty(s));
-
-            foreach (var block in dataBlocks)
+        private void ParseContentInOrder(string content)
+        {
+            // Split content into tokens: extended commands (%...%) and data blocks (...*)
+            // Process them in order to correctly handle LP polarity changes
+            int pos = 0;
+            while (pos < content.Length)
             {
-                ParseDataBlock(block);
+                // Skip whitespace
+                while (pos < content.Length && char.IsWhiteSpace(content[pos]))
+                    pos++;
+
+                if (pos >= content.Length) break;
+
+                if (content[pos] == '%')
+                {
+                    // Extended command - find the closing %
+                    int endPos = content.IndexOf('%', pos + 1);
+                    if (endPos == -1) break;
+
+                    string cmd = content.Substring(pos + 1, endPos - pos - 1).Trim();
+
+                    // Handle state-changing commands (LP) inline
+                    if (cmd.StartsWith("LP"))
+                    {
+                        ParseLayerPolarity(cmd);
+                    }
+                    // Other extended commands were already handled in ParseDefinitionCommands
+
+                    pos = endPos + 1;
+                }
+                else
+                {
+                    // Data block - find the closing *
+                    int endPos = content.IndexOf('*', pos);
+                    if (endPos == -1) break;
+
+                    string block = content.Substring(pos, endPos - pos).Trim();
+                    if (!string.IsNullOrEmpty(block))
+                    {
+                        ParseDataBlock(block);
+                    }
+
+                    pos = endPos + 1;
+                }
             }
         }
 
@@ -161,9 +198,11 @@ namespace PCBPlotter.Core.Services
             return content;
         }
 
-        private void ParseExtendedCommands(string content)
+        private void ParseDefinitionCommands(string content)
         {
             // Find all extended commands between % markers
+            // Process only definition commands here (format, apertures, attributes)
+            // State-changing commands (LP) are processed inline in ParseContentInOrder
             var extMatch = Regex.Matches(content, @"%([^%]+)%");
 
             foreach (Match m in extMatch)
@@ -178,8 +217,7 @@ namespace PCBPlotter.Core.Services
                     ParseApertureDefinition(cmd);
                 else if (cmd.StartsWith("AM"))
                     ParseApertureMacro(cmd);
-                else if (cmd.StartsWith("LP"))
-                    ParseLayerPolarity(cmd);
+                // LP is handled inline in ParseContentInOrder to preserve order
                 else if (cmd.StartsWith("TF"))
                     ParseFileAttribute(cmd);
                 else if (cmd.StartsWith("TA"))
