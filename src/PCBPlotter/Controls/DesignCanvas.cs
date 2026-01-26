@@ -1021,8 +1021,14 @@ namespace PCBPlotter.Controls
             foreach (var prim in visiblePrimitives)
             {
                 // LOD: Skip primitives that are too small to see
+                // NOTE: Polygon/Contour types often have Width/Height=0 (they use Points array instead)
+                // so we must exclude them from LOD filtering to avoid hiding macro-generated shapes
                 double primSize = Math.Max(prim.Width, prim.Height);
-                if (primSize < minWorldSize && prim.Type != GerberPrimitiveType.Line && prim.Type != GerberPrimitiveType.Arc)
+                if (primSize < minWorldSize &&
+                    prim.Type != GerberPrimitiveType.Line &&
+                    prim.Type != GerberPrimitiveType.Arc &&
+                    prim.Type != GerberPrimitiveType.Polygon &&
+                    prim.Type != GerberPrimitiveType.Contour)
                     continue;
 
                 // Coordinate Safety (prevents NaN/Infinity glitches)
@@ -1502,7 +1508,8 @@ namespace PCBPlotter.Controls
                 if (!layer.IsVisible || layer.Primitives == null)
                     continue;
 
-                foreach (var prim in layer.Primitives.Where(p => p.IsSelected))
+                // Only render dark (additive) selected primitives - clear primitives are subtractive and should not show selection
+                foreach (var prim in layer.Primitives.Where(p => p.IsSelected && p.IsDark))
                 {
                     RenderGerberPrimitiveToScreen(dc, prim, selectedBrush);
                 }
