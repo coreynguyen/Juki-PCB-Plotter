@@ -136,10 +136,15 @@ namespace PCBPlotter.Core.Services
             // Parse extended commands first (between % markers)
             ParseExtendedCommands(content);
 
+            // Remove extended command blocks from content before splitting into data blocks.
+            // This prevents trailing '%' from extended commands (e.g., %LPD*%) from being
+            // attached to the following data block and causing it to be filtered out.
+            content = Regex.Replace(content, @"%[^%]*%", "");
+
             // Parse data blocks (lines ending with *)
             var dataBlocks = Regex.Split(content, @"\*")
                 .Select(s => s.Trim())
-                .Where(s => !string.IsNullOrEmpty(s) && !s.StartsWith("%"));
+                .Where(s => !string.IsNullOrEmpty(s));
 
             foreach (var block in dataBlocks)
             {
