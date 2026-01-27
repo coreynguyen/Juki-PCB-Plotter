@@ -1,0 +1,866 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows;
+using PCBPlotter.Core.Models;
+
+namespace PCBPlotter.Core.Services
+{
+    /// <summary>
+    /// Features extracted from a cluster of pads for component classification.
+    /// </summary>
+    public class PadClusterFeatures
+    {
+        public int PadCount { get; set; }
+        public Rect BoundingBox { get; set; }
+        public Point Centroid { get; set; }
+        public double DominantPitch { get; set; }
+        public double PadAspectRatio { get; set; }
+        public bool SymmetricX { get; set; }
+        public bool SymmetricY { get; set; }
+        public bool AllCircular { get; set; }
+        public bool IsGrid { get; set; }
+        public int RowCount { get; set; }
+        public int ColCount { get; set; }
+        public bool HasLargePad { get; set; }
+        public int SidesWithPads { get; set; }
+        public bool IsHShape { get; set; }
+        public List<PadInfo> Pads { get; set; } = new List<PadInfo>();
+    }
+
+    /// <summary>
+    /// Simplified pad info for analysis.
+    /// </summary>
+    public class PadInfo
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public bool IsCircular { get; set; }
+        public double Area { get; set; }
+    }
+
+    /// <summary>
+    /// Result of component classification.
+    /// </summary>
+    public class ClassificationResult
+    {
+        public PartClass PartClass { get; set; }
+        public string SuggestedName { get; set; }
+        public bool HasPolarity { get; set; }
+        public int Pin1Index { get; set; }
+        public string Description { get; set; }
+    }
+
+    /// <summary>
+    /// Extracts features from pad clusters and classifies components.
+    /// Implements a decision-tree classifier based on pad geometry.
+    /// </summary>
+    public static class ComponentClassifier
+    {
+        private const double TOLERANCE = 0.05; // mm tolerance for comparisons
+
+        /// <summary>
+        /// Extract features from a set of gerber primitives (pads).
+        /// </summary>
+        public static PadClusterFeatures ExtractFeatures(List<GerberPrimitive> primitives)
+        {
+            var features = new PadClusterFeatures();
+            if (primitives == null || primitives.Count == 0)
+                return features;
+
+            // Build pad info list
+            foreach (var prim in primitives)
+            {
+                if (!prim.IsDark) continue;
+                var bounds = prim.GetBounds();
+                features.Pads.Add(new PadInfo
+                {
+                    X = prim.X,
+                    Y = prim.Y,
+                    Width = bounds.Width,
+                    Height = bounds.Height,
+                    IsCircular = prim.Type == GerberPrimitiveType.Circle ||
+                                 (Math.Abs(bounds.Width - bounds.Height) < TOLERANCE),
+                    Area = bounds.Width * bounds.Height
+                });
+            }
+
+            features.PadCount = features.Pads.Count;
+            if (features.PadCount == 0) return features;
+
+            // Bounding box
+            double minX = features.Pads.Min(p => p.X - p.Width / 2);
+            double minY = features.Pads.Min(p => p.Y - p.Height / 2);
+            double maxX = features.Pads.Max(p => p.X + p.Width / 2);
+            double maxY = features.Pads.Max(p => p.Y + p.Height / 2);
+            features.BoundingBox = new Rect(minX, minY, maxX - minX, maxY - minY);
+
+            // Centroid
+            features.Centroid = new Point(
+                features.Pads.Average(p => p.X),
+                features.Pads.Average(p => p.Y));
+
+            // All circular?
+            features.AllCircular = features.Pads.All(p => p.IsCircular);
+
+            // Pad aspect ratio (dominant)
+            var avgW = features.Pads.Average(p => p.Width);
+            var avgH = features.Pads.Average(p => p.Height);
+            features.PadAspectRatio = avgH > TOLERANCE ? avgW / avgH : 1.0;
+
+            // Has large pad? (one pad > 2x average area)
+            double avgArea = features.Pads.Average(p => p.Area);
+            features.HasLargePad = features.Pads.Any(p => p.Area > avgArea * 2);
+
+            // Dominant pitch - most common distance between adjacent pad centers
+            features.DominantPitch = ComputeDominantPitch(features.Pads);
+
+            // Symmetry checks
+            features.SymmetricX = CheckSymmetry(features.Pads, true, features.Centroid);
+            features.SymmetricY = CheckSymmetry(features.Pads, false, features.Centroid);
+
+            // Grid detection
+            DetectGrid(features);
+
+            // Sides with pads (for QFP detection)
+            features.SidesWithPads = CountSidesWithPads(features);
+
+            // H-shape detection (for tact switches)
+            features.IsHShape = DetectHShape(features);
+
+            return features;
+        }
+
+        /// <summary>
+        /// Classify a pad cluster into a component type using decision-tree rules.
+        /// </summary>
+        public static ClassificationResult Classify(PadClusterFeatures features)
+        {
+            if (features.PadCount == 0)
+                return new ClassificationResult
+                {
+                    PartClass = PartClass.Other,
+                    SuggestedName = "UNKNOWN",
+                    Description = "No pads detected"
+                };
+
+            // Decision tree
+            if (features.PadCount == 2)
+                return ClassifyChip(features);
+
+            if (features.PadCount == 3)
+                return ClassifySOT3(features);
+
+            if (features.PadCount >= 3 && features.PadCount <= 6 && features.HasLargePad)
+                return ClassifySOTLarge(features);
+
+            if (features.PadCount == 4 && features.IsHShape)
+                return ClassifySwitch(features);
+
+            if (features.PadCount > 9 && features.AllCircular && features.IsGrid)
+                return ClassifyBGA(features);
+
+            if (features.PadCount >= 16 && features.SidesWithPads == 4)
+                return ClassifyQuadIC(features);
+
+            if (features.PadCount >= 4 && features.PadCount % 2 == 0 && HasTwoParallelRows(features))
+                return ClassifyDualRowIC(features);
+
+            if (features.PadCount >= 4 && HasSingleRow(features))
+                return ClassifyConnector(features);
+
+            // Fallback
+            return new ClassificationResult
+            {
+                PartClass = PartClass.Other,
+                SuggestedName = $"PKG{features.PadCount}",
+                HasPolarity = false,
+                Pin1Index = 0,
+                Description = $"{features.PadCount}-pad component"
+            };
+        }
+
+        #region Classification Methods
+
+        private static ClassificationResult ClassifyChip(PadClusterFeatures f)
+        {
+            // Check if one pad is larger (polarized - diode/tantalum)
+            bool polarized = f.Pads.Count == 2 &&
+                Math.Abs(f.Pads[0].Area - f.Pads[1].Area) > f.Pads.Average(p => p.Area) * 0.15;
+
+            double bodyW = f.BoundingBox.Width;
+            double bodyL = f.BoundingBox.Height;
+            string size = EstimateChipSize(bodyW, bodyL);
+
+            return new ClassificationResult
+            {
+                PartClass = PartClass.Chip,
+                SuggestedName = size,
+                HasPolarity = polarized,
+                Pin1Index = polarized ? FindLargerPadIndex(f.Pads) : -1,
+                Description = polarized ? "Polarized 2-terminal (Diode/Tantalum)" : "Passive chip component"
+            };
+        }
+
+        private static ClassificationResult ClassifySOT3(PadClusterFeatures f)
+        {
+            return new ClassificationResult
+            {
+                PartClass = PartClass.SOT,
+                SuggestedName = "SOT23",
+                HasPolarity = true,
+                Pin1Index = FindPin1ByTopLeft(f.Pads),
+                Description = "SOT-23 transistor/MOSFET"
+            };
+        }
+
+        private static ClassificationResult ClassifySOTLarge(PadClusterFeatures f)
+        {
+            string name = f.PadCount <= 4 ? "SOT223" : $"SOT{f.PadCount}";
+            return new ClassificationResult
+            {
+                PartClass = PartClass.SOT,
+                SuggestedName = name,
+                HasPolarity = true,
+                Pin1Index = FindPin1ByTopLeft(f.Pads),
+                Description = $"SOT package with {f.PadCount} pads"
+            };
+        }
+
+        private static ClassificationResult ClassifySwitch(PadClusterFeatures f)
+        {
+            return new ClassificationResult
+            {
+                PartClass = PartClass.Other,
+                SuggestedName = "TACT_SW",
+                HasPolarity = false,
+                Pin1Index = -1,
+                Description = "Tactile switch (H-shape)"
+            };
+        }
+
+        private static ClassificationResult ClassifyBGA(PadClusterFeatures f)
+        {
+            string name = $"BGA{f.PadCount}";
+            if (f.RowCount > 0 && f.ColCount > 0)
+                name = $"BGA{f.PadCount}_{f.ColCount}x{f.RowCount}";
+
+            return new ClassificationResult
+            {
+                PartClass = PartClass.BGA,
+                SuggestedName = name,
+                HasPolarity = true,
+                Pin1Index = FindPin1ByTopLeft(f.Pads),
+                Description = $"BGA {f.ColCount}x{f.RowCount} grid"
+            };
+        }
+
+        private static ClassificationResult ClassifyQuadIC(PadClusterFeatures f)
+        {
+            int pinsPerSide = f.PadCount / 4;
+            string name = $"QFP{f.PadCount}";
+
+            return new ClassificationResult
+            {
+                PartClass = PartClass.QFP,
+                SuggestedName = name,
+                HasPolarity = true,
+                Pin1Index = FindPin1ByTopLeft(f.Pads),
+                Description = $"Quad flat package {pinsPerSide} pins/side"
+            };
+        }
+
+        private static ClassificationResult ClassifyDualRowIC(PadClusterFeatures f)
+        {
+            int totalPins = f.PadCount;
+            string prefix = totalPins <= 8 ? "SOIC" : (totalPins <= 20 ? "TSSOP" : "SOP");
+            string name = $"{prefix}{totalPins}";
+
+            return new ClassificationResult
+            {
+                PartClass = PartClass.SOP,
+                SuggestedName = name,
+                HasPolarity = true,
+                Pin1Index = FindPin1ByTopLeft(f.Pads),
+                Description = $"Dual-row IC with {totalPins} pins"
+            };
+        }
+
+        private static ClassificationResult ClassifyConnector(PadClusterFeatures f)
+        {
+            return new ClassificationResult
+            {
+                PartClass = PartClass.Connector,
+                SuggestedName = $"CONN{f.PadCount}",
+                HasPolarity = true,
+                Pin1Index = FindPin1ByTopLeft(f.Pads),
+                Description = $"Connector/header with {f.PadCount} pins"
+            };
+        }
+
+        #endregion
+
+        #region Feature Helpers
+
+        private static double ComputeDominantPitch(List<PadInfo> pads)
+        {
+            if (pads.Count < 2) return 0;
+
+            var distances = new List<double>();
+            for (int i = 0; i < pads.Count; i++)
+            {
+                double minDist = double.MaxValue;
+                for (int j = 0; j < pads.Count; j++)
+                {
+                    if (i == j) continue;
+                    double d = Math.Sqrt(Math.Pow(pads[i].X - pads[j].X, 2) +
+                                         Math.Pow(pads[i].Y - pads[j].Y, 2));
+                    if (d < minDist) minDist = d;
+                }
+                if (minDist < double.MaxValue)
+                    distances.Add(Math.Round(minDist, 3));
+            }
+
+            if (distances.Count == 0) return 0;
+
+            // Find most frequent distance (dominant pitch)
+            return distances.GroupBy(d => d)
+                .OrderByDescending(g => g.Count())
+                .First().Key;
+        }
+
+        private static bool CheckSymmetry(List<PadInfo> pads, bool xAxis, Point centroid)
+        {
+            foreach (var pad in pads)
+            {
+                double mirroredX = xAxis ? 2 * centroid.X - pad.X : pad.X;
+                double mirroredY = xAxis ? pad.Y : 2 * centroid.Y - pad.Y;
+
+                bool found = pads.Any(p =>
+                    Math.Abs(p.X - mirroredX) < TOLERANCE * 2 &&
+                    Math.Abs(p.Y - mirroredY) < TOLERANCE * 2);
+                if (!found) return false;
+            }
+            return true;
+        }
+
+        private static void DetectGrid(PadClusterFeatures f)
+        {
+            if (f.PadCount < 4) return;
+
+            // Cluster X and Y coordinates
+            var xClusters = ClusterValues(f.Pads.Select(p => p.X).ToList());
+            var yClusters = ClusterValues(f.Pads.Select(p => p.Y).ToList());
+
+            f.ColCount = xClusters.Count;
+            f.RowCount = yClusters.Count;
+
+            // It's a grid if rows*cols approximately equals pad count
+            f.IsGrid = f.ColCount >= 2 && f.RowCount >= 2 &&
+                        Math.Abs(f.ColCount * f.RowCount - f.PadCount) <= f.PadCount * 0.1;
+        }
+
+        private static List<double> ClusterValues(List<double> values)
+        {
+            if (values.Count == 0) return new List<double>();
+            var sorted = values.OrderBy(v => v).ToList();
+            var clusters = new List<double> { sorted[0] };
+
+            for (int i = 1; i < sorted.Count; i++)
+            {
+                if (sorted[i] - clusters.Last() > TOLERANCE * 4)
+                    clusters.Add(sorted[i]);
+            }
+            return clusters;
+        }
+
+        private static int CountSidesWithPads(PadClusterFeatures f)
+        {
+            if (f.PadCount < 4) return 0;
+            var bb = f.BoundingBox;
+            double margin = Math.Min(bb.Width, bb.Height) * 0.3;
+
+            int sides = 0;
+            if (f.Pads.Any(p => p.X - p.Width / 2 <= bb.Left + margin)) sides++;   // Left
+            if (f.Pads.Any(p => p.X + p.Width / 2 >= bb.Right - margin)) sides++;  // Right
+            if (f.Pads.Any(p => p.Y - p.Height / 2 <= bb.Top + margin)) sides++;   // Top
+            if (f.Pads.Any(p => p.Y + p.Height / 2 >= bb.Bottom - margin)) sides++;// Bottom
+            return sides;
+        }
+
+        private static bool DetectHShape(PadClusterFeatures f)
+        {
+            if (f.PadCount != 4) return false;
+
+            // H-shape: two pairs of pads with short intra-pair distance and long inter-pair distance
+            var dists = new List<double>();
+            for (int i = 0; i < 4; i++)
+                for (int j = i + 1; j < 4; j++)
+                {
+                    double d = Math.Sqrt(Math.Pow(f.Pads[i].X - f.Pads[j].X, 2) +
+                                         Math.Pow(f.Pads[i].Y - f.Pads[j].Y, 2));
+                    dists.Add(d);
+                }
+
+            dists.Sort();
+            // In an H-shape: 2 short distances, 2 medium, 2 long
+            if (dists.Count == 6 && dists[1] > 0)
+            {
+                double ratio = dists[4] / dists[1];
+                return ratio > 1.5; // Long distances are significantly longer than short
+            }
+            return false;
+        }
+
+        private static bool HasTwoParallelRows(PadClusterFeatures f)
+        {
+            var xClusters = ClusterValues(f.Pads.Select(p => p.X).ToList());
+            var yClusters = ClusterValues(f.Pads.Select(p => p.Y).ToList());
+
+            // Two columns with many rows, or two rows with many columns
+            return (xClusters.Count == 2 && yClusters.Count >= 2) ||
+                   (yClusters.Count == 2 && xClusters.Count >= 2);
+        }
+
+        private static bool HasSingleRow(PadClusterFeatures f)
+        {
+            var xClusters = ClusterValues(f.Pads.Select(p => p.X).ToList());
+            var yClusters = ClusterValues(f.Pads.Select(p => p.Y).ToList());
+            return xClusters.Count == 1 || yClusters.Count == 1;
+        }
+
+        /// <summary>
+        /// Find pin 1 by top-left sort (min X+Y sum).
+        /// </summary>
+        private static int FindPin1ByTopLeft(List<PadInfo> pads)
+        {
+            if (pads.Count == 0) return -1;
+            int bestIdx = 0;
+            double bestSum = double.MaxValue;
+            for (int i = 0; i < pads.Count; i++)
+            {
+                double sum = pads[i].X + pads[i].Y;
+                if (sum < bestSum)
+                {
+                    bestSum = sum;
+                    bestIdx = i;
+                }
+            }
+            return bestIdx;
+        }
+
+        private static int FindLargerPadIndex(List<PadInfo> pads)
+        {
+            if (pads.Count < 2) return 0;
+            return pads[0].Area >= pads[1].Area ? 0 : 1;
+        }
+
+        private static string EstimateChipSize(double w, double h)
+        {
+            double major = Math.Max(w, h);
+            double minor = Math.Min(w, h);
+
+            if (major < 0.7) return "0201";
+            if (major < 1.2) return "0402";
+            if (major < 2.0) return "0603";
+            if (major < 2.6) return "0805";
+            if (major < 3.8) return "1206";
+            if (major < 5.5) return "1812";
+            return "2512";
+        }
+
+        #endregion
+    }
+
+    /// <summary>
+    /// Generates package body graphics and pin 1 indicators based on classification.
+    /// Takes gerber primitives (pads) and a classification result, produces a Package.
+    /// </summary>
+    public static class PackageBodyGenerator
+    {
+        /// <summary>
+        /// Build a complete Package from selected gerber primitives with auto-classification.
+        /// </summary>
+        public static Package BuildPackage(
+            List<GerberPrimitive> selectedPrimitives,
+            string packageName = null)
+        {
+            var features = ComponentClassifier.ExtractFeatures(selectedPrimitives);
+            var classification = ComponentClassifier.Classify(features);
+
+            if (string.IsNullOrEmpty(packageName))
+                packageName = classification.SuggestedName;
+
+            var package = new Package(packageName)
+            {
+                PartClass = classification.PartClass,
+                HasPolarity = classification.HasPolarity,
+                Description = classification.Description,
+                Width = features.BoundingBox.Width,
+                Length = features.BoundingBox.Height,
+                Height = 0.5
+            };
+
+            // Center offset: all coordinates relative to centroid
+            double cx = features.Centroid.X;
+            double cy = features.Centroid.Y;
+
+            // Add pad graphics and pins
+            int pinNumber = 1;
+            // Sort pads for consistent pin numbering (top-left first, then clockwise)
+            var sortedPads = SortPadsForNumbering(features, classification);
+
+            foreach (var pad in sortedPads)
+            {
+                var graphic = new PackageGraphic
+                {
+                    X = pad.X - cx,
+                    Y = pad.Y - cy,
+                    Width = pad.Width,
+                    Height = pad.Height,
+                    ShapeType = pad.IsCircular ? GraphicShapeType.Circle : GraphicShapeType.Rectangle,
+                    IsPad = true,
+                    IsFilled = true
+                };
+                package.Graphics.Add(graphic);
+
+                package.Pins.Add(new Pin
+                {
+                    Number = pinNumber,
+                    X = pad.X - cx,
+                    Y = pad.Y - cy,
+                    Width = pad.Width * 0.5,
+                    Height = pad.Height * 0.5,
+                    Shape = pad.IsCircular ? PinShape.Circle : PinShape.Rectangle
+                });
+                pinNumber++;
+            }
+
+            // Add body outline based on classification
+            AddBodyGraphics(package, features, classification, cx, cy);
+
+            // Add pin 1 indicator if polarized
+            if (classification.HasPolarity && classification.Pin1Index >= 0 &&
+                classification.Pin1Index < sortedPads.Count)
+            {
+                AddPin1Indicator(package, sortedPads[0], cx, cy, classification);
+            }
+
+            return package;
+        }
+
+        private static List<PadInfo> SortPadsForNumbering(
+            PadClusterFeatures features, ClassificationResult classification)
+        {
+            var pads = new List<PadInfo>(features.Pads);
+
+            switch (classification.PartClass)
+            {
+                case PartClass.SOP:
+                    // Dual-row: sort CCW starting from top-left
+                    return SortDualRowCCW(pads, features);
+
+                case PartClass.QFP:
+                    // Quad: sort CCW starting from top-left
+                    return SortQuadCCW(pads, features);
+
+                case PartClass.BGA:
+                    // Grid: sort row-major (top-left to bottom-right)
+                    return pads.OrderBy(p => p.Y).ThenBy(p => p.X).ToList();
+
+                default:
+                    // Default: sort by (X+Y) sum for consistent top-left-first ordering
+                    return pads.OrderBy(p => p.X + p.Y).ToList();
+            }
+        }
+
+        private static List<PadInfo> SortDualRowCCW(List<PadInfo> pads, PadClusterFeatures f)
+        {
+            // Determine if rows are horizontal (two Y clusters) or vertical (two X clusters)
+            var xClusters = ClusterValues(pads.Select(p => p.X).ToList());
+            var yClusters = ClusterValues(pads.Select(p => p.Y).ToList());
+
+            if (xClusters.Count == 2)
+            {
+                // Two columns: left column top-to-bottom, then right column bottom-to-top
+                double midX = (xClusters[0] + xClusters[1]) / 2;
+                var left = pads.Where(p => p.X < midX).OrderBy(p => p.Y).ToList();
+                var right = pads.Where(p => p.X >= midX).OrderByDescending(p => p.Y).ToList();
+                left.AddRange(right);
+                return left;
+            }
+            else
+            {
+                // Two rows: top row left-to-right, then bottom row right-to-left
+                double midY = (yClusters[0] + yClusters[1]) / 2;
+                var top = pads.Where(p => p.Y < midY).OrderBy(p => p.X).ToList();
+                var bottom = pads.Where(p => p.Y >= midY).OrderByDescending(p => p.X).ToList();
+                top.AddRange(bottom);
+                return top;
+            }
+        }
+
+        private static List<PadInfo> SortQuadCCW(List<PadInfo> pads, PadClusterFeatures f)
+        {
+            var bb = f.BoundingBox;
+            double cx = bb.X + bb.Width / 2;
+            double cy = bb.Y + bb.Height / 2;
+            double margin = Math.Min(bb.Width, bb.Height) * 0.3;
+
+            // Categorize pads by side
+            var left = pads.Where(p => p.X < cx - margin).OrderBy(p => p.Y).ToList();
+            var bottom = pads.Where(p => p.Y > cy + margin).OrderByDescending(p => p.X).ToList();
+            var right = pads.Where(p => p.X > cx + margin).OrderByDescending(p => p.Y).ToList();
+            var top = pads.Where(p => p.Y < cy - margin).OrderBy(p => p.X).ToList();
+
+            // Remaining (center pads, e.g. thermal) go at end
+            var used = new HashSet<PadInfo>(left.Concat(bottom).Concat(right).Concat(top));
+            var remaining = pads.Where(p => !used.Contains(p)).ToList();
+
+            var result = new List<PadInfo>();
+            result.AddRange(left);
+            result.AddRange(bottom);
+            result.AddRange(right);
+            result.AddRange(top);
+            result.AddRange(remaining);
+            return result;
+        }
+
+        private static void AddBodyGraphics(
+            Package package, PadClusterFeatures features,
+            ClassificationResult classification, double cx, double cy)
+        {
+            var bb = features.BoundingBox;
+            double bx = bb.X - cx;
+            double by = bb.Y - cy;
+            double bw = bb.Width;
+            double bh = bb.Height;
+
+            switch (classification.PartClass)
+            {
+                case PartClass.Chip:
+                    // Body bridging the two pads (inset 30% from edges)
+                    double insetX = bw * 0.15;
+                    double insetY = bh * 0.05;
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Rectangle,
+                        X = bx + insetX,
+                        Y = by - insetY,
+                        Width = bw - 2 * insetX,
+                        Height = bh + 2 * insetY,
+                        IsFilled = true,
+                        IsPad = false,
+                        FillColor = System.Windows.Media.Color.FromArgb(120, 80, 80, 80)
+                    });
+                    break;
+
+                case PartClass.SOT:
+                    // Body rectangle encompassing pad centroids
+                    double sotMargin = features.DominantPitch * 0.15;
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Rectangle,
+                        X = bx - sotMargin,
+                        Y = by - sotMargin,
+                        Width = bw + 2 * sotMargin,
+                        Height = bh + 2 * sotMargin,
+                        IsFilled = false,
+                        IsPad = false,
+                        StrokeThickness = 0.1
+                    });
+                    break;
+
+                case PartClass.SOP:
+                    // Body between the two rows of pads
+                    double sopInset = bw * 0.2;
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Rectangle,
+                        X = bx + sopInset,
+                        Y = by - 0.1,
+                        Width = bw - 2 * sopInset,
+                        Height = bh + 0.2,
+                        IsFilled = false,
+                        IsPad = false,
+                        StrokeThickness = 0.12
+                    });
+                    break;
+
+                case PartClass.QFP:
+                case PartClass.QFN:
+                    // Square body inside the ring of pads
+                    double qfpInset = Math.Min(bw, bh) * 0.15;
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Rectangle,
+                        X = bx + qfpInset,
+                        Y = by + qfpInset,
+                        Width = bw - 2 * qfpInset,
+                        Height = bh - 2 * qfpInset,
+                        IsFilled = classification.PartClass == PartClass.QFN,
+                        IsPad = false,
+                        StrokeThickness = 0.12,
+                        FillColor = classification.PartClass == PartClass.QFN
+                            ? System.Windows.Media.Color.FromArgb(80, 60, 60, 60)
+                            : System.Windows.Media.Colors.Transparent
+                    });
+                    break;
+
+                case PartClass.BGA:
+                    // Large square enclosing all pads
+                    double bgaMargin = 0.3;
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Rectangle,
+                        X = bx - bgaMargin,
+                        Y = by - bgaMargin,
+                        Width = bw + 2 * bgaMargin,
+                        Height = bh + 2 * bgaMargin,
+                        IsFilled = true,
+                        IsPad = false,
+                        FillColor = System.Windows.Media.Color.FromArgb(100, 40, 60, 40)
+                    });
+                    break;
+
+                case PartClass.Connector:
+                    // Outline rectangle
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Rectangle,
+                        X = bx - 0.2,
+                        Y = by - 0.2,
+                        Width = bw + 0.4,
+                        Height = bh + 0.4,
+                        IsFilled = false,
+                        IsPad = false,
+                        StrokeThickness = 0.15
+                    });
+                    break;
+
+                default:
+                    // Switch/other: circle in center
+                    if (classification.SuggestedName.Contains("TACT") ||
+                        classification.SuggestedName.Contains("SW"))
+                    {
+                        double radius = Math.Min(bw, bh) * 0.3;
+                        package.Graphics.Add(new PackageGraphic
+                        {
+                            ShapeType = GraphicShapeType.Circle,
+                            X = -radius,
+                            Y = -radius,
+                            Width = radius * 2,
+                            Height = radius * 2,
+                            IsFilled = false,
+                            IsPad = false,
+                            StrokeThickness = 0.1
+                        });
+                    }
+                    else
+                    {
+                        package.Graphics.Add(new PackageGraphic
+                        {
+                            ShapeType = GraphicShapeType.Rectangle,
+                            X = bx,
+                            Y = by,
+                            Width = bw,
+                            Height = bh,
+                            IsFilled = false,
+                            IsPad = false,
+                            StrokeThickness = 0.1
+                        });
+                    }
+                    break;
+            }
+        }
+
+        private static void AddPin1Indicator(
+            Package package, PadInfo pin1Pad, double cx, double cy,
+            ClassificationResult classification)
+        {
+            double px = pin1Pad.X - cx;
+            double py = pin1Pad.Y - cy;
+            double dotRadius;
+
+            switch (classification.PartClass)
+            {
+                case PartClass.BGA:
+                    // Chamfer on corner
+                    var bb = package.Bounds;
+                    double chamferSize = Math.Min(bb.Width, bb.Height) * 0.12;
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Line,
+                        X = bb.Left,
+                        Y = bb.Top + chamferSize,
+                        Width = chamferSize,
+                        Height = -chamferSize,
+                        Points = new List<Point>
+                        {
+                            new Point(bb.Left, bb.Top + chamferSize),
+                            new Point(bb.Left + chamferSize, bb.Top)
+                        },
+                        IsPin1Indicator = true,
+                        IsPad = false,
+                        StrokeThickness = 0.15
+                    });
+                    return;
+
+                case PartClass.Chip:
+                    if (!classification.HasPolarity) return;
+                    // Bar on one end
+                    double barW = pin1Pad.Width * 0.3;
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Rectangle,
+                        X = px - barW / 2,
+                        Y = py - pin1Pad.Height / 2,
+                        Width = barW,
+                        Height = pin1Pad.Height,
+                        IsFilled = true,
+                        IsPin1Indicator = true,
+                        IsPad = false,
+                        FillColor = System.Windows.Media.Color.FromRgb(200, 200, 200)
+                    });
+                    return;
+
+                default:
+                    // Dot near pin 1
+                    dotRadius = Math.Min(pin1Pad.Width, pin1Pad.Height) * 0.25;
+                    if (dotRadius < 0.08) dotRadius = 0.08;
+                    // Offset the dot slightly outside the pad
+                    double offsetX = px < 0 ? -dotRadius * 2 : dotRadius * 2;
+                    double offsetY = py < 0 ? -dotRadius * 2 : dotRadius * 2;
+
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Circle,
+                        X = px - offsetX - dotRadius,
+                        Y = py - offsetY - dotRadius,
+                        Width = dotRadius * 2,
+                        Height = dotRadius * 2,
+                        IsFilled = true,
+                        IsPin1Indicator = true,
+                        IsPad = false,
+                        FillColor = System.Windows.Media.Color.FromRgb(255, 255, 255)
+                    });
+                    break;
+            }
+        }
+
+        private static List<double> ClusterValues(List<double> values)
+        {
+            if (values.Count == 0) return new List<double>();
+            var sorted = values.OrderBy(v => v).ToList();
+            var clusters = new List<double> { sorted[0] };
+            for (int i = 1; i < sorted.Count; i++)
+            {
+                if (sorted[i] - clusters.Last() > 0.2)
+                    clusters.Add(sorted[i]);
+            }
+            return clusters;
+        }
+    }
+}

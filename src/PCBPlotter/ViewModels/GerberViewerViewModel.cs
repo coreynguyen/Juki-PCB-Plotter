@@ -684,137 +684,94 @@ namespace PCBPlotter.ViewModels
         {
             if (Project == null || SelectedPrimitives.Count == 0) return;
 
-            // Calculate bounds of selected primitives
-            Rect bounds = Rect.Empty;
-            foreach (var prim in SelectedPrimitives)
-            {
-                if (bounds.IsEmpty)
-                    bounds = prim.GetBounds();
-                else
-                    bounds.Union(prim.GetBounds());
-            }
-
-            // Create package from primitives
-            var package = new Package(Package.GeneratePackageName())
-            {
-                Width = bounds.Width,
-                Length = bounds.Height,
-                Height = 0.5
-            };
-
-            // Convert primitives to package graphics
-            var centerX = bounds.X + bounds.Width / 2;
-            var centerY = bounds.Y + bounds.Height / 2;
-
-            int pinNumber = 1;
-            foreach (var prim in SelectedPrimitives)
-            {
-                var graphic = new PackageGraphic
-                {
-                    X = prim.X - centerX,
-                    Y = prim.Y - centerY,
-                    Width = prim.Width,
-                    Height = prim.Height,
-                    Rotation = prim.Rotation,
-                    IsPad = true
-                };
-
-                switch (prim.Type)
-                {
-                    case GerberPrimitiveType.Circle:
-                    case GerberPrimitiveType.Flash:
-                        graphic.ShapeType = GraphicShapeType.Circle;
-                        break;
-                    case GerberPrimitiveType.Rectangle:
-                        graphic.ShapeType = GraphicShapeType.Rectangle;
-                        break;
-                    case GerberPrimitiveType.Obround:
-                        graphic.ShapeType = GraphicShapeType.RoundedRectangle;
-                        graphic.CornerRadius = Math.Min(prim.Width, prim.Height) / 2;
-                        break;
-                    default:
-                        graphic.ShapeType = GraphicShapeType.Rectangle;
-                        break;
-                }
-
-                package.Graphics.Add(graphic);
-
-                // Add pin at pad center
-                package.Pins.Add(new Pin
-                {
-                    Number = pinNumber++,
-                    X = graphic.X,
-                    Y = graphic.Y,
-                    Width = prim.Width * 0.5,
-                    Height = prim.Height * 0.5
-                });
-            }
+            // Use the classifier pipeline to create an intelligent package
+            var package = PackageBodyGenerator.BuildPackage(
+                SelectedPrimitives.ToList());
 
             Project.Packages.Add(package);
             Publish(new PackageAddedEvent { Package = package });
             Publish(new StatusMessageEvent
             {
-                Message = string.Format("Created package {0} with {1} pads", package.Name, package.Pins.Count)
+                Message = string.Format("Created package '{0}' ({1}) with {2} pads",
+                    package.Name, package.PartClass, package.Pins.Count)
             });
         }
 
+        /// <summary>
+        /// Creates a placement from selected gerber primitives.
+        /// Runs feature extraction, classification, package body generation,
+        /// then creates a placement at the centroid and links everything.
+        /// Navigates to the Design tab to show the result.
+        /// </summary>
         private void ExecuteAddSelectionToOutput()
         {
             if (Project == null || SelectedPrimitives.Count == 0) return;
 
-            // Prompt user for optional placement name
+            var primitives = SelectedPrimitives.ToList();
+
+            // Run feature extraction and classification
+            var features = ComponentClassifier.ExtractFeatures(primitives);
+            var classification = ComponentClassifier.Classify(features);
+
+            // Prompt user for optional reference name, pre-fill with auto-generated
             var generatedName = GenerateUniquePlacementReference();
             var inputDialog = new InputDialog(
-                "Create Placement",
-                "Enter a reference designator for this placement (leave blank for auto-generated):",
+                "Create Placement from Selection",
+                string.Format("Detected: {0} ({1})\n\nEnter reference designator (leave blank for '{2}'):",
+                    classification.SuggestedName, classification.Description, generatedName),
                 "");
             inputDialog.Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
 
             if (inputDialog.ShowDialog() != true)
-            {
-                // User cancelled
                 return;
-            }
 
-            // Use provided name or generate one
             var reference = string.IsNullOrWhiteSpace(inputDialog.Value)
                 ? generatedName
                 : inputDialog.Value.Trim();
 
-            // Calculate center of selection
-            Rect bounds = Rect.Empty;
-            foreach (var prim in SelectedPrimitives)
+            // Build classified package with body graphics, pins, and pin 1 indicator
+            var package = PackageBodyGenerator.BuildPackage(primitives, classification.SuggestedName);
+
+            // Check if a package with this name already exists
+            var existingPackage = Project.Packages.FirstOrDefault(
+                p => p.Name == package.Name && p.Pins.Count == package.Pins.Count);
+            if (existingPackage != null)
             {
-                if (bounds.IsEmpty)
-                    bounds = prim.GetBounds();
-                else
-                    bounds.Union(prim.GetBounds());
+                package = existingPackage;
+            }
+            else
+            {
+                Project.Packages.Add(package);
+                Publish(new PackageAddedEvent { Package = package });
             }
 
-            var selCenterX = bounds.X + bounds.Width / 2;
-            var selCenterY = bounds.Y + bounds.Height / 2;
-
-            // Create placement at selection center with the reference
+            // Create placement at the centroid
             var placement = new Placement
             {
                 Reference = reference,
-                X = selCenterX,
-                Y = selCenterY,
+                X = features.Centroid.X,
+                Y = features.Centroid.Y,
                 Rotation = 0,
-                Side = BoardSide.Top
+                Side = BoardSide.Top,
+                Package = package
             };
-
-            // Create package from selection if needed
-            ExecuteCreatePackageFromSelection();
-            var lastPackage = Project.Packages.LastOrDefault();
-            if (lastPackage != null)
-            {
-                placement.Package = lastPackage;
-            }
 
             Project.Placements.Add(placement);
             Publish(new PlacementAddedEvent { Placement = placement });
-            Publish(new StatusMessageEvent { Message = string.Format("Added placement '{0}' to output", reference) });
+
+            Publish(new StatusMessageEvent
+            {
+                Message = string.Format("Created placement '{0}' -> {1} ({2}, {3} pads) at ({4:F2}, {5:F2})",
+                    reference, package.Name, classification.PartClass,
+                    package.Pins.Count, features.Centroid.X, features.Centroid.Y)
+            });
+
+            // Navigate to the Design tab (tab index 0) to show the result
+            Publish(new NavigateToTabEvent
+            {
+                TabIndex = 0,
+                ScrollToPlacement = placement
+            });
         }
 
         /// <summary>

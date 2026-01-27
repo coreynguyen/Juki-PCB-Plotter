@@ -208,6 +208,15 @@ namespace PCBPlotter.Views
                     e.Handled = true;
                 }
             }
+            // Enter = Add selection to output (create placement + package)
+            else if (e.Key == Key.Return || e.Key == Key.Enter)
+            {
+                if (vm.SelectedPrimitives != null && vm.SelectedPrimitives.Count > 0)
+                {
+                    vm.AddSelectionToOutputCommand.Execute(null);
+                    e.Handled = true;
+                }
+            }
         }
 
         /// <summary>
