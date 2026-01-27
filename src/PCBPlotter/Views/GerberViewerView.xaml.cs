@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -43,6 +44,7 @@ namespace PCBPlotter.Views
 
             GerberCanvas.CursorPositionChanged += OnCursorPositionChanged;
             GerberCanvas.SelectionRectCompleted += OnSelectionRectCompleted;
+            GerberCanvas.GerberSelectionChanged += OnCpuGerberSelectionChanged;
             GerberCanvas.Loaded += (s, e) =>
             {
                 var vm = DataContext as GerberViewerViewModel;
@@ -60,6 +62,9 @@ namespace PCBPlotter.Views
             // Alt+Click in viewport picks a layer
             GerberCanvas.LayerPicked += OnLayerPicked;
             OpenGLCanvas.LayerPicked += OnLayerPicked;
+
+            // Right-click directly adds selection to output (no context menu)
+            GerberCanvas.MouseRightButtonUp += OnCanvasRightClick;
 
             // Subscribe to double-click on layer list to set active layer
             LayerListBox.MouseDoubleClick += OnLayerListDoubleClick;
@@ -245,6 +250,23 @@ namespace PCBPlotter.Views
             vm.NotifyLayerVisibilityChanged();
         }
 
+        /// <summary>
+        /// CPU canvas fires this when gerber primitives are selected/deselected.
+        /// Sync the VM's SelectedPrimitives so commands like "Add to Output" work.
+        /// </summary>
+        private void OnCpuGerberSelectionChanged(object sender, List<GerberPrimitive> selected)
+        {
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm == null) return;
+
+            vm.SelectedPrimitives.Clear();
+            if (selected != null)
+            {
+                foreach (var prim in selected)
+                    vm.SelectedPrimitives.Add(prim);
+            }
+        }
+
         private void OnLayerPicked(object sender, GerberLayer layer)
         {
             var vm = DataContext as GerberViewerViewModel;
@@ -254,6 +276,21 @@ namespace PCBPlotter.Views
                 // Also select it in the list
                 LayerListBox.SelectedItem = layer;
                 LayerListBox.ScrollIntoView(layer);
+            }
+        }
+
+        /// <summary>
+        /// Right-click on canvas directly adds selection to output (no context menu).
+        /// </summary>
+        private void OnCanvasRightClick(object sender, MouseButtonEventArgs e)
+        {
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm == null) return;
+
+            if (vm.SelectedPrimitives != null && vm.SelectedPrimitives.Count > 0)
+            {
+                vm.AddSelectionToOutputCommand.Execute(null);
+                e.Handled = true;
             }
         }
 

@@ -175,19 +175,7 @@
                                        PanY="{Binding PanY, Mode=TwoWay}"
                                        GerberLayers="{Binding GerberLayersCollection}"
                                        UseScreenBlend="True"
-                                       ShowGrid="True">
-                    <controls:DesignCanvas.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="Add to Output (Enter)" Command="{Binding AddSelectionToOutputCommand}"
-                                      ToolTip="Create placement + package from selected pads"/>
-                            <MenuItem Header="Create Package Only" Command="{Binding CreatePackageFromSelectionCommand}"
-                                      ToolTip="Create a classified package without placement"/>
-                            <Separator/>
-                            <MenuItem Header="Select All" Command="{Binding SelectAllCommand}"/>
-                            <MenuItem Header="Select None" Command="{Binding SelectNoneCommand}"/>
-                        </ContextMenu>
-                    </controls:DesignCanvas.ContextMenu>
-                </controls:DesignCanvas>
+                                       ShowGrid="True"/>
 
                 <!-- OpenGL Canvas (GPU) - hidden by default -->
                 <controls:OpenGLCanvas x:Name="OpenGLCanvas"

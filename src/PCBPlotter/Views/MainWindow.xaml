@@ -4,8 +4,8 @@
         xmlns:local="clr-namespace:PCBPlotter.Views"
         xmlns:vm="clr-namespace:PCBPlotter.ViewModels"
         Title="{Binding Title}"
-        Height="800" Width="1200"
-        MinHeight="600" MinWidth="800"
+        Height="750" Width="1200"
+        MinHeight="500" MinWidth="800"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource BackgroundMediumBrush}">
 
@@ -102,14 +102,28 @@
                                    DataContext="{Binding}"
                                    Visibility="{Binding ShowStartScreen, Converter={StaticResource BoolToVisibilityConverter}}"/>
 
-            <!-- Project Tabs (shown when a project is open) -->
+            <!-- Project Tabs (shown when a project is open) - Vertical left-side tabs -->
             <TabControl x:Name="MainTabs"
                         SelectedIndex="{Binding SelectedTabIndex}"
                         Background="{StaticResource BackgroundMediumBrush}"
                         BorderBrush="{StaticResource BorderDarkBrush}"
+                        TabStripPlacement="Left"
                         Visibility="{Binding ShowStartScreen, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=invert}">
 
-                <!-- Design Tab (renamed from Output Plot) -->
+                <TabControl.Resources>
+                    <!-- Style vertical tab headers to be wider and readable -->
+                    <Style TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
+                        <Setter Property="HeaderTemplate">
+                            <Setter.Value>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" Width="70" TextAlignment="Left" Padding="4,6"/>
+                                </DataTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </TabControl.Resources>
+
+                <!-- Design Tab -->
                 <TabItem Header="Design">
                     <local:OutputPlotView DataContext="{Binding OutputPlotViewModel}"/>
                 </TabItem>
@@ -119,14 +133,14 @@
                     <local:PlacementEditorView DataContext="{Binding PlacementEditorViewModel}"/>
                 </TabItem>
 
-                <!-- Component Editor Tab -->
+                <!-- Components Tab (was BOM) -->
                 <TabItem Header="Components">
-                    <local:ComponentEditorView DataContext="{Binding ComponentEditorViewModel}"/>
+                    <local:BomEditorView DataContext="{Binding BomEditorViewModel}"/>
                 </TabItem>
 
-                <!-- BOM Editor Tab -->
-                <TabItem Header="BOM">
-                    <local:BomEditorView DataContext="{Binding BomEditorViewModel}"/>
+                <!-- Packages Tab (was Components) -->
+                <TabItem Header="Packages">
+                    <local:ComponentEditorView DataContext="{Binding ComponentEditorViewModel}"/>
                 </TabItem>
 
                 <!-- Gerber Viewer Tab -->
