@@ -8,6 +8,7 @@ using PCBPlotter.Core.Events;
 using PCBPlotter.Core.Models;
 using PCBPlotter.Core.Rendering;
 using PCBPlotter.Core.Services;
+using PCBPlotter.Views;
 
 namespace PCBPlotter.ViewModels
 {
@@ -561,6 +562,25 @@ namespace PCBPlotter.ViewModels
         {
             if (Project == null || SelectedPrimitives.Count == 0) return;
 
+            // Prompt user for optional placement name
+            var generatedName = GenerateUniquePlacementReference();
+            var inputDialog = new InputDialog(
+                "Create Placement",
+                "Enter a reference designator for this placement (leave blank for auto-generated):",
+                "");
+            inputDialog.Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
+
+            if (inputDialog.ShowDialog() != true)
+            {
+                // User cancelled
+                return;
+            }
+
+            // Use provided name or generate one
+            var reference = string.IsNullOrWhiteSpace(inputDialog.Value)
+                ? generatedName
+                : inputDialog.Value.Trim();
+
             // Calculate center of selection
             Rect bounds = Rect.Empty;
             foreach (var prim in SelectedPrimitives)
@@ -574,9 +594,10 @@ namespace PCBPlotter.ViewModels
             var centerX = bounds.X + bounds.Width / 2;
             var centerY = bounds.Y + bounds.Height / 2;
 
-            // Create placement at selection center (no reference - user can assign later)
+            // Create placement at selection center with the reference
             var placement = new Placement
             {
+                Reference = reference,
                 X = centerX,
                 Y = centerY,
                 Rotation = 0,
@@ -593,7 +614,36 @@ namespace PCBPlotter.ViewModels
 
             Project.Placements.Add(placement);
             Publish(new PlacementAddedEvent { Placement = placement });
-            Publish(new StatusMessageEvent { Message = "Added placement to output" });
+            Publish(new StatusMessageEvent { Message = string.Format("Added placement '{0}' to output", reference) });
+        }
+
+        /// <summary>
+        /// Generates a unique placement reference designator (P1, P2, etc.)
+        /// </summary>
+        private string GenerateUniquePlacementReference()
+        {
+            const string prefix = "P";
+            int number = 1;
+
+            // Find existing references with the same prefix and get the highest number
+            var existingNumbers = Project.Placements
+                .Where(p => !string.IsNullOrEmpty(p.Reference) && p.Reference.StartsWith(prefix))
+                .Select(p =>
+                {
+                    int n;
+                    if (int.TryParse(p.Reference.Substring(prefix.Length), out n))
+                        return n;
+                    return 0;
+                })
+                .Where(n => n > 0)
+                .ToList();
+
+            if (existingNumbers.Count > 0)
+            {
+                number = existingNumbers.Max() + 1;
+            }
+
+            return prefix + number;
         }
 
         private void ExecuteSetBoardOutline()
