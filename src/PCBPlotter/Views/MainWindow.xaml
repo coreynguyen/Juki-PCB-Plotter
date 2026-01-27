@@ -144,6 +144,9 @@
                         <Setter Property="MinWidth" Value="26"/>
                         <Setter Property="Padding" Value="0"/>
                     </Style>
+                    <Style TargetType="TabPanel">
+                        <Setter Property="VerticalAlignment" Value="Bottom"/>
+                    </Style>
                 </TabControl.Resources>
 
                 <TabItem>

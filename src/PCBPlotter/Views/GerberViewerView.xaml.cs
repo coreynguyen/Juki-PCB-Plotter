@@ -66,6 +66,18 @@ namespace PCBPlotter.Views
             // Right-click directly adds selection to output (no context menu)
             GerberCanvas.MouseRightButtonUp += OnCanvasRightClick;
 
+            // Force refresh when the view becomes visible (e.g. switching to Gerber tab)
+            // This fixes layers not rendering after tab content is deferred-loaded by WPF
+            IsVisibleChanged += (s, e) =>
+            {
+                if ((bool)e.NewValue)
+                {
+                    GerberCanvas.InvalidateGerberCache();
+                    if (OpenGLCanvas.Visibility == Visibility.Visible)
+                        OpenGLCanvas.Invalidate();
+                }
+            };
+
             // Subscribe to double-click on layer list to set active layer
             LayerListBox.MouseDoubleClick += OnLayerListDoubleClick;
 
@@ -100,8 +112,10 @@ namespace PCBPlotter.Views
 
         private void OnLayerVisibilityChanged()
         {
-            // Refresh the canvas when layer visibility changes
+            // Refresh both canvases when layer visibility changes
             GerberCanvas.InvalidateGerberCache();
+            if (OpenGLCanvas.Visibility == Visibility.Visible)
+                OpenGLCanvas.Invalidate();
         }
 
         private void OnActiveLayerChanged(GerberLayer layer)
