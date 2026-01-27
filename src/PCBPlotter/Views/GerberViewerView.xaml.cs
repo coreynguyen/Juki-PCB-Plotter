@@ -59,6 +59,7 @@ namespace PCBPlotter.Views
 
             // Alt+Click in viewport picks a layer
             GerberCanvas.LayerPicked += OnLayerPicked;
+            OpenGLCanvas.LayerPicked += OnLayerPicked;
 
             // Subscribe to double-click on layer list to set active layer
             LayerListBox.MouseDoubleClick += OnLayerListDoubleClick;
