@@ -21,10 +21,11 @@
 
             <TextBlock Grid.Row="0" Text="Layers" FontWeight="SemiBold" Margin="8"/>
 
-            <!-- Layer List -->
+            <!-- Layer List (ExtendedSelection for multi-select with Ctrl/Shift) -->
             <ListBox x:Name="LayerListBox" Grid.Row="1"
                      ItemsSource="{Binding Layers}"
                      SelectedItem="{Binding SelectedLayer}"
+                     SelectionMode="Extended"
                      Margin="8,0">
                 <ListBox.ItemTemplate>
                     <DataTemplate>
@@ -36,7 +37,8 @@
                             </Grid.ColumnDefinitions>
 
                             <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}"
-                                      VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                      VerticalAlignment="Center" Margin="0,0,8,0"
+                                      PreviewMouseLeftButtonDown="VisibilityCheckBox_PreviewMouseLeftButtonDown"/>
                             <Border Grid.Column="1" Width="18" Height="18" Margin="0,0,8,0"
                                     BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1"
                                     Cursor="Hand" ToolTip="Click to change color"
@@ -47,7 +49,8 @@
                                 <TextBlock Text="* " FontWeight="Bold" Foreground="{StaticResource AccentBrush}"
                                            Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibilityConverter}}"
                                            ToolTip="Active layer (selection enabled)"/>
-                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                                           ToolTip="Double-click to set active / F2 to rename"/>
                             </StackPanel>
                         </Grid>
                     </DataTemplate>
@@ -57,7 +60,24 @@
             <!-- Layer Actions -->
             <StackPanel Grid.Row="2" Margin="8">
                 <Button Content="Import Gerber" Command="{Binding ImportGerberCommand}" Margin="0,0,0,4"/>
-                <Button Content="Remove Layer" Command="{Binding RemoveLayerCommand}" Margin="0,0,0,8"/>
+                <Button Content="Remove Layer(s)" Command="{Binding RemoveLayerCommand}" Margin="0,0,0,4"
+                        ToolTip="Remove selected layer(s)"/>
+
+                <!-- Rename -->
+                <Button Content="Rename (F2)" Command="{Binding RenameLayerCommand}" Margin="0,0,0,8"
+                        ToolTip="Rename the selected layer"/>
+
+                <!-- Reorder buttons -->
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Move Up" Command="{Binding MoveLayerUpCommand}"
+                            ToolTip="Move selected layer up in render order" Margin="0,0,2,0"/>
+                    <Button Grid.Column="1" Content="Move Down" Command="{Binding MoveLayerDownCommand}"
+                            ToolTip="Move selected layer down in render order" Margin="2,0,0,0"/>
+                </Grid>
 
                 <!-- Layer stepping -->
                 <Grid Margin="0,0,0,4">
@@ -81,7 +101,9 @@
                             ToolTip="Hide all layers (H)" Margin="2,0,0,0"/>
                 </Grid>
                 <Button Content="Invert Visibility" Command="{Binding InvertLayersCommand}"
-                        ToolTip="Invert all layer visibility (I)"/>
+                        ToolTip="Invert all layer visibility (I)" Margin="0,0,0,4"/>
+                <Button Content="Randomize Colors" Command="{Binding RandomizeColorsCommand}"
+                        ToolTip="Re-randomize layer colors" Margin="0,0,0,0"/>
             </StackPanel>
         </Grid>
 

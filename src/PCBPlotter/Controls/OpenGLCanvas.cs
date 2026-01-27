@@ -838,6 +838,9 @@ void main()
                 RenderSelectionRect();
             }
 
+            // Render selection highlights on selected primitives
+            RenderSelectionHighlights();
+
             // Show loading indicator when layers are being built in background
             int pendingCount;
             lock (_cacheLock)
@@ -962,6 +965,52 @@ void main()
             GL.PopMatrix();
             GL.MatrixMode(MatrixMode.Modelview);
             GL.PopMatrix();
+        }
+
+        /// <summary>
+        /// Render highlight outlines around selected primitives on all visible layers.
+        /// Uses the world-space projection so highlights align with the geometry.
+        /// </summary>
+        private void RenderSelectionHighlights()
+        {
+            if (GerberLayers == null || GerberLayers.Count == 0)
+                return;
+
+            // Collect selected primitives from all visible layers
+            bool hasSelected = false;
+            foreach (var layer in GerberLayers)
+            {
+                if (!layer.IsVisible || layer.Primitives == null) continue;
+                foreach (var prim in layer.Primitives)
+                {
+                    if (prim.IsSelected) { hasSelected = true; break; }
+                }
+                if (hasSelected) break;
+            }
+            if (!hasSelected) return;
+
+            // Use fixed-function pipeline in world space
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+            // Highlight color: bright cyan with some transparency
+            var highlightColor = new OpenTK.Vector4(0.0f, 1.0f, 1.0f, 0.5f);
+
+            foreach (var layer in GerberLayers)
+            {
+                if (!layer.IsVisible || layer.Primitives == null) continue;
+                foreach (var prim in layer.Primitives)
+                {
+                    if (!prim.IsSelected) continue;
+                    RenderPrimitive(prim, highlightColor, 1.0f);
+                }
+            }
         }
 
         private void UpdateMatrices()
@@ -2770,6 +2819,18 @@ void main()
             }
             else if (e.Button == System.Windows.Forms.MouseButtons.Left)
             {
+                // Alt+Click: pick layer under cursor
+                if (System.Windows.Forms.Control.ModifierKeys.HasFlag(System.Windows.Forms.Keys.Alt))
+                {
+                    Point screenPos = new Point(e.X, e.Y);
+                    var pickedLayer = HitTestLayerAtScreenPos(screenPos);
+                    if (pickedLayer != null)
+                    {
+                        LayerPicked?.Invoke(this, pickedLayer);
+                        return;
+                    }
+                }
+
                 // Start potential selection
                 _selectionStart = new Point(e.X, e.Y);
                 _selectionRect = Rect.Empty;
@@ -2947,7 +3008,50 @@ void main()
         /// </summary>
         public event EventHandler<Rect> SelectionRectCompleted;
 
+        /// <summary>
+        /// Raised when Alt+Click picks a layer in the viewport
+        /// </summary>
+        public event EventHandler<GerberLayer> LayerPicked;
+
         #endregion
+
+        /// <summary>
+        /// Hit test all visible layers at a screen position to find the topmost layer
+        /// with geometry at that point. Used for Alt+Click layer picking.
+        /// </summary>
+        public GerberLayer HitTestLayerAtScreenPos(Point screenPos, double hitRadius = 5)
+        {
+            if (GerberLayers == null || GerberLayers.Count == 0)
+                return null;
+
+            Point worldPos = ScreenToWorld(screenPos);
+            double worldRadius = hitRadius / Zoom;
+
+            // Iterate in reverse (topmost rendered layer first)
+            for (int i = GerberLayers.Count - 1; i >= 0; i--)
+            {
+                var layer = GerberLayers[i];
+                if (!layer.IsVisible || layer.Primitives == null) continue;
+
+                var layerBounds = layer.Bounds;
+                if (layerBounds.IsEmpty) continue;
+
+                var expanded = layerBounds;
+                expanded.Inflate(worldRadius, worldRadius);
+                if (!expanded.Contains(worldPos)) continue;
+
+                foreach (var prim in layer.Primitives)
+                {
+                    if (!prim.IsDark) continue;
+                    var primBounds = prim.GetBounds();
+                    primBounds.Inflate(worldRadius, worldRadius);
+                    if (primBounds.Contains(worldPos))
+                        return layer;
+                }
+            }
+
+            return null;
+        }
 
         #region Public API
 
