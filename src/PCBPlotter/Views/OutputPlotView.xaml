@@ -16,6 +16,18 @@
                 BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
                 Padding="4">
             <WrapPanel>
+                <!-- Active Assignment Layer (determines which side new placements are assigned to) -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                    <TextBlock Text="Assign:" VerticalAlignment="Center" Margin="0,0,8,0"
+                               ToolTip="Active Assignment Layer - new placements will be assigned to this side"/>
+                    <ToggleButton Content="Top" Padding="8,4" Margin="0,0,2,0"
+                                  IsChecked="{Binding ActiveAssignmentSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Top}"
+                                  ToolTip="Assign new placements to Top side"/>
+                    <ToggleButton Content="Bottom" Padding="8,4"
+                                  IsChecked="{Binding ActiveAssignmentSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"
+                                  ToolTip="Assign new placements to Bottom side"/>
+                </StackPanel>
+
                 <!-- Camera View (Set 1: interlocking radio-style buttons) -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
                     <TextBlock Text="Camera:" VerticalAlignment="Center" Margin="0,0,8,0"/>

@@ -29,6 +29,7 @@ namespace PCBPlotter.ViewModels
         private bool _showCircuitInstances = true;
         private bool _showTopLayer = true;
         private bool _showBottomLayer = false;
+        private BoardSide _activeAssignmentSide = BoardSide.Top;
         private double _gridSpacing = 1.0;
         private ObservableCollection<Placement> _selectedPlacements;
         private string _coordinateDisplay;
@@ -179,6 +180,16 @@ namespace PCBPlotter.ViewModels
                     Publish(new RequestRefreshEvent { FullRefresh = true });
                 }
             }
+        }
+
+        /// <summary>
+        /// Active assignment layer for new placements (Top or Bottom).
+        /// This determines which side newly created placements are assigned to.
+        /// </summary>
+        public BoardSide ActiveAssignmentSide
+        {
+            get { return _activeAssignmentSide; }
+            set { SetProperty(ref _activeAssignmentSide, value); }
         }
 
         public SelectionMode SelectionMode
@@ -642,7 +653,7 @@ namespace PCBPlotter.ViewModels
                 X = CursorPosition.X,
                 Y = CursorPosition.Y,
                 Rotation = 0,
-                Side = ViewSide
+                Side = ActiveAssignmentSide
             };
 
             Project.Placements.Add(placement);
@@ -660,7 +671,7 @@ namespace PCBPlotter.ViewModels
                 Name = string.Format("FID{0}", Project.Fiducials.Count + 1),
                 X = CursorPosition.X,
                 Y = CursorPosition.Y,
-                Side = ViewSide,
+                Side = ActiveAssignmentSide,
                 Type = FiducialType.Global
             };
 
