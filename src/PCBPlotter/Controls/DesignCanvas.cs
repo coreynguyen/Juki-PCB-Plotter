@@ -2425,6 +2425,13 @@ namespace PCBPlotter.Controls
             base.OnMouseLeftButtonDown(e);
             Focus();
 
+            // Handle double-click (FrameworkElement doesn't have OnMouseDoubleClick)
+            if (e.ClickCount == 2)
+            {
+                HandleMouseDoubleClick(e);
+                if (e.Handled) return;
+            }
+
             Point mousePos = e.GetPosition(this);
             _selectionStart = mousePos;
             _lastMousePosition = mousePos;
@@ -2504,9 +2511,8 @@ namespace PCBPlotter.Controls
             }
         }
 
-        protected override void OnMouseDoubleClick(MouseButtonEventArgs e)
+        private void HandleMouseDoubleClick(MouseButtonEventArgs e)
         {
-            base.OnMouseDoubleClick(e);
             if (e.ChangedButton != MouseButton.Left) return;
 
             Point mousePos = e.GetPosition(this);
