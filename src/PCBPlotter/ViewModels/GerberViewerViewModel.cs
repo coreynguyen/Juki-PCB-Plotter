@@ -192,9 +192,9 @@ namespace PCBPlotter.ViewModels
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "Gerber Files (*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1)|" +
-                        "*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1|" +
-                        "All Files (*.*)|*.*",
+                Filter = "All Files (*.*)|*.*|" +
+                        "Gerber Files (*.gbr;*.ger;*.art;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1)|" +
+                        "*.gbr;*.ger;*.art;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1",
                 Multiselect = true,
                 Title = "Import Gerber Files"
             };

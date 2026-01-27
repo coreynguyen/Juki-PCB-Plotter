@@ -229,6 +229,10 @@ namespace PCBPlotter.ViewModels
             InitializeCommands();
             InitializeChildViewModels();
             SubscribeToEvents();
+
+            // Auto-create a new project so menus are enabled immediately
+            // User can still access start screen via View menu if needed
+            ExecuteNewProject();
         }
 
         private void InitializeCommands()
@@ -249,7 +253,7 @@ namespace PCBPlotter.ViewModels
             ImportGerberCommand = new RelayCommand(ExecuteImportGerber, () => IsProjectLoaded);
             ExportMachineFileCommand = new RelayCommand(ExecuteExportMachineFile, () => IsProjectLoaded);
             ExportBomCommand = new RelayCommand(ExecuteExportBom, () => IsProjectLoaded);
-            ShowStartScreenCommand = new RelayCommand(() => ShowStartScreen = true, () => !IsProjectLoaded);
+            ShowStartScreenCommand = new RelayCommand(() => ShowStartScreen = !ShowStartScreen);
             FloatDesignViewCommand = new RelayCommand(o => ExecuteFloatWindow("Design"));
             FloatPlacementEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Placements"));
             FloatComponentEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Components"));
@@ -510,20 +514,29 @@ namespace PCBPlotter.ViewModels
             Publish(new ShowDialogEvent { DialogType = "BomImport" });
         }
 
+        /// <summary>
+        /// Unified Gerber file filter for all import dialogs.
+        /// All Files is first (default) since Gerber extensions vary widely.
+        /// </summary>
+        public const string GerberFileFilter =
+            "All Files (*.*)|*.*|" +
+            "Gerber Files (*.gbr;*.ger;*.art;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1)|" +
+            "*.gbr;*.ger;*.art;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1";
+
         private void ExecuteImportGerber()
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "Gerber Files (*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo)|*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo|All Files (*.*)|*.*",
-                Multiselect = true
+                Filter = GerberFileFilter,
+                Multiselect = true,
+                Title = "Import Gerber Files"
             };
 
             if (dialog.ShowDialog() == true)
             {
-                foreach (var file in dialog.FileNames)
-                {
-                    StatusMessage = "Importing: " + System.IO.Path.GetFileName(file);
-                }
+                // Forward to GerberViewerViewModel for actual import
+                GerberViewerViewModel?.ImportGerberFiles(dialog.FileNames);
+                SelectedTabIndex = 4; // Switch to Gerber tab
             }
         }
 
@@ -566,29 +579,29 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteQuickImportPnp()
         {
-            System.Diagnostics.Debug.WriteLine("ExecuteQuickImportPnp called");
-            ExecuteNewProject();
-            System.Diagnostics.Debug.WriteLine("ExecuteQuickImportPnp: project created, now calling import");
+            // Hide start screen and proceed with import
+            // Project already exists from auto-creation on startup
+            ShowStartScreen = false;
             ExecuteImportPnpText();
-            System.Diagnostics.Debug.WriteLine("ExecuteQuickImportPnp: import event published");
         }
 
         private void ExecuteQuickImportCad()
         {
-            ExecuteNewProject();
+            ShowStartScreen = false;
             ExecuteImportCad();
         }
 
         private void ExecuteQuickImportGerber()
         {
-            ExecuteNewProject();
+            ShowStartScreen = false;
             SelectedTabIndex = 4; // Switch to Gerber tab
             ExecuteImportGerber();
         }
 
         private void ExecuteCreateBlankProject()
         {
-            ExecuteNewProject();
+            // Project already exists, just hide start screen
+            ShowStartScreen = false;
         }
 
         private void ExecuteSetBoardArea()
