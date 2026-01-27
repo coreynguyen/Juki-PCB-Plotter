@@ -201,7 +201,6 @@ namespace PCBPlotter.ViewModels
         public ICommand ImportGerberCommand { get; private set; }
         public ICommand ExportMachineFileCommand { get; private set; }
         public ICommand ExportBomCommand { get; private set; }
-        public ICommand ShowStartScreenCommand { get; private set; }
         public ICommand FloatDesignViewCommand { get; private set; }
         public ICommand FloatPlacementEditorCommand { get; private set; }
         public ICommand FloatComponentEditorCommand { get; private set; }
@@ -253,7 +252,6 @@ namespace PCBPlotter.ViewModels
             ImportGerberCommand = new RelayCommand(ExecuteImportGerber, () => IsProjectLoaded);
             ExportMachineFileCommand = new RelayCommand(ExecuteExportMachineFile, () => IsProjectLoaded);
             ExportBomCommand = new RelayCommand(ExecuteExportBom, () => IsProjectLoaded);
-            ShowStartScreenCommand = new RelayCommand(() => ShowStartScreen = !ShowStartScreen);
             FloatDesignViewCommand = new RelayCommand(o => ExecuteFloatWindow("Design"));
             FloatPlacementEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Placements"));
             FloatComponentEditorCommand = new RelayCommand(o => ExecuteFloatWindow("Components"));

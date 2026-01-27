@@ -78,8 +78,6 @@
                 <MenuItem Header="Export _BOM..." Command="{Binding ExportBomCommand}"/>
             </MenuItem>
             <MenuItem Header="_View">
-                <MenuItem Header="_Start Screen" Command="{Binding ShowStartScreenCommand}"/>
-                <Separator/>
                 <MenuItem Header="Float _Design View" Command="{Binding FloatDesignViewCommand}"/>
                 <MenuItem Header="Float _Placement Editor" Command="{Binding FloatPlacementEditorCommand}"/>
                 <MenuItem Header="Float _Component Editor" Command="{Binding FloatComponentEditorCommand}"/>
