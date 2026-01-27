@@ -13,6 +13,10 @@
         <vm:MainViewModel/>
     </Window.DataContext>
 
+    <Window.Resources>
+        <RotateTransform x:Key="VerticalTabRotation" Angle="270"/>
+    </Window.Resources>
+
     <Window.InputBindings>
         <KeyBinding Key="N" Modifiers="Control" Command="{Binding NewProjectCommand}"/>
         <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenProjectCommand}"/>
@@ -111,15 +115,17 @@
                         Visibility="{Binding ShowStartScreen, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=invert}">
 
                 <TabControl.Resources>
-                    <!-- Style vertical tab headers to be wider and readable -->
+                    <!-- Rotated vertical tab headers to minimize width -->
                     <Style TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
                         <Setter Property="HeaderTemplate">
                             <Setter.Value>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding}" Width="70" TextAlignment="Left" Padding="4,6"/>
+                                    <TextBlock Text="{Binding}" TextAlignment="Center" Padding="4,8"
+                                               LayoutTransform="{StaticResource VerticalTabRotation}"/>
                                 </DataTemplate>
                             </Setter.Value>
                         </Setter>
+                        <Setter Property="MinWidth" Value="24"/>
                     </Style>
                 </TabControl.Resources>
 
