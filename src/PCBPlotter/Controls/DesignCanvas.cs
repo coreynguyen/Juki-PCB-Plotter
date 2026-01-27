@@ -284,6 +284,7 @@ namespace PCBPlotter.Controls
         public event EventHandler<int> GraphicSelectionChanged;
         public event EventHandler<int> PinSelectionChanged;
         public event EventHandler<Point> GraphicMoved;
+        public event EventHandler<Placement> PlacementDoubleClicked;
 
         #endregion
 
@@ -2500,6 +2501,20 @@ namespace PCBPlotter.Controls
                     InvalidateVisual();
                     RaiseSelectionChanged();
                 }
+            }
+        }
+
+        protected override void OnMouseDoubleClick(MouseButtonEventArgs e)
+        {
+            base.OnMouseDoubleClick(e);
+            if (e.ChangedButton != MouseButton.Left) return;
+
+            Point mousePos = e.GetPosition(this);
+            Placement hitPlacement = HitTestPlacement(mousePos);
+            if (hitPlacement != null)
+            {
+                PlacementDoubleClicked?.Invoke(this, hitPlacement);
+                e.Handled = true;
             }
         }
 

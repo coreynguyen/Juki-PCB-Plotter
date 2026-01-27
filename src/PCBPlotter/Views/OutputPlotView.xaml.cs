@@ -25,6 +25,7 @@ namespace PCBPlotter.Views
             DesignCanvas.PointClicked += OnPointClicked;
             DesignCanvas.SizeChanged += OnCanvasSizeChanged;
             DesignCanvas.SelectionChanged += OnCanvasSelectionChanged;
+            DesignCanvas.PlacementDoubleClicked += OnPlacementDoubleClicked;
 
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
@@ -118,6 +119,22 @@ namespace PCBPlotter.Views
                     SelectedPlacements = selected,
                     Source = vm
                 });
+        }
+
+        private void OnPlacementDoubleClicked(object sender, PCBPlotter.Core.Models.Placement placement)
+        {
+            var vm = DataContext as OutputPlotViewModel;
+            if (vm == null || placement == null) return;
+
+            // Select the placement if not already selected
+            if (!placement.IsSelected)
+            {
+                vm.SelectPlacement(placement);
+                DesignCanvas.InvalidateVisual();
+            }
+
+            // Navigate to Placements tab and scroll to it
+            vm.ShowPlacementCommand.Execute(null);
         }
 
         private void OnCanvasSizeChanged(object sender, SizeChangedEventArgs e)
