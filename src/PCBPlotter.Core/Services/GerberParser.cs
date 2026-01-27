@@ -350,9 +350,16 @@ namespace PCBPlotter.Core.Services
 
         private void ParseLayerPolarity(string cmd)
         {
-            // %LPD*% - Dark polarity (add)
-            // %LPC*% - Clear polarity (subtract)
-            _darkPolarity = cmd.Contains("D");
+            // Strict Layer Polarity State Machine:
+            // %LPD*% - Dark polarity (Union/Add). All subsequent shapes add pixels.
+            // %LPC*% - Clear polarity (Difference/Subtract). All subsequent shapes remove pixels.
+            // IMPORTANT: Polarity is ONLY changed by explicit LP commands.
+            // A flash drawn over a region is additive (merges) unless an explicit %LPC*%
+            // command was encountered before the flash. No heuristic subtraction is performed.
+            if (cmd.Contains("D"))
+                _darkPolarity = true;
+            else if (cmd.Contains("C"))
+                _darkPolarity = false;
         }
 
         private void ParseFileAttribute(string cmd)
@@ -393,13 +400,14 @@ namespace PCBPlotter.Core.Services
         {
             if (string.IsNullOrEmpty(block)) return;
 
-            // Handle G-codes
+            // Handle G-codes first - ParseGCode handles any trailing D-codes/coordinates
             if (block.StartsWith("G"))
             {
                 ParseGCode(block);
+                return;
             }
 
-            // Handle D-codes
+            // Handle D-codes (aperture selection or operations with coordinates)
             if (block.Contains("D"))
             {
                 ParseDCode(block);
@@ -436,19 +444,43 @@ namespace PCBPlotter.Core.Services
                 case 3: // Counter-clockwise circular interpolation
                     _interpolation = InterpolationMode.CounterClockwiseArc;
                     break;
-                case 36: // Region mode on
+                case 36: // Region mode on - begin capturing contour path
                     _regionMode = true;
                     _regionPoints.Clear();
                     _regionPoints.Add(new Point(_currentX, _currentY));
                     break;
-                case 37: // Region mode off
+                case 37: // Region mode off - close and fill contour path
                     if (_regionMode && _regionPoints.Count > 2)
                     {
                         CreateContourPrimitive();
                     }
                     _regionMode = false;
+                    _regionPoints.Clear();
                     break;
-                case 54: // Select aperture (deprecated)
+                case 54: // Select aperture (deprecated, RS-274D)
+                    // G54 is a non-functional prefix for aperture selection.
+                    // G54D<nn> must be treated identically to D<nn>.
+                    // Extract the D-code directly and set the current aperture.
+                    {
+                        var dMatch = Regex.Match(block, @"G54D(\d+)");
+                        if (dMatch.Success)
+                        {
+                            int dCode = int.Parse(dMatch.Groups[1].Value);
+                            if (dCode >= 10)
+                            {
+                                _currentAperture = dCode;
+                            }
+                        }
+                    }
+                    // Strip G54 and let remaining content (if any coordinates follow) be processed
+                    break;
+                case 55: // Deprecated - prepare for flash (treat as no-op)
+                    break;
+                case 70: // Deprecated - set units to inches
+                    _units = Units.Inches;
+                    break;
+                case 71: // Deprecated - set units to millimeters
+                    _units = Units.Millimeters;
                     break;
                 case 74: // Single quadrant mode
                     _quadrantMode = QuadrantMode.Single;
@@ -458,7 +490,8 @@ namespace PCBPlotter.Core.Services
                     break;
             }
 
-            // Check if there are coordinates after the G code
+            // Check if there are coordinates or D-codes after the G code(s)
+            // Strip all G-code prefixes (including deprecated G54, G55, G70, G71)
             string remaining = Regex.Replace(block, @"G\d+", "");
             if (!string.IsNullOrEmpty(remaining) && (remaining.Contains("X") || remaining.Contains("Y") || remaining.Contains("D")))
             {
