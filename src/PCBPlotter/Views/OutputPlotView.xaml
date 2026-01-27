@@ -16,13 +16,20 @@
                 BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
                 Padding="4">
             <WrapPanel>
-                <!-- View Controls -->
+                <!-- Camera View (Set 1: interlocking radio-style buttons) -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
-                    <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ToggleButton Content="Top" Padding="8,4" Margin="0,0,2,0"
+                    <TextBlock Text="Camera:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ToggleButton Content="Top Down" Padding="8,4" Margin="0,0,2,0"
                                   IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Top}"/>
-                    <ToggleButton Content="Bottom" Padding="8,4"
+                    <ToggleButton Content="Bottom Up" Padding="8,4"
                                   IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"/>
+                </StackPanel>
+
+                <!-- Layer Visibility (Set 2: independent toggles, user can override) -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                    <TextBlock Text="Show:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <CheckBox Content="Top" IsChecked="{Binding ShowTopLayer}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <CheckBox Content="Bottom" IsChecked="{Binding ShowBottomLayer}" VerticalAlignment="Center"/>
                 </StackPanel>
 
                 <!-- Zoom Controls -->
@@ -83,6 +90,9 @@
                                GridSpacing="{Binding GridSpacing}"
                                ShowLabels="{Binding ShowLabels}"
                                ViewSide="{Binding ViewSide}"
+                               ShowTopLayer="{Binding ShowTopLayer}"
+                               ShowBottomLayer="{Binding ShowBottomLayer}"
+                               ViewOrientation="{Binding ViewOrientation}"
                                Placements="{Binding Project.Placements}"
                                Fiducials="{Binding Project.Fiducials}"
                                Board="{Binding Project.Board}">
