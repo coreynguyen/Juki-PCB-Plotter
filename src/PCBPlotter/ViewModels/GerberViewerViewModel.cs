@@ -732,15 +732,28 @@ namespace PCBPlotter.ViewModels
             // Build classified package with body graphics, pins, and pin 1 indicator
             var package = PackageBodyGenerator.BuildPackage(primitives, classification.SuggestedName);
 
+            // Compute the orientation of this specific instance
+            var instanceAngle = ComponentClassifier.ComputePrincipalAngle(features);
+
             // Check if a package with this name already exists
+            double placementRotation = 0;
             var existingPackage = Project.Packages.FirstOrDefault(
                 p => p.Name == package.Name && p.Pins.Count == package.Pins.Count);
             if (existingPackage != null)
             {
+                // Compute rotation relative to the canonical package orientation
+                // The canonical angle was stored when the package was first created
+                double canonicalAngle = existingPackage.DefaultRotation;
+                placementRotation = instanceAngle - canonicalAngle;
+                // Normalize to [0, 360) - CCW convention
+                placementRotation = placementRotation % 360;
+                if (placementRotation < 0) placementRotation += 360;
                 package = existingPackage;
             }
             else
             {
+                // First instance defines the canonical orientation
+                package.DefaultRotation = instanceAngle;
                 Project.Packages.Add(package);
                 Publish(new PackageAddedEvent { Package = package });
             }
@@ -751,7 +764,7 @@ namespace PCBPlotter.ViewModels
                 Reference = reference,
                 X = features.Centroid.X,
                 Y = features.Centroid.Y,
-                Rotation = 0,
+                Rotation = placementRotation,
                 Side = BoardSide.Top,
                 Package = package
             };
@@ -761,9 +774,9 @@ namespace PCBPlotter.ViewModels
 
             Publish(new StatusMessageEvent
             {
-                Message = string.Format("Created placement '{0}' -> {1} ({2}, {3} pads) at ({4:F2}, {5:F2})",
+                Message = string.Format("Created placement '{0}' -> {1} ({2}, {3} pads) at ({4:F2}, {5:F2}) rot {6}°",
                     reference, package.Name, classification.PartClass,
-                    package.Pins.Count, features.Centroid.X, features.Centroid.Y)
+                    package.Pins.Count, features.Centroid.X, features.Centroid.Y, placementRotation)
             });
 
             // Navigate to the Design tab (tab index 0) to show the result

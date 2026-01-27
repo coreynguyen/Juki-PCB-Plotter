@@ -471,6 +471,54 @@ namespace PCBPlotter.Core.Services
             return "2512";
         }
 
+        /// <summary>
+        /// Compute the principal orientation angle of a pad cluster in degrees (0, 90, 180, 270).
+        /// The canonical orientation is defined as the angle where the longest axis of the
+        /// bounding box is horizontal (0°). Returns the CCW rotation from canonical.
+        /// </summary>
+        public static double ComputePrincipalAngle(PadClusterFeatures features)
+        {
+            if (features.PadCount < 2) return 0;
+
+            if (features.PadCount == 2)
+            {
+                // For 2-pad chips: angle of the vector from pad[0] to pad[1]
+                var p0 = features.Pads[0];
+                var p1 = features.Pads[1];
+                double dx = p1.X - p0.X;
+                double dy = p1.Y - p0.Y;
+                double angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+                return SnapTo90(angle);
+            }
+
+            // For multi-pad: use bounding box aspect ratio
+            // If wider than tall, 0°. If taller than wide, 90°.
+            double w = features.BoundingBox.Width;
+            double h = features.BoundingBox.Height;
+
+            if (Math.Abs(w - h) < TOLERANCE * 4)
+                return 0; // Square - no rotation detectable
+
+            return h > w ? 90 : 0;
+        }
+
+        /// <summary>
+        /// Snap an angle to the nearest 90° increment (0, 90, 180, 270).
+        /// Uses CCW convention (standard for CAM).
+        /// </summary>
+        private static double SnapTo90(double angle)
+        {
+            // Normalize to [0, 360)
+            angle = angle % 360;
+            if (angle < 0) angle += 360;
+
+            // Snap to nearest 90
+            if (angle < 45 || angle >= 315) return 0;
+            if (angle < 135) return 90;
+            if (angle < 225) return 180;
+            return 270;
+        }
+
         #endregion
     }
 

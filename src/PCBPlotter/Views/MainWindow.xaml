@@ -15,6 +15,31 @@
 
     <Window.Resources>
         <RotateTransform x:Key="VerticalTabRotation" Angle="270"/>
+        <!-- Progressive tab gradient brushes -->
+        <LinearGradientBrush x:Key="Tab0Brush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FF2A5C8A" Offset="0"/>
+            <GradientStop Color="#FF1E3F5E" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="Tab1Brush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FF2A7A6A" Offset="0"/>
+            <GradientStop Color="#FF1E5A4E" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="Tab2Brush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FF5A6A2A" Offset="0"/>
+            <GradientStop Color="#FF3E4E1E" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="Tab3Brush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FF7A5A2A" Offset="0"/>
+            <GradientStop Color="#FF5A3E1E" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="Tab4Brush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FF6A2A6A" Offset="0"/>
+            <GradientStop Color="#FF4E1E4E" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="Tab5Brush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FF5A3040" Offset="0"/>
+            <GradientStop Color="#FF3E1E2A" Offset="1"/>
+        </LinearGradientBrush>
     </Window.Resources>
 
     <Window.InputBindings>
@@ -115,47 +140,69 @@
                         Visibility="{Binding ShowStartScreen, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=invert}">
 
                 <TabControl.Resources>
-                    <!-- Rotated vertical tab headers to minimize width -->
                     <Style TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
-                        <Setter Property="HeaderTemplate">
-                            <Setter.Value>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding}" TextAlignment="Center" Padding="4,8"
-                                               LayoutTransform="{StaticResource VerticalTabRotation}"/>
-                                </DataTemplate>
-                            </Setter.Value>
-                        </Setter>
-                        <Setter Property="MinWidth" Value="24"/>
+                        <Setter Property="MinWidth" Value="26"/>
+                        <Setter Property="Padding" Value="0"/>
                     </Style>
                 </TabControl.Resources>
 
-                <!-- Design Tab -->
-                <TabItem Header="Design">
+                <TabItem>
+                    <TabItem.Header>
+                        <Border Background="{StaticResource Tab0Brush}" CornerRadius="3,0,0,3" Padding="4,10" Margin="-2">
+                            <TextBlock Text="Design" Foreground="White" FontWeight="SemiBold" FontSize="11"
+                                       TextAlignment="Center" LayoutTransform="{StaticResource VerticalTabRotation}"/>
+                        </Border>
+                    </TabItem.Header>
                     <local:OutputPlotView DataContext="{Binding OutputPlotViewModel}"/>
                 </TabItem>
 
-                <!-- Placement Editor Tab -->
-                <TabItem Header="Placements">
+                <TabItem>
+                    <TabItem.Header>
+                        <Border Background="{StaticResource Tab1Brush}" CornerRadius="3,0,0,3" Padding="4,10" Margin="-2">
+                            <TextBlock Text="Placements" Foreground="White" FontWeight="SemiBold" FontSize="11"
+                                       TextAlignment="Center" LayoutTransform="{StaticResource VerticalTabRotation}"/>
+                        </Border>
+                    </TabItem.Header>
                     <local:PlacementEditorView DataContext="{Binding PlacementEditorViewModel}"/>
                 </TabItem>
 
-                <!-- Components Tab (was BOM) -->
-                <TabItem Header="Components">
+                <TabItem>
+                    <TabItem.Header>
+                        <Border Background="{StaticResource Tab2Brush}" CornerRadius="3,0,0,3" Padding="4,10" Margin="-2">
+                            <TextBlock Text="Components" Foreground="White" FontWeight="SemiBold" FontSize="11"
+                                       TextAlignment="Center" LayoutTransform="{StaticResource VerticalTabRotation}"/>
+                        </Border>
+                    </TabItem.Header>
                     <local:BomEditorView DataContext="{Binding BomEditorViewModel}"/>
                 </TabItem>
 
-                <!-- Packages Tab (was Components) -->
-                <TabItem Header="Packages">
+                <TabItem>
+                    <TabItem.Header>
+                        <Border Background="{StaticResource Tab3Brush}" CornerRadius="3,0,0,3" Padding="4,10" Margin="-2">
+                            <TextBlock Text="Packages" Foreground="White" FontWeight="SemiBold" FontSize="11"
+                                       TextAlignment="Center" LayoutTransform="{StaticResource VerticalTabRotation}"/>
+                        </Border>
+                    </TabItem.Header>
                     <local:ComponentEditorView DataContext="{Binding ComponentEditorViewModel}"/>
                 </TabItem>
 
-                <!-- Gerber Viewer Tab -->
-                <TabItem Header="Gerber">
+                <TabItem>
+                    <TabItem.Header>
+                        <Border Background="{StaticResource Tab4Brush}" CornerRadius="3,0,0,3" Padding="4,10" Margin="-2">
+                            <TextBlock Text="Gerber" Foreground="White" FontWeight="SemiBold" FontSize="11"
+                                       TextAlignment="Center" LayoutTransform="{StaticResource VerticalTabRotation}"/>
+                        </Border>
+                    </TabItem.Header>
                     <local:GerberViewerView DataContext="{Binding GerberViewerViewModel}"/>
                 </TabItem>
 
-                <!-- Log Tab -->
-                <TabItem Header="Log">
+                <TabItem>
+                    <TabItem.Header>
+                        <Border Background="{StaticResource Tab5Brush}" CornerRadius="3,0,0,3" Padding="4,10" Margin="-2">
+                            <TextBlock Text="Log" Foreground="White" FontWeight="SemiBold" FontSize="11"
+                                       TextAlignment="Center" LayoutTransform="{StaticResource VerticalTabRotation}"/>
+                        </Border>
+                    </TabItem.Header>
                     <local:LogView DataContext="{Binding LogViewModel}"/>
                 </TabItem>
 
