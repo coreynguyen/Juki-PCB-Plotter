@@ -27,6 +27,8 @@ namespace PCBPlotter.ViewModels
         private bool _showLabels = true;
         private bool _showPolarity = true;
         private bool _showCircuitInstances = true;
+        private bool _showTopLayer = true;
+        private bool _showBottomLayer = false;
         private double _gridSpacing = 1.0;
         private ObservableCollection<Placement> _selectedPlacements;
         private string _coordinateDisplay;
@@ -109,8 +111,8 @@ namespace PCBPlotter.ViewModels
             {
                 if (SetProperty(ref _viewSide, value))
                 {
+                    SetCameraMode(value);
                     Publish(new ViewSideChangedEvent { Side = value });
-                    Publish(new RequestRefreshEvent { FullRefresh = true });
                 }
             }
         }
@@ -123,6 +125,58 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _viewOrientation, value))
                 {
                     Publish(new ViewOrientationChangedEvent { Orientation = value });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Sets camera mode and auto-configures layer visibility.
+        /// Top Down: show top only. Bottom Up: show bottom only.
+        /// User can manually override visibility afterwards.
+        /// </summary>
+        public void SetCameraMode(BoardSide side)
+        {
+            if (side == BoardSide.Top)
+            {
+                ViewOrientation = ViewOrientation.TopDown;
+                ShowTopLayer = true;
+                ShowBottomLayer = false;
+            }
+            else
+            {
+                ViewOrientation = ViewOrientation.BottomUp;
+                ShowTopLayer = false;
+                ShowBottomLayer = true;
+            }
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Whether top-side placements are visible
+        /// </summary>
+        public bool ShowTopLayer
+        {
+            get { return _showTopLayer; }
+            set
+            {
+                if (SetProperty(ref _showTopLayer, value))
+                {
+                    Publish(new RequestRefreshEvent { FullRefresh = true });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether bottom-side placements are visible
+        /// </summary>
+        public bool ShowBottomLayer
+        {
+            get { return _showBottomLayer; }
+            set
+            {
+                if (SetProperty(ref _showBottomLayer, value))
+                {
+                    Publish(new RequestRefreshEvent { FullRefresh = true });
                 }
             }
         }

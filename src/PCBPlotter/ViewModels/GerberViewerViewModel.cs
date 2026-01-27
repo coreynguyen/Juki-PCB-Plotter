@@ -25,6 +25,7 @@ namespace PCBPlotter.ViewModels
         private GerberLayer _selectedLayer;
         private ObservableCollection<GerberPrimitive> _selectedPrimitives;
         private string _coordinateDisplay;
+        private BoardSide _activeAssignmentSide = BoardSide.Top;
 
         public Project Project
         {
@@ -73,6 +74,15 @@ namespace PCBPlotter.ViewModels
         {
             get { return _coordinateDisplay; }
             set { SetProperty(ref _coordinateDisplay, value); }
+        }
+
+        /// <summary>
+        /// Active assignment layer for new placements (Top or Bottom)
+        /// </summary>
+        public BoardSide ActiveAssignmentSide
+        {
+            get { return _activeAssignmentSide; }
+            set { SetProperty(ref _activeAssignmentSide, value); }
         }
 
         public GerberLayer SelectedLayer
@@ -765,7 +775,7 @@ namespace PCBPlotter.ViewModels
                 X = features.Centroid.X,
                 Y = features.Centroid.Y,
                 Rotation = placementRotation,
-                Side = BoardSide.Top,
+                Side = _activeAssignmentSide,
                 Package = package
             };
 

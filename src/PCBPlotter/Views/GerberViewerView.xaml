@@ -150,6 +150,15 @@
                                 Padding="8,4"/>
                     </StackPanel>
 
+                    <!-- Active Assignment Layer -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                        <TextBlock Text="Assign Side:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ToggleButton Content="Top" Padding="8,4" Margin="0,0,2,0"
+                                      IsChecked="{Binding ActiveAssignmentSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Top}"/>
+                        <ToggleButton Content="Bottom" Padding="8,4"
+                                      IsChecked="{Binding ActiveAssignmentSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"/>
+                    </StackPanel>
+
                     <!-- Renderer Selection -->
                     <StackPanel Orientation="Horizontal" Margin="16,0,0,0">
                         <TextBlock Text="Renderer:" VerticalAlignment="Center" Margin="0,0,8,0"/>

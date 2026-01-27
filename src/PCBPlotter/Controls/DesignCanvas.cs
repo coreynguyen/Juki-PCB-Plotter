@@ -37,6 +37,10 @@ namespace PCBPlotter.Controls
         private SolidColorBrush _placementFillBrush;
         private SolidColorBrush _placementSelectedBrush;
         private SolidColorBrush _placementErrorBrush;
+        private SolidColorBrush _placementTopBrush;
+        private SolidColorBrush _placementBottomBrush;
+        private Pen _placementTopOutlinePen;
+        private Pen _placementBottomOutlinePen;
         private SolidColorBrush _labelBrush;
         private SolidColorBrush _labelBgBrush;
         private SolidColorBrush _crosshairBrush;
@@ -96,6 +100,18 @@ namespace PCBPlotter.Controls
         public static readonly DependencyProperty ViewSideProperty =
             DependencyProperty.Register("ViewSide", typeof(BoardSide), typeof(DesignCanvas),
                 new FrameworkPropertyMetadata(BoardSide.Top, FrameworkPropertyMetadataOptions.AffectsRender));
+
+        public static readonly DependencyProperty ShowTopLayerProperty =
+            DependencyProperty.Register("ShowTopLayer", typeof(bool), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
+
+        public static readonly DependencyProperty ShowBottomLayerProperty =
+            DependencyProperty.Register("ShowBottomLayer", typeof(bool), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+
+        public static readonly DependencyProperty ViewOrientationProperty =
+            DependencyProperty.Register("ViewOrientation", typeof(ViewOrientation), typeof(DesignCanvas),
+                new FrameworkPropertyMetadata(ViewOrientation.TopDown, FrameworkPropertyMetadataOptions.AffectsRender));
 
         public static readonly DependencyProperty BoardProperty =
             DependencyProperty.Register("Board", typeof(BoardDefinition), typeof(DesignCanvas),
@@ -188,6 +204,24 @@ namespace PCBPlotter.Controls
         {
             get { return (BoardSide)GetValue(ViewSideProperty); }
             set { SetValue(ViewSideProperty, value); }
+        }
+
+        public bool ShowTopLayer
+        {
+            get { return (bool)GetValue(ShowTopLayerProperty); }
+            set { SetValue(ShowTopLayerProperty, value); }
+        }
+
+        public bool ShowBottomLayer
+        {
+            get { return (bool)GetValue(ShowBottomLayerProperty); }
+            set { SetValue(ShowBottomLayerProperty, value); }
+        }
+
+        public ViewOrientation ViewOrientation
+        {
+            get { return (ViewOrientation)GetValue(ViewOrientationProperty); }
+            set { SetValue(ViewOrientationProperty, value); }
         }
 
         public BoardDefinition Board
@@ -437,6 +471,19 @@ namespace PCBPlotter.Controls
             _placementErrorBrush = new SolidColorBrush(Color.FromArgb(200, 200, 60, 60));
             _placementErrorBrush.Freeze();
 
+            // Side-based coloring: Red for Top, Blue for Bottom
+            _placementTopBrush = new SolidColorBrush(Color.FromArgb(200, 180, 50, 50));
+            _placementTopBrush.Freeze();
+
+            _placementBottomBrush = new SolidColorBrush(Color.FromArgb(200, 50, 70, 180));
+            _placementBottomBrush.Freeze();
+
+            _placementTopOutlinePen = new Pen(new SolidColorBrush(Color.FromRgb(220, 100, 100)), 1.5);
+            _placementTopOutlinePen.Freeze();
+
+            _placementBottomOutlinePen = new Pen(new SolidColorBrush(Color.FromRgb(100, 120, 220)), 1.5);
+            _placementBottomOutlinePen.Freeze();
+
             _labelBrush = new SolidColorBrush(Colors.White);
             _labelBrush.Freeze();
 
@@ -600,6 +647,14 @@ namespace PCBPlotter.Controls
             if (ActualWidth == 0 || ActualHeight == 0)
                 return;
 
+            // Apply horizontal mirror transform for Bottom Up view
+            // This is a VISUAL-ONLY transform - placement coordinates are NEVER modified
+            bool isFlipped = ViewOrientation == ViewOrientation.BottomUp;
+            if (isFlipped)
+            {
+                dc.PushTransform(new ScaleTransform(-1, 1, ActualWidth / 2, ActualHeight / 2));
+            }
+
             // Draw grid if enabled
             if (ShowGrid && Zoom > 0.1)
             {
@@ -639,6 +694,12 @@ namespace PCBPlotter.Controls
                 strokePen.DashStyle = DashStyles.Dash;
                 strokePen.Freeze();
                 dc.DrawRectangle(fillBrush, strokePen, _packageSelectRect);
+            }
+
+            // Pop the flip transform
+            if (isFlipped)
+            {
+                dc.Pop();
             }
         }
 
@@ -2003,8 +2064,10 @@ namespace PCBPlotter.Controls
 
             foreach (var placement in Placements)
             {
-                // Skip placements on the wrong side
-                if (placement.Side != ViewSide)
+                // Filter by layer visibility
+                if (placement.Side == BoardSide.Top && !ShowTopLayer)
+                    continue;
+                if (placement.Side == BoardSide.Bottom && !ShowBottomLayer)
                     continue;
 
                 // Convert world position to screen
@@ -2014,9 +2077,9 @@ namespace PCBPlotter.Controls
                 if (!viewport.Contains(screenPos))
                     continue;
 
-                // Choose brush/pen based on state
-                SolidColorBrush fillBrush = _placementFillBrush;
-                Pen outlinePen = _placementOutlinePen;
+                // Choose brush/pen based on state and side
+                SolidColorBrush fillBrush;
+                Pen outlinePen;
 
                 if (placement.IsSelected)
                 {
@@ -2026,6 +2089,17 @@ namespace PCBPlotter.Controls
                 else if (placement.Status != PlacementStatus.Valid)
                 {
                     fillBrush = _placementErrorBrush;
+                    outlinePen = _placementOutlinePen;
+                }
+                else if (placement.Side == BoardSide.Bottom)
+                {
+                    fillBrush = _placementBottomBrush;
+                    outlinePen = _placementBottomOutlinePen;
+                }
+                else
+                {
+                    fillBrush = _placementTopBrush;
+                    outlinePen = _placementTopOutlinePen;
                 }
 
                 // Draw package graphics if enabled, zoom is sufficient, and package available
@@ -2425,6 +2499,13 @@ namespace PCBPlotter.Controls
             base.OnMouseLeftButtonDown(e);
             Focus();
 
+            // Handle double-click (FrameworkElement doesn't have OnMouseDoubleClick)
+            if (e.ClickCount == 2)
+            {
+                HandleMouseDoubleClick(e);
+                if (e.Handled) return;
+            }
+
             Point mousePos = e.GetPosition(this);
             _selectionStart = mousePos;
             _lastMousePosition = mousePos;
@@ -2504,9 +2585,8 @@ namespace PCBPlotter.Controls
             }
         }
 
-        protected override void OnMouseDoubleClick(MouseButtonEventArgs e)
+        private void HandleMouseDoubleClick(MouseButtonEventArgs e)
         {
-            base.OnMouseDoubleClick(e);
             if (e.ChangedButton != MouseButton.Left) return;
 
             Point mousePos = e.GetPosition(this);
