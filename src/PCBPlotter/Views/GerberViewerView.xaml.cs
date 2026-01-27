@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -56,8 +57,11 @@ namespace PCBPlotter.Views
             OpenGLCanvas.SelectionRectCompleted += OnOpenGLSelectionRectCompleted;
             OpenGLCanvas.PointClicked += OnOpenGLPointClicked;
 
-            // Subscribe to layer list selection changes
-            LayerListBox.SelectionChanged += OnLayerListSelectionChanged;
+            // Alt+Click in viewport picks a layer
+            GerberCanvas.LayerPicked += OnLayerPicked;
+
+            // Subscribe to double-click on layer list to set active layer
+            LayerListBox.MouseDoubleClick += OnLayerListDoubleClick;
 
             // Subscribe to data context changes to hook up visibility changed event
             DataContextChanged += OnDataContextChanged;
@@ -74,6 +78,8 @@ namespace PCBPlotter.Views
             if (oldVm != null)
             {
                 oldVm.LayerVisibilityChanged -= OnLayerVisibilityChanged;
+                oldVm.ActiveLayerChanged -= OnActiveLayerChanged;
+                oldVm.RequestLayerListSelection -= OnRequestLayerListSelection;
             }
 
             // Subscribe to new view model
@@ -81,6 +87,8 @@ namespace PCBPlotter.Views
             if (newVm != null)
             {
                 newVm.LayerVisibilityChanged += OnLayerVisibilityChanged;
+                newVm.ActiveLayerChanged += OnActiveLayerChanged;
+                newVm.RequestLayerListSelection += OnRequestLayerListSelection;
             }
         }
 
@@ -90,13 +98,77 @@ namespace PCBPlotter.Views
             GerberCanvas.InvalidateGerberCache();
         }
 
+        private void OnActiveLayerChanged(GerberLayer layer)
+        {
+            // Update the canvas active layer
+            if (layer != null)
+            {
+                GerberCanvas.SetActiveGerberLayer(layer);
+            }
+        }
+
+        private void OnRequestLayerListSelection(GerberLayer layer)
+        {
+            // Programmatically select a layer in the ListBox without triggering active-layer logic
+            if (layer != null)
+            {
+                LayerListBox.SelectedItem = layer;
+                LayerListBox.ScrollIntoView(layer);
+            }
+        }
+
+        /// <summary>
+        /// Double-click on layer list sets the active layer
+        /// </summary>
+        private void OnLayerListDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            var listBox = sender as ListBox;
+            if (listBox == null) return;
+
+            // Find the layer item that was double-clicked
+            var element = e.OriginalSource as FrameworkElement;
+            while (element != null && !(element is ListBoxItem))
+            {
+                element = VisualTreeHelper.GetParent(element) as FrameworkElement;
+            }
+
+            if (element is ListBoxItem item)
+            {
+                var layer = item.DataContext as GerberLayer;
+                if (layer != null)
+                {
+                    var vm = DataContext as GerberViewerViewModel;
+                    if (vm != null)
+                    {
+                        vm.SetActiveLayer(layer);
+                    }
+                }
+            }
+        }
+
         private void OnKeyDown(object sender, KeyEventArgs e)
         {
             var vm = DataContext as GerberViewerViewModel;
             if (vm == null) return;
 
+            // F2 = Rename selected layer
+            if (e.Key == Key.F2)
+            {
+                vm.RenameLayerCommand.Execute(null);
+                e.Handled = true;
+            }
+            // Space = Toggle visibility of selected layers
+            else if (e.Key == Key.Space)
+            {
+                var selectedLayers = LayerListBox.SelectedItems.Cast<GerberLayer>().ToList();
+                if (selectedLayers.Count > 0)
+                {
+                    vm.ToggleSelectedLayersVisibility(selectedLayers);
+                    e.Handled = true;
+                }
+            }
             // Page Up / [ = Step layer up
-            if (e.Key == Key.PageUp || e.Key == Key.OemOpenBrackets)
+            else if (e.Key == Key.PageUp || e.Key == Key.OemOpenBrackets)
             {
                 vm.StepLayerUpCommand.Execute(null);
                 e.Handled = true;
@@ -125,18 +197,53 @@ namespace PCBPlotter.Views
                 vm.HideAllLayersCommand.Execute(null);
                 e.Handled = true;
             }
+            // Delete = Remove selected layers
+            else if (e.Key == Key.Delete)
+            {
+                var selectedLayers = LayerListBox.SelectedItems.Cast<GerberLayer>().ToList();
+                if (selectedLayers.Count > 0)
+                {
+                    vm.RemoveSelectedLayers(selectedLayers);
+                    e.Handled = true;
+                }
+            }
         }
 
-        private void OnLayerListSelectionChanged(object sender, SelectionChangedEventArgs e)
+        /// <summary>
+        /// Alt+Click on visibility checkbox: toggle all on / all off (ZBrush style)
+        /// </summary>
+        private void VisibilityCheckBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            var listBox = sender as ListBox;
-            if (listBox == null) return;
+            if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+                return; // Let normal click through
 
-            var selectedLayer = listBox.SelectedItem as GerberLayer;
-            if (selectedLayer != null)
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm == null) return;
+
+            e.Handled = true; // Prevent normal checkbox toggle
+
+            var layers = vm.Project?.GerberLayers;
+            if (layers == null || layers.Count == 0) return;
+
+            // Determine: if any layer is currently visible, turn all off; otherwise turn all on
+            bool anyVisible = layers.Any(l => l.IsVisible);
+            foreach (var layer in layers)
             {
-                // Activate the selected layer on the canvas
-                GerberCanvas.SetActiveGerberLayer(selectedLayer);
+                layer.IsVisible = !anyVisible;
+            }
+
+            vm.NotifyLayerVisibilityChanged();
+        }
+
+        private void OnLayerPicked(object sender, GerberLayer layer)
+        {
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm != null && layer != null)
+            {
+                vm.SetActiveLayer(layer);
+                // Also select it in the list
+                LayerListBox.SelectedItem = layer;
+                LayerListBox.ScrollIntoView(layer);
             }
         }
 

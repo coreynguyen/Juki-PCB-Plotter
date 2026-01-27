@@ -1562,6 +1562,45 @@ namespace PCBPlotter.Controls
         }
 
         /// <summary>
+        /// Hit test all visible layers at a screen position to find which layer has geometry there.
+        /// Returns the topmost (last in collection) visible layer with a primitive at that point.
+        /// Used for Alt+Click layer picking in the viewport.
+        /// </summary>
+        public GerberLayer HitTestLayerAtScreenPos(Point screenPos, double hitRadius = 5)
+        {
+            if (GerberLayers == null || GerberLayers.Count == 0)
+                return null;
+
+            Point worldPos = ScreenToWorld(screenPos);
+            double worldRadius = hitRadius / Zoom;
+
+            // Iterate in reverse (top-most rendered layer first)
+            for (int i = GerberLayers.Count - 1; i >= 0; i--)
+            {
+                var layer = GerberLayers[i];
+                if (!layer.IsVisible) continue;
+
+                var layerBounds = layer.Bounds;
+                if (layerBounds.IsEmpty) continue;
+
+                var expanded = layerBounds;
+                expanded.Inflate(worldRadius, worldRadius);
+                if (!expanded.Contains(worldPos)) continue;
+
+                foreach (var prim in layer.Primitives)
+                {
+                    if (!prim.IsDark) continue;
+                    var primBounds = prim.GetBounds();
+                    primBounds.Inflate(worldRadius, worldRadius);
+                    if (primBounds.Contains(worldPos))
+                        return layer;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Select Gerber primitives in the given screen rectangle
         /// ONLY selects from the ACTIVE layer, and only dark (visible) primitives
         /// </summary>
@@ -2375,6 +2414,11 @@ namespace PCBPlotter.Controls
             _lastMousePosition = mousePos;
         }
 
+        /// <summary>
+        /// Event raised when Alt+Click picks a layer in the viewport
+        /// </summary>
+        public event EventHandler<GerberLayer> LayerPicked;
+
         protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonDown(e);
@@ -2383,6 +2427,19 @@ namespace PCBPlotter.Controls
             Point mousePos = e.GetPosition(this);
             _selectionStart = mousePos;
             _lastMousePosition = mousePos;
+
+            // Alt+Click: pick layer under cursor and switch to it
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+            {
+                var pickedLayer = HitTestLayerAtScreenPos(mousePos);
+                if (pickedLayer != null)
+                {
+                    SetActiveGerberLayer(pickedLayer);
+                    LayerPicked?.Invoke(this, pickedLayer);
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             // Package editor mode
             if (SelectedPackage != null)

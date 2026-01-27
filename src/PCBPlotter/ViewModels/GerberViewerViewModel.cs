@@ -120,8 +120,20 @@ namespace PCBPlotter.ViewModels
         public ICommand ShowAllLayersCommand { get; private set; }
         public ICommand HideAllLayersCommand { get; private set; }
 
+        // Layer reorder & management commands
+        public ICommand MoveLayerUpCommand { get; private set; }
+        public ICommand MoveLayerDownCommand { get; private set; }
+        public ICommand RenameLayerCommand { get; private set; }
+        public ICommand RandomizeColorsCommand { get; private set; }
+
         // Event to notify view of layer changes requiring refresh
         public event Action LayerVisibilityChanged;
+
+        // Event to notify view when active layer changes (for canvas update)
+        public event Action<GerberLayer> ActiveLayerChanged;
+
+        // Event to request the view to select a layer in the ListBox
+        public event Action<GerberLayer> RequestLayerListSelection;
 
         public GerberViewerViewModel()
         {
@@ -155,6 +167,12 @@ namespace PCBPlotter.ViewModels
             InvertLayersCommand = new RelayCommand(ExecuteInvertLayers, () => Project?.GerberLayers?.Count > 0);
             ShowAllLayersCommand = new RelayCommand(ExecuteShowAllLayers, () => Project?.GerberLayers?.Count > 0);
             HideAllLayersCommand = new RelayCommand(ExecuteHideAllLayers, () => Project?.GerberLayers?.Count > 0);
+
+            // Layer reorder & management commands
+            MoveLayerUpCommand = new RelayCommand(ExecuteMoveLayerUp, () => SelectedLayer != null && Project?.GerberLayers?.Count > 1);
+            MoveLayerDownCommand = new RelayCommand(ExecuteMoveLayerDown, () => SelectedLayer != null && Project?.GerberLayers?.Count > 1);
+            RenameLayerCommand = new RelayCommand(ExecuteRenameLayer, () => SelectedLayer != null);
+            RandomizeColorsCommand = new RelayCommand(ExecuteRandomizeColors, () => Project?.GerberLayers?.Count > 0);
         }
 
         private void SubscribeToEvents()
@@ -186,6 +204,106 @@ namespace PCBPlotter.ViewModels
             };
         }
 
+        #region Public Methods for View
+
+        /// <summary>
+        /// Set a layer as the active layer (called from view on double-click)
+        /// </summary>
+        public void SetActiveLayer(GerberLayer layer)
+        {
+            if (layer == null) return;
+
+            // Deactivate all layers
+            if (Project?.GerberLayers != null)
+            {
+                foreach (var l in Project.GerberLayers)
+                    l.IsActive = false;
+            }
+
+            layer.IsActive = true;
+            SelectedLayer = layer;
+            ActiveLayerChanged?.Invoke(layer);
+        }
+
+        /// <summary>
+        /// Toggle visibility of the given layers (called from view on Space key)
+        /// </summary>
+        public void ToggleSelectedLayersVisibility(List<GerberLayer> layers)
+        {
+            foreach (var layer in layers)
+            {
+                layer.IsVisible = !layer.IsVisible;
+            }
+            NotifyLayerVisibilityChanged();
+        }
+
+        /// <summary>
+        /// Remove multiple selected layers (called from view on Delete key or Remove button)
+        /// </summary>
+        public void RemoveSelectedLayers(List<GerberLayer> layers)
+        {
+            if (Project == null) return;
+
+            foreach (var layer in layers)
+            {
+                Project.GerberLayers.Remove(layer);
+                Publish(new GerberLayerRemovedEvent { Layer = layer });
+            }
+
+            SelectedLayer = null;
+            OnPropertyChanged("Layers");
+            OnPropertyChanged("GerberLayersCollection");
+            NotifyLayerVisibilityChanged();
+        }
+
+        /// <summary>
+        /// Notify view that layer visibility changed (public for view to call)
+        /// </summary>
+        public void NotifyLayerVisibilityChanged()
+        {
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Try to pick a layer at the given world position by hit-testing all visible layers.
+        /// Returns the topmost layer that has a primitive at that position.
+        /// </summary>
+        public GerberLayer PickLayerAtWorldPosition(Point worldPos, double hitRadius)
+        {
+            if (Project?.GerberLayers == null) return null;
+
+            // Iterate in reverse order (top-most layer first, since later layers render on top)
+            for (int i = Project.GerberLayers.Count - 1; i >= 0; i--)
+            {
+                var layer = Project.GerberLayers[i];
+                if (!layer.IsVisible) continue;
+
+                // Quick bounds check
+                var bounds = layer.Bounds;
+                if (bounds.IsEmpty) continue;
+                var expandedBounds = bounds;
+                expandedBounds.Inflate(hitRadius, hitRadius);
+                if (!expandedBounds.Contains(worldPos)) continue;
+
+                // Check primitives
+                foreach (var prim in layer.Primitives)
+                {
+                    if (!prim.IsDark) continue;
+                    var primBounds = prim.GetBounds();
+                    primBounds.Inflate(hitRadius, hitRadius);
+                    if (primBounds.Contains(worldPos))
+                    {
+                        return layer;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        #endregion
+
         #region Command Implementations
 
         private void ExecuteImportGerber()
@@ -216,6 +334,12 @@ namespace PCBPlotter.ViewModels
                 {
                     var layer = parser.Parse(filePath);
 
+                    // Override color with hash-based color for consistency and uniqueness
+                    if (layer.LayerType == GerberLayerType.Unknown)
+                    {
+                        layer.Color = LayerColorHelper.ColorFromName(layer.Name);
+                    }
+
                     if (Project != null)
                     {
                         Project.GerberLayers.Add(layer);
@@ -235,6 +359,9 @@ namespace PCBPlotter.ViewModels
 
             if (importedCount > 0)
             {
+                // Ensure no duplicate colors among all layers
+                EnsureDistinctColors();
+
                 Publish(new StatusMessageEvent
                 {
                     Message = $"Imported {importedCount} Gerber layer(s) with {Layers.Sum(l => l.Primitives?.Count ?? 0)} primitives"
@@ -266,6 +393,77 @@ namespace PCBPlotter.ViewModels
         }
 
         /// <summary>
+        /// Move the selected layer up in the collection (renders earlier = behind)
+        /// </summary>
+        private void ExecuteMoveLayerUp()
+        {
+            if (Project?.GerberLayers == null || SelectedLayer == null) return;
+
+            int index = Project.GerberLayers.IndexOf(SelectedLayer);
+            if (index <= 0) return;
+
+            Project.GerberLayers.Move(index, index - 1);
+            OnPropertyChanged("Layers");
+            NotifyLayerVisibilityChanged();
+            RequestLayerListSelection?.Invoke(SelectedLayer);
+        }
+
+        /// <summary>
+        /// Move the selected layer down in the collection (renders later = in front)
+        /// </summary>
+        private void ExecuteMoveLayerDown()
+        {
+            if (Project?.GerberLayers == null || SelectedLayer == null) return;
+
+            int index = Project.GerberLayers.IndexOf(SelectedLayer);
+            if (index < 0 || index >= Project.GerberLayers.Count - 1) return;
+
+            Project.GerberLayers.Move(index, index + 1);
+            OnPropertyChanged("Layers");
+            NotifyLayerVisibilityChanged();
+            RequestLayerListSelection?.Invoke(SelectedLayer);
+        }
+
+        /// <summary>
+        /// Rename the selected layer via input dialog
+        /// </summary>
+        private void ExecuteRenameLayer()
+        {
+            if (SelectedLayer == null) return;
+
+            var inputDialog = new InputDialog(
+                "Rename Layer",
+                "Enter new name for layer:",
+                SelectedLayer.Name);
+            inputDialog.Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
+
+            if (inputDialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(inputDialog.Value))
+            {
+                SelectedLayer.Name = inputDialog.Value.Trim();
+                OnPropertyChanged("Layers");
+            }
+        }
+
+        /// <summary>
+        /// Re-randomize colors of all layers ensuring distinct colors
+        /// </summary>
+        private void ExecuteRandomizeColors()
+        {
+            if (Project?.GerberLayers == null || Project.GerberLayers.Count == 0) return;
+
+            var rng = new Random();
+            foreach (var layer in Project.GerberLayers)
+            {
+                // Generate a new random seed to perturb the hash
+                layer.Color = LayerColorHelper.ColorFromHash(
+                    LayerColorHelper.HashString(layer.Name) ^ rng.Next());
+            }
+
+            EnsureDistinctColors();
+            NotifyLayerVisibilityChanged();
+        }
+
+        /// <summary>
         /// Step to the next layer up in the stack (shows only that layer)
         /// </summary>
         private void ExecuteStepLayerUp()
@@ -290,6 +488,7 @@ namespace PCBPlotter.ViewModels
             layers[nextIndex].IsActive = true;
             SelectedLayer = layers[nextIndex];
 
+            ActiveLayerChanged?.Invoke(layers[nextIndex]);
             LayerVisibilityChanged?.Invoke();
             Publish(new RequestRefreshEvent { FullRefresh = true });
         }
@@ -319,6 +518,7 @@ namespace PCBPlotter.ViewModels
             layers[nextIndex].IsActive = true;
             SelectedLayer = layers[nextIndex];
 
+            ActiveLayerChanged?.Invoke(layers[nextIndex]);
             LayerVisibilityChanged?.Invoke();
             Publish(new RequestRefreshEvent { FullRefresh = true });
         }
@@ -591,15 +791,15 @@ namespace PCBPlotter.ViewModels
                     bounds.Union(prim.GetBounds());
             }
 
-            var centerX = bounds.X + bounds.Width / 2;
-            var centerY = bounds.Y + bounds.Height / 2;
+            var selCenterX = bounds.X + bounds.Width / 2;
+            var selCenterY = bounds.Y + bounds.Height / 2;
 
             // Create placement at selection center with the reference
             var placement = new Placement
             {
                 Reference = reference,
-                X = centerX,
-                Y = centerY,
+                X = selCenterX,
+                Y = selCenterY,
                 Rotation = 0,
                 Side = BoardSide.Top
             };
@@ -656,9 +856,9 @@ namespace PCBPlotter.ViewModels
                 Project.Board.BoardOutline = outline;
 
                 // Calculate board dimensions
-                var bounds = GetBounds(outline);
-                Project.Board.Width = bounds.Width;
-                Project.Board.Height = bounds.Height;
+                var outlineBounds = GetBounds(outline);
+                Project.Board.Width = outlineBounds.Width;
+                Project.Board.Height = outlineBounds.Height;
 
                 Publish(new StatusMessageEvent { Message = "Board outline set" });
                 Publish(new RequestRefreshEvent { FullRefresh = true });
@@ -688,6 +888,37 @@ namespace PCBPlotter.ViewModels
 
         #region Helper Methods
 
+        /// <summary>
+        /// Ensure all layers have distinct colors. If two layers share the same color,
+        /// shift the duplicate to a new hash-derived color.
+        /// </summary>
+        private void EnsureDistinctColors()
+        {
+            if (Project?.GerberLayers == null) return;
+
+            var usedColors = new HashSet<uint>();
+            foreach (var layer in Project.GerberLayers)
+            {
+                uint colorVal = layer.ColorArgb;
+                if (usedColors.Contains(colorVal))
+                {
+                    // Shift color by hashing name + attempt counter
+                    int attempt = 1;
+                    uint newColor;
+                    do
+                    {
+                        newColor = LayerColorHelper.ColorArgbFromHash(
+                            LayerColorHelper.HashString(layer.Name + "_" + attempt));
+                        attempt++;
+                    } while (usedColors.Contains(newColor) && attempt < 100);
+
+                    layer.ColorArgb = newColor;
+                    colorVal = newColor;
+                }
+                usedColors.Add(colorVal);
+            }
+        }
+
         private List<Point> ExtractOutlinePoints()
         {
             var points = new List<Point>();
@@ -701,11 +932,11 @@ namespace PCBPlotter.ViewModels
                 else
                 {
                     // For simple shapes, add corner points
-                    var bounds = prim.GetBounds();
-                    points.Add(new Point(bounds.Left, bounds.Top));
-                    points.Add(new Point(bounds.Right, bounds.Top));
-                    points.Add(new Point(bounds.Right, bounds.Bottom));
-                    points.Add(new Point(bounds.Left, bounds.Bottom));
+                    var primBounds = prim.GetBounds();
+                    points.Add(new Point(primBounds.Left, primBounds.Top));
+                    points.Add(new Point(primBounds.Right, primBounds.Top));
+                    points.Add(new Point(primBounds.Right, primBounds.Bottom));
+                    points.Add(new Point(primBounds.Left, primBounds.Bottom));
                 }
             }
 
@@ -758,9 +989,6 @@ namespace PCBPlotter.ViewModels
         /// <summary>
         /// Selects a primitive at the specified world position (for GPU canvas click handling)
         /// </summary>
-        /// <param name="worldPos">Click position in world coordinates</param>
-        /// <param name="addToSelection">If true, toggles selection; if false, replaces selection</param>
-        /// <param name="hitRadiusWorld">Hit radius in world units (default 0.5, but should be zoom-adjusted)</param>
         public void SelectPrimitiveAtPoint(Point worldPos, bool addToSelection = false, double hitRadiusWorld = 0.5)
         {
             if (SelectedLayer == null) return;
@@ -782,10 +1010,10 @@ namespace PCBPlotter.ViewModels
                 double distance = Math.Sqrt(dx * dx + dy * dy);
 
                 // Check if point is within primitive bounds with some tolerance
-                var bounds = primitive.GetBounds();
-                bounds.Inflate(hitRadius, hitRadius);
+                var primBounds = primitive.GetBounds();
+                primBounds.Inflate(hitRadius, hitRadius);
 
-                if (bounds.Contains(worldPos) && distance < closestDistance)
+                if (primBounds.Contains(worldPos) && distance < closestDistance)
                 {
                     closestDistance = distance;
                     closestPrimitive = primitive;
@@ -848,5 +1076,82 @@ namespace PCBPlotter.ViewModels
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// Helper to generate consistent, distinct colors from layer names using hashing.
+    /// </summary>
+    public static class LayerColorHelper
+    {
+        /// <summary>
+        /// Generate a deterministic color from a layer name.
+        /// Same name always produces the same color.
+        /// </summary>
+        public static System.Windows.Media.Color ColorFromName(string name)
+        {
+            int hash = HashString(name ?? "");
+            return ColorFromHash(hash);
+        }
+
+        /// <summary>
+        /// Stable string hash (FNV-1a) that doesn't change across runs.
+        /// </summary>
+        public static int HashString(string s)
+        {
+            unchecked
+            {
+                uint hash = 2166136261;
+                foreach (char c in s)
+                {
+                    hash ^= c;
+                    hash *= 16777619;
+                }
+                return (int)hash;
+            }
+        }
+
+        /// <summary>
+        /// Convert a hash integer into a vivid, saturated color using HSL.
+        /// Hue is spread across the spectrum; saturation and lightness are fixed
+        /// to ensure bright, distinguishable colors.
+        /// </summary>
+        public static System.Windows.Media.Color ColorFromHash(int hash)
+        {
+            // Use golden-ratio-based hue distribution for maximum spread
+            double hue = ((hash & 0x7FFFFFFF) % 360);
+            double saturation = 0.75 + ((hash >> 8) & 0xFF) / 1024.0; // 0.75-1.0
+            double lightness = 0.45 + ((hash >> 16) & 0xFF) / 1024.0; // 0.45-0.7
+
+            return HslToColor(hue, saturation, lightness);
+        }
+
+        /// <summary>
+        /// Return ARGB uint from hash (for EnsureDistinctColors)
+        /// </summary>
+        public static uint ColorArgbFromHash(int hash)
+        {
+            var c = ColorFromHash(hash);
+            return (uint)((c.A << 24) | (c.R << 16) | (c.G << 8) | c.B);
+        }
+
+        private static System.Windows.Media.Color HslToColor(double h, double s, double l)
+        {
+            double c = (1 - Math.Abs(2 * l - 1)) * s;
+            double x = c * (1 - Math.Abs((h / 60.0) % 2 - 1));
+            double m = l - c / 2;
+
+            double r, g, b;
+            if (h < 60) { r = c; g = x; b = 0; }
+            else if (h < 120) { r = x; g = c; b = 0; }
+            else if (h < 180) { r = 0; g = c; b = x; }
+            else if (h < 240) { r = 0; g = x; b = c; }
+            else if (h < 300) { r = x; g = 0; b = c; }
+            else { r = c; g = 0; b = x; }
+
+            return System.Windows.Media.Color.FromRgb(
+                (byte)Math.Round((r + m) * 255),
+                (byte)Math.Round((g + m) * 255),
+                (byte)Math.Round((b + m) * 255));
+        }
     }
 }
