@@ -22,7 +22,7 @@
             <TextBlock Grid.Row="0" Text="Layers" FontWeight="SemiBold" Margin="8"/>
 
             <!-- Layer List -->
-            <ListBox Grid.Row="1"
+            <ListBox x:Name="LayerListBox" Grid.Row="1"
                      ItemsSource="{Binding Layers}"
                      SelectedItem="{Binding SelectedLayer}"
                      Margin="8,0">
@@ -37,9 +37,18 @@
 
                             <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}"
                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <Rectangle Grid.Column="1" Width="16" Height="16" Margin="0,0,8,0"
-                                       Fill="{Binding Color, Converter={StaticResource ColorToBrushConverter}}"/>
-                            <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"/>
+                            <Border Grid.Column="1" Width="18" Height="18" Margin="0,0,8,0"
+                                    BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1"
+                                    Cursor="Hand" ToolTip="Click to change color"
+                                    MouseLeftButtonDown="ColorBorder_MouseLeftButtonDown">
+                                <Rectangle Fill="{Binding Color, Converter={StaticResource ColorToBrushConverter}}"/>
+                            </Border>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="* " FontWeight="Bold" Foreground="{StaticResource AccentBrush}"
+                                           Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibilityConverter}}"
+                                           ToolTip="Active layer (selection enabled)"/>
+                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
                         </Grid>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -48,7 +57,31 @@
             <!-- Layer Actions -->
             <StackPanel Grid.Row="2" Margin="8">
                 <Button Content="Import Gerber" Command="{Binding ImportGerberCommand}" Margin="0,0,0,4"/>
-                <Button Content="Remove Layer" Command="{Binding RemoveLayerCommand}"/>
+                <Button Content="Remove Layer" Command="{Binding RemoveLayerCommand}" Margin="0,0,0,8"/>
+
+                <!-- Layer stepping -->
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="[ Prev" Command="{Binding StepLayerUpCommand}"
+                            ToolTip="Step to previous layer (PageUp or [)" Margin="0,0,2,0"/>
+                    <Button Grid.Column="1" Content="Next ]" Command="{Binding StepLayerDownCommand}"
+                            ToolTip="Step to next layer (PageDown or ])" Margin="2,0,0,0"/>
+                </Grid>
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Show All" Command="{Binding ShowAllLayersCommand}"
+                            ToolTip="Show all layers (Shift+A)" Margin="0,0,2,0"/>
+                    <Button Grid.Column="1" Content="Hide All" Command="{Binding HideAllLayersCommand}"
+                            ToolTip="Hide all layers (H)" Margin="2,0,0,0"/>
+                </Grid>
+                <Button Content="Invert Visibility" Command="{Binding InvertLayersCommand}"
+                        ToolTip="Invert all layer visibility (I)"/>
             </StackPanel>
         </Grid>
 
@@ -94,15 +127,44 @@
                         <Button Content="Set Circuit Outline" Command="{Binding SetCircuitOutlineCommand}"
                                 Padding="8,4"/>
                     </StackPanel>
+
+                    <!-- Renderer Selection -->
+                    <StackPanel Orientation="Horizontal" Margin="16,0,0,0">
+                        <TextBlock Text="Renderer:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox x:Name="RendererComboBox" Width="100"
+                                  SelectionChanged="RendererComboBox_SelectionChanged"
+                                  SelectedIndex="0">
+                            <ComboBoxItem Content="WPF (CPU)"/>
+                            <ComboBoxItem Content="OpenGL (GPU)"/>
+                        </ComboBox>
+                        <CheckBox x:Name="ScreenBlendCheckBox" Content="Screen Blend"
+                                  IsChecked="True" VerticalAlignment="Center" Margin="16,0,0,0"
+                                  Checked="ScreenBlendCheckBox_Changed" Unchecked="ScreenBlendCheckBox_Changed"/>
+                    </StackPanel>
                 </WrapPanel>
             </Border>
 
-            <!-- Canvas -->
-            <controls:DesignCanvas x:Name="GerberCanvas" Grid.Row="1"
-                                   Zoom="{Binding Zoom, Mode=TwoWay}"
-                                   PanX="{Binding PanX, Mode=TwoWay}"
-                                   PanY="{Binding PanY, Mode=TwoWay}"
-                                   ShowGrid="True"/>
+            <!-- Canvas Container - switches between WPF and OpenGL -->
+            <Grid Grid.Row="1">
+                <!-- WPF Canvas (CPU) -->
+                <controls:DesignCanvas x:Name="GerberCanvas"
+                                       Zoom="{Binding Zoom, Mode=TwoWay}"
+                                       PanX="{Binding PanX, Mode=TwoWay}"
+                                       PanY="{Binding PanY, Mode=TwoWay}"
+                                       GerberLayers="{Binding GerberLayersCollection}"
+                                       UseScreenBlend="True"
+                                       ShowGrid="True"/>
+
+                <!-- OpenGL Canvas (GPU) - hidden by default -->
+                <controls:OpenGLCanvas x:Name="OpenGLCanvas"
+                                       Visibility="Collapsed"
+                                       Zoom="{Binding Zoom, Mode=TwoWay}"
+                                       PanX="{Binding PanX, Mode=TwoWay}"
+                                       PanY="{Binding PanY, Mode=TwoWay}"
+                                       GerberLayers="{Binding GerberLayersCollection}"
+                                       UseScreenBlend="True"
+                                       ShowGrid="True"/>
+            </Grid>
 
             <!-- Status Bar -->
             <Border Grid.Row="2" Background="{StaticResource BackgroundLightBrush}"

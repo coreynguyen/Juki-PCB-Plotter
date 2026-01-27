@@ -1,5 +1,6 @@
 using System;
 using System.Windows;
+using PCBPlotter.Services;
 
 namespace PCBPlotter
 {
@@ -12,9 +13,51 @@ namespace PCBPlotter
         {
             base.OnStartup(e);
 
+            // Apply theme based on settings/system preference
+            ApplyTheme();
+
             // Set up global exception handling
             AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
             DispatcherUnhandledException += OnDispatcherUnhandledException;
+        }
+
+        private void ApplyTheme()
+        {
+            bool useDarkTheme = AppSettings.Instance.ShouldUseDarkTheme();
+
+            // Get the Controls.xaml resource dictionary
+            var controlsDict = Resources.MergedDictionaries.Count > 0
+                ? Resources.MergedDictionaries[0]
+                : null;
+
+            if (controlsDict == null) return;
+
+            // Update the theme colors based on dark/light mode
+            if (useDarkTheme)
+            {
+                // Dark theme colors (already default in Controls.xaml)
+                // These are the existing dark theme values
+            }
+            else
+            {
+                // Light theme colors - override the dark defaults
+                controlsDict["BackgroundDarkBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(240, 240, 240));
+                controlsDict["BackgroundMediumBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(250, 250, 250));
+                controlsDict["BackgroundLightBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(255, 255, 255));
+                controlsDict["ForegroundPrimaryBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(30, 30, 30));
+                controlsDict["ForegroundSecondaryBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(80, 80, 80));
+                controlsDict["ForegroundDisabledBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(160, 160, 160));
+                controlsDict["BorderDarkBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(200, 200, 200));
+                controlsDict["BorderLightBrush"] = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(220, 220, 220));
+            }
         }
 
         private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)

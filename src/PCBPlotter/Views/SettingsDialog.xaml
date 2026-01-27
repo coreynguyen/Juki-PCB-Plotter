@@ -1,0 +1,144 @@
+<Window x:Class="PCBPlotter.Views.SettingsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings" Height="450" Width="600"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource BackgroundMediumBrush}"
+        ResizeMode="NoResize">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Settings Content -->
+        <TabControl Grid.Row="0" Background="Transparent">
+            <!-- General Settings -->
+            <TabItem Header="General">
+                <StackPanel Margin="16">
+                    <GroupBox Header="Application" Margin="0,0,0,16">
+                        <StackPanel Margin="8">
+                            <CheckBox Content="Start on Start Screen" IsChecked="{Binding StartOnStartScreen}" Margin="0,0,0,8"/>
+                            <CheckBox Content="Remember last opened project" IsChecked="{Binding RememberLastProject}" Margin="0,0,0,8"/>
+                            <CheckBox Content="Check for updates on startup" IsChecked="{Binding CheckForUpdates}"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Theme">
+                        <StackPanel Margin="8">
+                            <RadioButton Content="Follow System" IsChecked="{Binding UseSystemTheme}" GroupName="Theme" Margin="0,0,0,4"/>
+                            <RadioButton Content="Dark Theme" IsChecked="{Binding UseDarkTheme}" GroupName="Theme" Margin="0,0,0,4"/>
+                            <RadioButton Content="Light Theme" IsChecked="{Binding UseLightTheme}" GroupName="Theme"/>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Units Settings -->
+            <TabItem Header="Units">
+                <StackPanel Margin="16">
+                    <GroupBox Header="Default Units">
+                        <StackPanel Margin="8">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Length Units:" Width="120" VerticalAlignment="Center"/>
+                                <ComboBox Width="150" SelectedItem="{Binding DefaultLengthUnit}">
+                                    <ComboBoxItem Content="Millimeters (mm)"/>
+                                    <ComboBoxItem Content="Inches (in)"/>
+                                    <ComboBoxItem Content="Mils"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Angle Units:" Width="120" VerticalAlignment="Center"/>
+                                <ComboBox Width="150" SelectedItem="{Binding DefaultAngleUnit}">
+                                    <ComboBoxItem Content="Degrees"/>
+                                    <ComboBoxItem Content="Radians"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Decimal Places:" Width="120" VerticalAlignment="Center"/>
+                                <ComboBox Width="150" SelectedItem="{Binding DecimalPlaces}">
+                                    <ComboBoxItem Content="2"/>
+                                    <ComboBoxItem Content="3"/>
+                                    <ComboBoxItem Content="4"/>
+                                    <ComboBoxItem Content="5"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Export Settings -->
+            <TabItem Header="Export">
+                <StackPanel Margin="16">
+                    <GroupBox Header="Machine File Export">
+                        <StackPanel Margin="8">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Default Format:" Width="120" VerticalAlignment="Center"/>
+                                <ComboBox Width="200" SelectedItem="{Binding DefaultExportFormat}">
+                                    <ComboBoxItem Content="Juki JX-100"/>
+                                    <ComboBoxItem Content="Juki RX-7"/>
+                                    <ComboBoxItem Content="CSV"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <CheckBox Content="Include headers in CSV export" IsChecked="{Binding IncludeCsvHeaders}" Margin="0,0,0,4"/>
+                            <CheckBox Content="Auto-open export folder after export" IsChecked="{Binding AutoOpenExportFolder}"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Default Export Path" Margin="0,16,0,0">
+                        <Grid Margin="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" Text="{Binding DefaultExportPath}" IsReadOnly="True"/>
+                            <Button Grid.Column="1" Content="Browse..." Margin="8,0,0,0" Padding="8,4"
+                                    Command="{Binding BrowseExportPathCommand}"/>
+                        </Grid>
+                    </GroupBox>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Display Settings -->
+            <TabItem Header="Display">
+                <StackPanel Margin="16">
+                    <GroupBox Header="Canvas">
+                        <StackPanel Margin="8">
+                            <CheckBox Content="Show grid by default" IsChecked="{Binding ShowGridByDefault}" Margin="0,0,0,8"/>
+                            <CheckBox Content="Show labels by default" IsChecked="{Binding ShowLabelsByDefault}" Margin="0,0,0,8"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Default grid spacing:" Width="130" VerticalAlignment="Center"/>
+                                <TextBox Width="60" Text="{Binding DefaultGridSpacing}"/>
+                                <TextBlock Text="mm" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Colors" Margin="0,16,0,0">
+                        <StackPanel Margin="8">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Placement color:" Width="130" VerticalAlignment="Center"/>
+                                <Rectangle Width="60" Height="20" Fill="{Binding PlacementColor}" Stroke="{StaticResource BorderDarkBrush}"/>
+                                <Button Content="..." Width="24" Margin="4,0,0,0" Command="{Binding ChangePlacementColorCommand}"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Selection color:" Width="130" VerticalAlignment="Center"/>
+                                <Rectangle Width="60" Height="20" Fill="{Binding SelectionColor}" Stroke="{StaticResource BorderDarkBrush}"/>
+                                <Button Content="..." Width="24" Margin="4,0,0,0" Command="{Binding ChangeSelectionColorCommand}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="OK" Width="80" Padding="8,4" IsDefault="True" Click="OkButton_Click"/>
+            <Button Content="Cancel" Width="80" Padding="8,4" Margin="8,0,0,0" IsCancel="True"/>
+            <Button Content="Apply" Width="80" Padding="8,4" Margin="8,0,0,0" Command="{Binding ApplyCommand}"/>
+        </StackPanel>
+    </Grid>
+</Window>

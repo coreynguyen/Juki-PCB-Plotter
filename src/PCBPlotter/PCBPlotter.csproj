@@ -8,39 +8,51 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>PCBPlotter</RootNamespace>
     <AssemblyName>PCBPlotter</AssemblyName>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ProjectTypeGuids>{60dc8134-eba5-43b8-bcc9-bb4bc16c2548};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <WarningLevel>4</WarningLevel>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
     <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DefineConstants>DEBUG;TRACE;USE_OPENGL</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
     <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
+    <DefineConstants>TRACE;USE_OPENGL</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Xaml">
-      <RequiredTargetFramework>4.0</RequiredTargetFramework>
+      <RequiredTargetFramework>4.8</RequiredTargetFramework>
     </Reference>
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="WindowsFormsIntegration" />
+    <Reference Include="OpenTK, Version=3.3.3.0, Culture=neutral, PublicKeyToken=bad199fe84eb3df4, processorArchitecture=MSIL">
+      <HintPath>..\..\packages\OpenTK.3.3.3\lib\net20\OpenTK.dll</HintPath>
+    </Reference>
+    <Reference Include="OpenTK.GLControl, Version=3.3.3.0, Culture=neutral, PublicKeyToken=bad199fe84eb3df4, processorArchitecture=MSIL">
+      <HintPath>..\..\packages\OpenTK.GLControl.3.3.3\lib\net20\OpenTK.GLControl.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml">
@@ -52,6 +64,14 @@
       <SubType>Designer</SubType>
     </Page>
     <Page Include="Themes\Colors.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Themes\LightColors.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Themes\LightTheme.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -87,6 +107,50 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Views\StartScreenView.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\TextImportDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\SettingsDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\InputDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\LogView.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\TranslateDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\PcbAreaDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\ImportIpc356Dialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\ExportJukiFx3Dialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\ThemedMessageBox.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\ImportOdbDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="App.xaml.cs">
@@ -113,6 +177,36 @@
     <Compile Include="Views\FloatingWindow.xaml.cs">
       <DependentUpon>FloatingWindow.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Views\StartScreenView.xaml.cs">
+      <DependentUpon>StartScreenView.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\TextImportDialog.xaml.cs">
+      <DependentUpon>TextImportDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\SettingsDialog.xaml.cs">
+      <DependentUpon>SettingsDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\InputDialog.xaml.cs">
+      <DependentUpon>InputDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\TranslateDialog.xaml.cs">
+      <DependentUpon>TranslateDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\PcbAreaDialog.xaml.cs">
+      <DependentUpon>PcbAreaDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ImportIpc356Dialog.xaml.cs">
+      <DependentUpon>ImportIpc356Dialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ExportJukiFx3Dialog.xaml.cs">
+      <DependentUpon>ExportJukiFx3Dialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ThemedMessageBox.xaml.cs">
+      <DependentUpon>ThemedMessageBox.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ImportOdbDialog.xaml.cs">
+      <DependentUpon>ImportOdbDialog.xaml</DependentUpon>
+    </Compile>
     <Compile Include="ViewModels\ViewModelBase.cs" />
     <Compile Include="ViewModels\RelayCommand.cs" />
     <Compile Include="ViewModels\MainViewModel.cs" />
@@ -121,13 +215,33 @@
     <Compile Include="ViewModels\ComponentEditorViewModel.cs" />
     <Compile Include="ViewModels\BomEditorViewModel.cs" />
     <Compile Include="ViewModels\GerberViewerViewModel.cs" />
+    <Compile Include="ViewModels\TextImportViewModel.cs" />
+    <Compile Include="ViewModels\LogViewModel.cs" />
+    <Compile Include="Views\LogView.xaml.cs">
+      <DependentUpon>LogView.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Controls\DesignCanvas.cs" />
+    <Compile Include="Controls\OpenGLCanvas.cs" />
+    <Compile Include="Controls\GerberQuadtree.cs" />
     <Compile Include="Controls\CoordinateDisplay.cs" />
+    <Compile Include="Controls\BatchRenderer.cs" />
+    <Compile Include="Controls\FrustumCuller.cs" />
+    <Compile Include="Controls\RenderStateCache.cs" />
+    <Compile Include="Controls\GeometryBuffer.cs" />
+    <Compile Include="Controls\StaticLayerRenderer.cs" />
+    <Compile Include="Controls\Triangulator.cs" />
+    <Compile Include="Behaviors\DataGridZoomBehavior.cs" />
     <Compile Include="Converters\BoolToVisibilityConverter.cs" />
+    <Compile Include="Converters\EnumToBoolConverter.cs" />
     <Compile Include="Converters\EnumToDescriptionConverter.cs" />
+    <Compile Include="Services\AppSettings.cs" />
     <Compile Include="Services\WindowService.cs" />
+    <Compile Include="Services\ThemeService.cs" />
     <Compile Include="Services\WpfDrawingRenderer.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\PCBPlotter.Core\PCBPlotter.Core.csproj">

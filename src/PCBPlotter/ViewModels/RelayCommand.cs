@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Windows.Input;
 
 namespace PCBPlotter.ViewModels
@@ -75,15 +76,62 @@ namespace PCBPlotter.ViewModels
             if (_canExecute == null)
                 return true;
 
-            if (parameter == null && typeof(T).IsValueType)
+            T typedParam;
+            if (!TryConvertParameter(parameter, out typedParam))
                 return false;
 
-            return _canExecute((T)parameter);
+            return _canExecute(typedParam);
         }
 
         public void Execute(object parameter)
         {
-            _execute((T)parameter);
+            T typedParam;
+            if (TryConvertParameter(parameter, out typedParam))
+            {
+                _execute(typedParam);
+            }
+        }
+
+        private bool TryConvertParameter(object parameter, out T result)
+        {
+            result = default(T);
+
+            // Null check for value types
+            if (parameter == null)
+            {
+                return !typeof(T).IsValueType;
+            }
+
+            // Already the correct type
+            if (parameter is T)
+            {
+                result = (T)parameter;
+                return true;
+            }
+
+            // Try to convert using TypeConverter
+            try
+            {
+                var converter = TypeDescriptor.GetConverter(typeof(T));
+                if (converter != null && converter.CanConvertFrom(parameter.GetType()))
+                {
+                    result = (T)converter.ConvertFrom(parameter);
+                    return true;
+                }
+
+                // Fallback: try Convert.ChangeType for primitive types
+                if (typeof(T).IsPrimitive || typeof(T) == typeof(decimal))
+                {
+                    result = (T)Convert.ChangeType(parameter, typeof(T));
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
         }
 
         public void RaiseCanExecuteChanged()

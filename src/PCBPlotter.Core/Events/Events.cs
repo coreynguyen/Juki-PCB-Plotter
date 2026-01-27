@@ -153,6 +153,11 @@ namespace PCBPlotter.Core.Events
         public bool FullRefresh { get; set; }
     }
 
+    public class ZoomFitRequestEvent
+    {
+        public bool AnimateZoom { get; set; }
+    }
+
     #endregion
 
     #region Import/Export Events
@@ -225,6 +230,22 @@ namespace PCBPlotter.Core.Events
     {
         public string ViewType { get; set; }
         public bool Float { get; set; } // true = float, false = dock
+    }
+
+    public class LogMessageEvent
+    {
+        public string Type { get; set; } // Info, Success, Warning, Error
+        public string Message { get; set; }
+        public string Details { get; set; }
+    }
+
+    /// <summary>
+    /// Event to navigate to a specific tab and optionally scroll to a placement
+    /// </summary>
+    public class NavigateToTabEvent
+    {
+        public int TabIndex { get; set; }
+        public Placement ScrollToPlacement { get; set; }
     }
 
     #endregion

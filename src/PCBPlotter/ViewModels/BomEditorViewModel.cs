@@ -6,6 +6,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Core.Models;
+using Component = PCBPlotter.Core.Models.Component;
 
 namespace PCBPlotter.ViewModels
 {
@@ -117,6 +118,15 @@ namespace PCBPlotter.ViewModels
             Subscribe<ComponentAddedEvent>(OnComponentAdded);
             Subscribe<ComponentRemovedEvent>(OnComponentRemoved);
             Subscribe<PlacementsChangedEvent>(OnPlacementsChanged);
+            Subscribe<RequestRefreshEvent>(OnRefreshRequest);
+        }
+
+        private void OnRefreshRequest(RequestRefreshEvent e)
+        {
+            if (e.FullRefresh)
+            {
+                ValidateComponentStatus();
+            }
         }
 
         private void UpdateComponentsView()
@@ -126,6 +136,9 @@ namespace PCBPlotter.ViewModels
                 ComponentsView = CollectionViewSource.GetDefaultView(Project.Components);
                 ComponentsView.Filter = FilterComponent;
                 ComponentsView.SortDescriptions.Add(new SortDescription("PartNumber", ListSortDirection.Ascending));
+
+                // Auto-validate on view update
+                ValidateComponentStatus();
             }
             else
             {
@@ -134,6 +147,23 @@ namespace PCBPlotter.ViewModels
 
             OnPropertyChanged("TotalComponents");
             OnPropertyChanged("UnusedComponents");
+        }
+
+        /// <summary>
+        /// Updates status for all components based on placement assignments
+        /// </summary>
+        private void ValidateComponentStatus()
+        {
+            if (Project == null) return;
+
+            foreach (var component in Project.Components)
+            {
+                var placementCount = Project.Placements.Count(p => p.Component == component);
+                component.Status = placementCount == 0 ? ComponentStatus.NoPlacements : ComponentStatus.Valid;
+            }
+
+            OnPropertyChanged("UnusedComponents");
+            ComponentsView?.Refresh();
         }
 
         private bool FilterComponent(object obj)
@@ -177,9 +207,60 @@ namespace PCBPlotter.ViewModels
 
             if (dialog.ShowDialog() == true)
             {
-                // TODO: Export BOM to CSV
-                Publish(new StatusMessageEvent { Message = "BOM exported to " + dialog.FileName });
+                try
+                {
+                    using (var writer = new System.IO.StreamWriter(dialog.FileName, false, System.Text.Encoding.UTF8))
+                    {
+                        // Write header
+                        writer.WriteLine("Part Number,Description,Value,Manufacturer,MPN,References,Quantity");
+
+                        // Write each component
+                        foreach (var component in Project.Components)
+                        {
+                            var refs = component.ReferenceDesignators != null
+                                ? string.Join(" ", component.ReferenceDesignators)
+                                : "";
+                            var qty = component.ReferenceDesignators?.Count ?? 0;
+
+                            writer.WriteLine("{0},{1},{2},{3},{4},{5},{6}",
+                                EscapeCsvField(component.PartNumber),
+                                EscapeCsvField(component.Description),
+                                EscapeCsvField(component.Value),
+                                EscapeCsvField(component.Manufacturer),
+                                EscapeCsvField(component.ManufacturerPartNumber),
+                                EscapeCsvField(refs),
+                                qty);
+                        }
+                    }
+
+                    Publish(new StatusMessageEvent
+                    {
+                        Message = string.Format("BOM exported to {0} ({1} components)",
+                            System.IO.Path.GetFileName(dialog.FileName), Project.Components.Count),
+                        Type = StatusMessageType.Success
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Publish(new StatusMessageEvent
+                    {
+                        Message = "Error exporting BOM: " + ex.Message,
+                        Type = StatusMessageType.Error
+                    });
+                }
             }
+        }
+
+        private string EscapeCsvField(string field)
+        {
+            if (string.IsNullOrEmpty(field)) return "";
+
+            // If field contains comma, quote, or newline, wrap in quotes and escape quotes
+            if (field.Contains(",") || field.Contains("\"") || field.Contains("\n"))
+            {
+                return "\"" + field.Replace("\"", "\"\"") + "\"";
+            }
+            return field;
         }
 
         private void ExecuteNewComponent()

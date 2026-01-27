@@ -15,9 +15,14 @@ namespace PCBPlotter.Core.Models
         private string _filePath;
         private GerberLayerType _layerType = GerberLayerType.Unknown;
         private bool _isVisible = true;
+        private bool _isActive = false;
         private double _opacity = 1.0;
         private uint _color = 0xFF00FF00; // Green
         private List<GerberPrimitive> _primitives;
+
+        // Cached bounds - computed once on first access or when invalidated
+        private Rect _cachedBounds = Rect.Empty;
+        private bool _boundsDirty = true;
 
         /// <summary>
         /// Unique identifier
@@ -65,6 +70,16 @@ namespace PCBPlotter.Core.Models
         }
 
         /// <summary>
+        /// Whether this layer is the active/editable layer (only one can be active)
+        /// Active layer has vector shapes for selection, inactive layers are rasterized
+        /// </summary>
+        public bool IsActive
+        {
+            get { return _isActive; }
+            set { SetProperty(ref _isActive, value); }
+        }
+
+        /// <summary>
         /// Layer opacity (0-1)
         /// </summary>
         public double Opacity
@@ -94,11 +109,23 @@ namespace PCBPlotter.Core.Models
         public List<GerberPrimitive> Primitives
         {
             get { return _primitives; }
-            set { SetProperty(ref _primitives, value); }
+            set
+            {
+                SetProperty(ref _primitives, value);
+                _boundsDirty = true; // Invalidate cached bounds
+            }
         }
 
         /// <summary>
-        /// Bounding box of all primitives
+        /// Invalidate cached bounds (call after modifying primitives list)
+        /// </summary>
+        public void InvalidateBounds()
+        {
+            _boundsDirty = true;
+        }
+
+        /// <summary>
+        /// Bounding box of all primitives (cached for performance)
         /// </summary>
         public Rect Bounds
         {
@@ -107,6 +134,11 @@ namespace PCBPlotter.Core.Models
                 if (_primitives == null || _primitives.Count == 0)
                     return Rect.Empty;
 
+                // Return cached bounds if valid
+                if (!_boundsDirty)
+                    return _cachedBounds;
+
+                // Recompute bounds
                 double minX = double.MaxValue, minY = double.MaxValue;
                 double maxX = double.MinValue, maxY = double.MinValue;
 
@@ -119,7 +151,9 @@ namespace PCBPlotter.Core.Models
                     if (bounds.Bottom > maxY) maxY = bounds.Bottom;
                 }
 
-                return new Rect(minX, minY, maxX - minX, maxY - minY);
+                _cachedBounds = new Rect(minX, minY, maxX - minX, maxY - minY);
+                _boundsDirty = false;
+                return _cachedBounds;
             }
         }
 
@@ -169,6 +203,7 @@ namespace PCBPlotter.Core.Models
         private List<Point> _points;
         private int _apertureIndex;
         private bool _isSelected;
+        private bool _isDark = true;
 
         public string Id
         {
@@ -230,6 +265,16 @@ namespace PCBPlotter.Core.Models
             set { SetProperty(ref _isSelected, value); }
         }
 
+        /// <summary>
+        /// Whether this primitive uses dark polarity (adds material).
+        /// Clear/negative primitives (IsDark=false) subtract material and should not be selectable.
+        /// </summary>
+        public bool IsDark
+        {
+            get { return _isDark; }
+            set { SetProperty(ref _isDark, value); }
+        }
+
         public Point Position
         {
             get { return new Point(X, Y); }
@@ -255,7 +300,9 @@ namespace PCBPlotter.Core.Models
                     return new Rect(X - Width / 2, Y - Height / 2, Width, Height);
 
                 case GerberPrimitiveType.Line:
+                case GerberPrimitiveType.Arc:  // Arcs have Points[] containing polyline segments
                 case GerberPrimitiveType.Contour:
+                case GerberPrimitiveType.Polygon:  // FIX: Polygons need bounds from Points, not X/Y/Width/Height
                     if (Points != null && Points.Count > 0)
                     {
                         double minX = double.MaxValue, minY = double.MaxValue;
@@ -267,11 +314,14 @@ namespace PCBPlotter.Core.Models
                             if (pt.X > maxX) maxX = pt.X;
                             if (pt.Y > maxY) maxY = pt.Y;
                         }
-                        // Add stroke width
-                        minX -= Width / 2;
-                        minY -= Width / 2;
-                        maxX += Width / 2;
-                        maxY += Width / 2;
+                        // Add stroke width (for lines/arcs/contours)
+                        if (Type == GerberPrimitiveType.Line || Type == GerberPrimitiveType.Arc || Type == GerberPrimitiveType.Contour)
+                        {
+                            minX -= Width / 2;
+                            minY -= Width / 2;
+                            maxX += Width / 2;
+                            maxY += Width / 2;
+                        }
                         return new Rect(minX, minY, maxX - minX, maxY - minY);
                     }
                     return new Rect(X, Y, 0, 0);

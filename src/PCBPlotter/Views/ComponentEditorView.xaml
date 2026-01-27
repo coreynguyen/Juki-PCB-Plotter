@@ -23,8 +23,15 @@
             <TextBlock Grid.Row="0" Text="Packages" FontWeight="SemiBold" Margin="8"/>
 
             <!-- Filter -->
-            <TextBox Grid.Row="1" Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
-                     Margin="8,0,8,8"/>
+            <Grid Grid.Row="1" Margin="8,0,8,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0" Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"/>
+                <Button Grid.Column="1" Content="X" Width="22" Height="22" Margin="4,0,0,0"
+                        Command="{Binding ClearFilterCommand}" ToolTip="Clear filter"/>
+            </Grid>
 
             <!-- Package List -->
             <ListBox Grid.Row="2"
@@ -37,7 +44,8 @@
             <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="8">
                 <Button Content="New" Command="{Binding NewPackageCommand}" Padding="8,4" Margin="0,0,4,0"/>
                 <Button Content="Duplicate" Command="{Binding DuplicatePackageCommand}" Padding="8,4" Margin="0,0,4,0"/>
-                <Button Content="Delete" Command="{Binding DeletePackageCommand}" Padding="8,4"/>
+                <Button Content="Delete" Command="{Binding DeletePackageCommand}" Padding="8,4"
+                        Background="{StaticResource ErrorBrush}"/>
             </StackPanel>
         </Grid>
 
@@ -57,32 +65,55 @@
                     BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="0,0,0,1"
                     Padding="8">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="150"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="80"/>
+                        <ColumnDefinition Width="70"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="80"/>
+                        <ColumnDefinition Width="70"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="80"/>
+                        <ColumnDefinition Width="70"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Column="0" Text="Name:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox Grid.Column="1" Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}"/>
+                    <!-- Row 0: Name and dimensions -->
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Name:" VerticalAlignment="Center" Margin="0,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4"/>
 
-                    <TextBlock Grid.Column="2" Text="Width:" VerticalAlignment="Center" Margin="16,0,8,0"/>
-                    <TextBox Grid.Column="3" Text="{Binding EditWidth, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Width:" VerticalAlignment="Center" Margin="16,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding EditWidth, StringFormat=F3}" Margin="0,0,0,4"/>
 
-                    <TextBlock Grid.Column="4" Text="Length:" VerticalAlignment="Center" Margin="8,0,8,0"/>
-                    <TextBox Grid.Column="5" Text="{Binding EditLength, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="4" Text="Length:" VerticalAlignment="Center" Margin="8,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="5" Text="{Binding EditLength, StringFormat=F3}" Margin="0,0,0,4"/>
 
-                    <TextBlock Grid.Column="6" Text="Height:" VerticalAlignment="Center" Margin="8,0,8,0"/>
-                    <TextBox Grid.Column="7" Text="{Binding EditHeight, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="6" Text="Height:" VerticalAlignment="Center" Margin="8,0,8,4"/>
+                    <TextBox Grid.Row="0" Grid.Column="7" Text="{Binding EditHeight, StringFormat=F3}" Margin="0,0,0,4"/>
 
-                    <CheckBox Grid.Column="8" Content="Has Polarity" IsChecked="{Binding EditHasPolarity}"
-                              VerticalAlignment="Center" Margin="16,0,0,0"/>
+                    <!-- Row 1: Part class, polarity, rotation -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Class:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox Grid.Row="1" Grid.Column="1" SelectedValue="{Binding EditPartClass}"
+                              SelectedValuePath="Tag">
+                        <ComboBoxItem Content="Chip" Tag="Chip"/>
+                        <ComboBoxItem Content="IC" Tag="IC"/>
+                        <ComboBoxItem Content="Connector" Tag="Connector"/>
+                        <ComboBoxItem Content="Discrete" Tag="Discrete"/>
+                        <ComboBoxItem Content="Mechanical" Tag="Mechanical"/>
+                        <ComboBoxItem Content="Other" Tag="Other"/>
+                    </ComboBox>
+
+                    <CheckBox Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Content="Has Polarity"
+                              IsChecked="{Binding EditHasPolarity}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="4" Text="Default Rot:" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                    <TextBox Grid.Row="1" Grid.Column="5" Text="{Binding EditDefaultRotation, StringFormat=F1}"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="6" Text="Pins:" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                    <TextBlock Grid.Row="1" Grid.Column="7" Text="{Binding PinCount}" VerticalAlignment="Center"/>
                 </Grid>
             </Border>
 
@@ -96,28 +127,130 @@
                 <!-- Canvas for editing package graphics -->
                 <controls:DesignCanvas Grid.Column="0" x:Name="PackageCanvas"
                                        GridSpacing="0.1"
-                                       ShowGrid="True"/>
+                                       ShowGrid="True"
+                                       SelectedPackage="{Binding SelectedPackage}"
+                                       ShowPackageGraphics="True"/>
 
                 <!-- Drawing Tools -->
                 <Border Grid.Column="1" Background="{StaticResource BackgroundLightBrush}"
                         BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1,0,0,0"
-                        Width="120" Padding="8">
-                    <StackPanel>
-                        <TextBlock Text="Tools" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <Button Content="Rectangle" Command="{Binding AddRectangleCommand}" Margin="0,0,0,4"/>
-                        <Button Content="Circle" Command="{Binding AddCircleCommand}" Margin="0,0,0,4"/>
-                        <Button Content="Line" Command="{Binding AddLineCommand}" Margin="0,0,0,4"/>
-                        <Button Content="Polygon" Command="{Binding AddPolygonCommand}" Margin="0,0,0,4"/>
-                        <Button Content="Text" Command="{Binding AddTextCommand}" Margin="0,0,0,4"/>
-                        <Separator Margin="0,8"/>
-                        <Button Content="Add Pin" Command="{Binding AddPinCommand}" Margin="0,0,0,4"/>
-                        <Separator Margin="0,8"/>
-                        <Button Content="Center Origin" Command="{Binding CenterOriginCommand}" Margin="0,0,0,4"/>
-                        <Button Content="Auto Size" Command="{Binding AutoSizeCommand}" Margin="0,0,0,4"/>
-                        <Separator Margin="0,8"/>
-                        <Button Content="Delete" Command="{Binding DeleteGraphicCommand}"
-                                Background="{StaticResource ErrorBrush}"/>
-                    </StackPanel>
+                        Width="140" Padding="8">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="Shape Tools" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Rectangle" Command="{Binding AddRectangleCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add rectangular outline"/>
+                            <Button Content="Circle" Command="{Binding AddCircleCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add circular outline"/>
+                            <Button Content="Line" Command="{Binding AddLineCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add line segment"/>
+                            <Button Content="Polygon" Command="{Binding AddPolygonCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add polygon outline"/>
+                            <Button Content="Arc" Command="{Binding AddArcCommand}" Margin="0,0,0,4"
+                                    ToolTip="Add arc segment"/>
+
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="Pin Tools" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Add Pin (Rect)" Command="{Binding AddPinCommand}"
+                                    CommandParameter="Rectangle" Margin="0,0,0,4"
+                                    ToolTip="Add rectangular pad/pin"/>
+                            <Button Content="Add Pin (Round)" Command="{Binding AddPinCommand}"
+                                    CommandParameter="Round" Margin="0,0,0,4"
+                                    ToolTip="Add round pad/pin"/>
+                            <Button Content="Add Pin (Oblong)" Command="{Binding AddPinCommand}"
+                                    CommandParameter="Oblong" Margin="0,0,0,4"
+                                    ToolTip="Add oblong pad/pin"/>
+
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="Quick Create" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Chip (2-pin)" Command="{Binding CreateChipCommand}" Margin="0,0,0,4"
+                                    ToolTip="Create 2-pin chip component (0402, 0603, etc.)"/>
+                            <Button Content="SOT23" Command="{Binding CreateSOT23Command}" Margin="0,0,0,4"
+                                    ToolTip="Create SOT23 3-pin transistor"/>
+                            <Button Content="SOIC" Command="{Binding CreateSOICCommand}" Margin="0,0,0,4"
+                                    ToolTip="Create SOIC package"/>
+                            <Button Content="QFP" Command="{Binding CreateQFPCommand}" Margin="0,0,0,4"
+                                    ToolTip="Create QFP package"/>
+                            <Button Content="BGA" Command="{Binding CreateBGACommand}" Margin="0,0,0,4"
+                                    ToolTip="Create BGA package"/>
+
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="Utilities" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Button Content="Center Origin" Command="{Binding CenterOriginCommand}" Margin="0,0,0,4"
+                                    ToolTip="Move origin to center of component"/>
+                            <Button Content="Auto Size" Command="{Binding AutoSizeCommand}" Margin="0,0,0,4"
+                                    ToolTip="Calculate dimensions from graphics"/>
+                            <Button Content="Mirror X" Command="{Binding MirrorXCommand}" Margin="0,0,0,4"
+                                    ToolTip="Mirror graphics horizontally"/>
+                            <Button Content="Mirror Y" Command="{Binding MirrorYCommand}" Margin="0,0,0,4"
+                                    ToolTip="Mirror graphics vertically"/>
+
+                            <Separator Margin="0,8"/>
+                            <Button Content="Delete Selected" Command="{Binding DeleteGraphicCommand}"
+                                    Background="{StaticResource ErrorBrush}"
+                                    ToolTip="Delete selected graphic element"/>
+
+                            <!-- Selected Shape Properties -->
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="Selected Shape" FontWeight="SemiBold" Margin="0,0,0,8"/>
+
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="X:" Width="28"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedShapeX, StringFormat=F3, UpdateSourceTrigger=PropertyChanged}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Y:" Width="28"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedShapeY, StringFormat=F3, UpdateSourceTrigger=PropertyChanged}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="W:" Width="28"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedShapeWidth, StringFormat=F3, UpdateSourceTrigger=PropertyChanged}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="H:" Width="28"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedShapeHeight, StringFormat=F3, UpdateSourceTrigger=PropertyChanged}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Rot:" Width="28"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedShapeRotation, StringFormat=F1, UpdateSourceTrigger=PropertyChanged}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Line:" Width="28"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedShapeStroke, StringFormat=F3, UpdateSourceTrigger=PropertyChanged}"/>
+                            </Grid>
+                            <CheckBox Content="Filled" IsChecked="{Binding SelectedShapeFilled}" Margin="0,0,0,4"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                <Button Content="Rot 90" Command="{Binding RotateShape90Command}" Padding="4,2" Margin="0,0,4,0"/>
+                                <Button Content="Flip H" Command="{Binding FlipShapeHCommand}" Padding="4,2" Margin="0,0,4,0"/>
+                                <Button Content="Flip V" Command="{Binding FlipShapeVCommand}" Padding="4,2"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Border>
             </Grid>
 
@@ -127,18 +260,26 @@
                     Padding="8">
                 <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Grid.Column="0" Orientation="Horizontal">
-                        <Button Content="Import from Library" Command="{Binding ImportFromLibraryCommand}"
+                        <Button Content="Import IPC-D-356..." Command="{Binding ImportIPCCommand}"
+                                Padding="8,4" Margin="0,0,4,0" ToolTip="Import device outlines from IPC-D-356 file"/>
+                        <Button Content="Import from Library..." Command="{Binding ImportFromLibraryCommand}"
                                 Padding="8,4" Margin="0,0,4,0"/>
-                        <Button Content="Export to Library" Command="{Binding ExportToLibraryCommand}"
+                        <Button Content="Export to Library..." Command="{Binding ExportToLibraryCommand}"
                                 Padding="8,4"/>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <Run Text="Packages: "/>
+                        <Run Text="{Binding PackageCount, Mode=OneWay}" FontWeight="SemiBold"/>
+                    </TextBlock>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
                         <Button Content="Cancel" Command="{Binding CancelEditCommand}"
                                 Padding="12,4" Margin="0,0,4,0"/>
                         <Button Content="Save Package" Command="{Binding SavePackageCommand}"

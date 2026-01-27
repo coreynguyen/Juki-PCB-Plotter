@@ -8,7 +8,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>PCBPlotter.Core</RootNamespace>
     <AssemblyName>PCBPlotter.Core</AssemblyName>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
@@ -35,6 +35,8 @@
     <Reference Include="System.Xml.Linq" />
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Models\Project.cs" />
@@ -49,6 +51,7 @@
     <Compile Include="Models\SelectionSet.cs" />
     <Compile Include="Models\GerberLayer.cs" />
     <Compile Include="Models\Enums.cs" />
+    <Compile Include="Models\BomLine.cs" />
     <Compile Include="Events\EventAggregator.cs" />
     <Compile Include="Events\Events.cs" />
     <Compile Include="Interfaces\ICanvasRenderer.cs" />
@@ -56,7 +59,14 @@
     <Compile Include="Interfaces\IMachineExporter.cs" />
     <Compile Include="Services\ProjectService.cs" />
     <Compile Include="Services\UndoRedoService.cs" />
+    <Compile Include="Services\Ipc356Parser.cs" />
+    <Compile Include="Services\JukiFx3Exporter.cs" />
+    <Compile Include="Services\OdbPlusPlusParser.cs" />
+    <Compile Include="Services\GerberParser.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
+    <Compile Include="Utilities\UnicodeHelper.cs" />
+    <Compile Include="Utilities\UnitConverter.cs" />
+    <Compile Include="Utilities\ReferenceExpander.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

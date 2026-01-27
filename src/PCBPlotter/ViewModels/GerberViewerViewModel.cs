@@ -7,6 +7,8 @@ using System.Windows.Input;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Core.Models;
 using PCBPlotter.Core.Rendering;
+using PCBPlotter.Core.Services;
+using PCBPlotter.Views;
 
 namespace PCBPlotter.ViewModels
 {
@@ -32,6 +34,7 @@ namespace PCBPlotter.ViewModels
                 if (SetProperty(ref _project, value))
                 {
                     OnPropertyChanged("Layers");
+                    OnPropertyChanged("GerberLayersCollection");
                 }
             }
         }
@@ -39,7 +42,7 @@ namespace PCBPlotter.ViewModels
         public double Zoom
         {
             get { return _zoom; }
-            set { SetProperty(ref _zoom, Math.Max(0.1, Math.Min(50, value))); }
+            set { SetProperty(ref _zoom, Math.Max(0.1, Math.Min(500, value))); }
         }
 
         public double PanX
@@ -89,6 +92,11 @@ namespace PCBPlotter.ViewModels
             get { return Project?.GerberLayers ?? Enumerable.Empty<GerberLayer>(); }
         }
 
+        public ObservableCollection<GerberLayer> GerberLayersCollection
+        {
+            get { return Project?.GerberLayers; }
+        }
+
         // Commands
         public ICommand ImportGerberCommand { get; private set; }
         public ICommand RemoveLayerCommand { get; private set; }
@@ -104,6 +112,16 @@ namespace PCBPlotter.ViewModels
         public ICommand SetBoardOutlineCommand { get; private set; }
         public ICommand SetCircuitOutlineCommand { get; private set; }
         public ICommand MeasureDistanceCommand { get; private set; }
+
+        // Layer stepping commands
+        public ICommand StepLayerUpCommand { get; private set; }
+        public ICommand StepLayerDownCommand { get; private set; }
+        public ICommand InvertLayersCommand { get; private set; }
+        public ICommand ShowAllLayersCommand { get; private set; }
+        public ICommand HideAllLayersCommand { get; private set; }
+
+        // Event to notify view of layer changes requiring refresh
+        public event Action LayerVisibilityChanged;
 
         public GerberViewerViewModel()
         {
@@ -130,6 +148,13 @@ namespace PCBPlotter.ViewModels
             SetBoardOutlineCommand = new RelayCommand(ExecuteSetBoardOutline, () => SelectedPrimitives.Count > 0);
             SetCircuitOutlineCommand = new RelayCommand(ExecuteSetCircuitOutline, () => SelectedPrimitives.Count > 0);
             MeasureDistanceCommand = new RelayCommand(ExecuteMeasureDistance);
+
+            // Layer stepping commands
+            StepLayerUpCommand = new RelayCommand(ExecuteStepLayerUp, () => Project?.GerberLayers?.Count > 0);
+            StepLayerDownCommand = new RelayCommand(ExecuteStepLayerDown, () => Project?.GerberLayers?.Count > 0);
+            InvertLayersCommand = new RelayCommand(ExecuteInvertLayers, () => Project?.GerberLayers?.Count > 0);
+            ShowAllLayersCommand = new RelayCommand(ExecuteShowAllLayers, () => Project?.GerberLayers?.Count > 0);
+            HideAllLayersCommand = new RelayCommand(ExecuteHideAllLayers, () => Project?.GerberLayers?.Count > 0);
         }
 
         private void SubscribeToEvents()
@@ -167,58 +192,56 @@ namespace PCBPlotter.ViewModels
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "Gerber Files (*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs)|" +
-                        "*.gbr;*.ger;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs|" +
-                        "All Files (*.*)|*.*",
-                Multiselect = true
+                Filter = "All Files (*.*)|*.*|" +
+                        "Gerber Files (*.gbr;*.ger;*.art;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1)|" +
+                        "*.gbr;*.ger;*.art;*.gtl;*.gbl;*.gto;*.gbo;*.gts;*.gbs;*.gtp;*.gbp;*.gko;*.gm1",
+                Multiselect = true,
+                Title = "Import Gerber Files"
             };
 
             if (dialog.ShowDialog() == true)
             {
-                foreach (var filePath in dialog.FileNames)
+                ImportGerberFiles(dialog.FileNames);
+            }
+        }
+
+        public void ImportGerberFiles(IEnumerable<string> filePaths)
+        {
+            var parser = new GerberParser();
+            int importedCount = 0;
+
+            foreach (var filePath in filePaths)
+            {
+                try
                 {
-                    // TODO: Parse gerber file and add layer
-                    var layer = new GerberLayer(
-                        System.IO.Path.GetFileName(filePath),
-                        filePath
-                    );
+                    var layer = parser.Parse(filePath);
 
-                    // Detect layer type from filename
-                    string ext = System.IO.Path.GetExtension(filePath).ToLower();
-                    switch (ext)
+                    if (Project != null)
                     {
-                        case ".gtl":
-                            layer.LayerType = GerberLayerType.TopCopper;
-                            layer.Color = System.Windows.Media.Color.FromRgb(255, 0, 0);
-                            break;
-                        case ".gbl":
-                            layer.LayerType = GerberLayerType.BottomCopper;
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 0, 255);
-                            break;
-                        case ".gto":
-                            layer.LayerType = GerberLayerType.TopSilkscreen;
-                            layer.Color = System.Windows.Media.Color.FromRgb(255, 255, 0);
-                            break;
-                        case ".gbo":
-                            layer.LayerType = GerberLayerType.BottomSilkscreen;
-                            layer.Color = System.Windows.Media.Color.FromRgb(255, 255, 0);
-                            break;
-                        case ".gts":
-                            layer.LayerType = GerberLayerType.TopSoldermask;
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 255, 0);
-                            break;
-                        case ".gbs":
-                            layer.LayerType = GerberLayerType.BottomSoldermask;
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 255, 0);
-                            break;
-                        default:
-                            layer.Color = System.Windows.Media.Color.FromRgb(0, 255, 0);
-                            break;
+                        Project.GerberLayers.Add(layer);
+                        Publish(new GerberLayerAddedEvent { Layer = layer });
+                        importedCount++;
                     }
-
-                    Project?.GerberLayers.Add(layer);
-                    Publish(new GerberLayerAddedEvent { Layer = layer });
                 }
+                catch (Exception ex)
+                {
+                    Publish(new StatusMessageEvent
+                    {
+                        Message = $"Failed to import {System.IO.Path.GetFileName(filePath)}: {ex.Message}",
+                        Type = StatusMessageType.Error
+                    });
+                }
+            }
+
+            if (importedCount > 0)
+            {
+                Publish(new StatusMessageEvent
+                {
+                    Message = $"Imported {importedCount} Gerber layer(s) with {Layers.Sum(l => l.Primitives?.Count ?? 0)} primitives"
+                });
+
+                // Auto zoom-to-fit after import
+                ExecuteZoomFit();
             }
         }
 
@@ -237,8 +260,118 @@ namespace PCBPlotter.ViewModels
             if (layer != null)
             {
                 layer.IsVisible = !layer.IsVisible;
-                Publish(new RequestRefreshEvent { FullRefresh = false });
+                LayerVisibilityChanged?.Invoke();
+                Publish(new RequestRefreshEvent { FullRefresh = true });
             }
+        }
+
+        /// <summary>
+        /// Step to the next layer up in the stack (shows only that layer)
+        /// </summary>
+        private void ExecuteStepLayerUp()
+        {
+            if (Project?.GerberLayers == null || Project.GerberLayers.Count == 0)
+                return;
+
+            var layers = Project.GerberLayers.ToList();
+            int currentIndex = SelectedLayer != null ? layers.IndexOf(SelectedLayer) : -1;
+
+            // Find next index (wrap around)
+            int nextIndex = (currentIndex - 1 + layers.Count) % layers.Count;
+
+            // Hide all layers, show and select the next one
+            foreach (var layer in layers)
+            {
+                layer.IsVisible = false;
+                layer.IsActive = false;
+            }
+
+            layers[nextIndex].IsVisible = true;
+            layers[nextIndex].IsActive = true;
+            SelectedLayer = layers[nextIndex];
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Step to the next layer down in the stack (shows only that layer)
+        /// </summary>
+        private void ExecuteStepLayerDown()
+        {
+            if (Project?.GerberLayers == null || Project.GerberLayers.Count == 0)
+                return;
+
+            var layers = Project.GerberLayers.ToList();
+            int currentIndex = SelectedLayer != null ? layers.IndexOf(SelectedLayer) : -1;
+
+            // Find next index (wrap around)
+            int nextIndex = (currentIndex + 1) % layers.Count;
+
+            // Hide all layers, show and select the next one
+            foreach (var layer in layers)
+            {
+                layer.IsVisible = false;
+                layer.IsActive = false;
+            }
+
+            layers[nextIndex].IsVisible = true;
+            layers[nextIndex].IsActive = true;
+            SelectedLayer = layers[nextIndex];
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Invert visibility of all layers
+        /// </summary>
+        private void ExecuteInvertLayers()
+        {
+            if (Project?.GerberLayers == null)
+                return;
+
+            foreach (var layer in Project.GerberLayers)
+            {
+                layer.IsVisible = !layer.IsVisible;
+            }
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Show all layers
+        /// </summary>
+        private void ExecuteShowAllLayers()
+        {
+            if (Project?.GerberLayers == null)
+                return;
+
+            foreach (var layer in Project.GerberLayers)
+            {
+                layer.IsVisible = true;
+            }
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+        }
+
+        /// <summary>
+        /// Hide all layers
+        /// </summary>
+        private void ExecuteHideAllLayers()
+        {
+            if (Project?.GerberLayers == null)
+                return;
+
+            foreach (var layer in Project.GerberLayers)
+            {
+                layer.IsVisible = false;
+            }
+
+            LayerVisibilityChanged?.Invoke();
+            Publish(new RequestRefreshEvent { FullRefresh = true });
         }
 
         private void ExecuteSetLayerColor(GerberLayer layer)
@@ -254,18 +387,65 @@ namespace PCBPlotter.ViewModels
             Rect bounds = Rect.Empty;
             foreach (var layer in Project.GerberLayers.Where(l => l.IsVisible))
             {
-                if (bounds.IsEmpty)
-                    bounds = layer.Bounds;
-                else
-                    bounds.Union(layer.Bounds);
+                var layerBounds = layer.Bounds;
+                if (!layerBounds.IsEmpty)
+                {
+                    if (bounds.IsEmpty)
+                        bounds = layerBounds;
+                    else
+                        bounds.Union(layerBounds);
+                }
             }
 
-            if (!bounds.IsEmpty)
+            if (!bounds.IsEmpty && bounds.Width > 0 && bounds.Height > 0)
             {
-                // TODO: Calculate zoom to fit bounds
-                Zoom = 1.0;
-                PanX = -bounds.X * Zoom;
-                PanY = -bounds.Y * Zoom;
+                // Calculate zoom to fit bounds with margin
+                // Assume a reasonable viewport size if not available
+                double viewportWidth = 800;
+                double viewportHeight = 600;
+
+                double marginFactor = 0.9; // Use 90% of viewport
+                double zoomX = (viewportWidth * marginFactor) / bounds.Width;
+                double zoomY = (viewportHeight * marginFactor) / bounds.Height;
+                Zoom = Math.Min(zoomX, zoomY);
+
+                // Center the bounds
+                double centerX = bounds.X + bounds.Width / 2;
+                double centerY = bounds.Y + bounds.Height / 2;
+                PanX = viewportWidth / 2 - centerX * Zoom;
+                PanY = viewportHeight / 2 - centerY * Zoom;
+            }
+        }
+
+        public void ZoomToFitWithViewport(double viewportWidth, double viewportHeight)
+        {
+            if (Project == null || !Project.GerberLayers.Any()) return;
+
+            // Calculate bounds of all visible layers
+            Rect bounds = Rect.Empty;
+            foreach (var layer in Project.GerberLayers.Where(l => l.IsVisible))
+            {
+                var layerBounds = layer.Bounds;
+                if (!layerBounds.IsEmpty)
+                {
+                    if (bounds.IsEmpty)
+                        bounds = layerBounds;
+                    else
+                        bounds.Union(layerBounds);
+                }
+            }
+
+            if (!bounds.IsEmpty && bounds.Width > 0 && bounds.Height > 0)
+            {
+                double marginFactor = 0.9;
+                double zoomX = (viewportWidth * marginFactor) / bounds.Width;
+                double zoomY = (viewportHeight * marginFactor) / bounds.Height;
+                Zoom = Math.Min(zoomX, zoomY);
+
+                double centerX = bounds.X + bounds.Width / 2;
+                double centerY = bounds.Y + bounds.Height / 2;
+                PanX = viewportWidth / 2 - centerX * Zoom;
+                PanY = viewportHeight / 2 - centerY * Zoom;
             }
         }
 
@@ -382,6 +562,25 @@ namespace PCBPlotter.ViewModels
         {
             if (Project == null || SelectedPrimitives.Count == 0) return;
 
+            // Prompt user for optional placement name
+            var generatedName = GenerateUniquePlacementReference();
+            var inputDialog = new InputDialog(
+                "Create Placement",
+                "Enter a reference designator for this placement (leave blank for auto-generated):",
+                "");
+            inputDialog.Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
+
+            if (inputDialog.ShowDialog() != true)
+            {
+                // User cancelled
+                return;
+            }
+
+            // Use provided name or generate one
+            var reference = string.IsNullOrWhiteSpace(inputDialog.Value)
+                ? generatedName
+                : inputDialog.Value.Trim();
+
             // Calculate center of selection
             Rect bounds = Rect.Empty;
             foreach (var prim in SelectedPrimitives)
@@ -395,9 +594,10 @@ namespace PCBPlotter.ViewModels
             var centerX = bounds.X + bounds.Width / 2;
             var centerY = bounds.Y + bounds.Height / 2;
 
-            // Create placement at selection center (no reference - user can assign later)
+            // Create placement at selection center with the reference
             var placement = new Placement
             {
+                Reference = reference,
                 X = centerX,
                 Y = centerY,
                 Rotation = 0,
@@ -414,7 +614,36 @@ namespace PCBPlotter.ViewModels
 
             Project.Placements.Add(placement);
             Publish(new PlacementAddedEvent { Placement = placement });
-            Publish(new StatusMessageEvent { Message = "Added placement to output" });
+            Publish(new StatusMessageEvent { Message = string.Format("Added placement '{0}' to output", reference) });
+        }
+
+        /// <summary>
+        /// Generates a unique placement reference designator (P1, P2, etc.)
+        /// </summary>
+        private string GenerateUniquePlacementReference()
+        {
+            const string prefix = "P";
+            int number = 1;
+
+            // Find existing references with the same prefix and get the highest number
+            var existingNumbers = Project.Placements
+                .Where(p => !string.IsNullOrEmpty(p.Reference) && p.Reference.StartsWith(prefix))
+                .Select(p =>
+                {
+                    int n;
+                    if (int.TryParse(p.Reference.Substring(prefix.Length), out n))
+                        return n;
+                    return 0;
+                })
+                .Where(n => n > 0)
+                .ToList();
+
+            if (existingNumbers.Count > 0)
+            {
+                number = existingNumbers.Max() + 1;
+            }
+
+            return prefix + number;
         }
 
         private void ExecuteSetBoardOutline()
@@ -506,6 +735,10 @@ namespace PCBPlotter.ViewModels
 
             foreach (var primitive in SelectedLayer.Primitives)
             {
+                // Skip non-dark (clear/negative) primitives - they subtract material and shouldn't be selectable
+                if (!primitive.IsDark)
+                    continue;
+
                 if (worldRect.IntersectsWith(primitive.GetBounds()))
                 {
                     primitive.IsSelected = true;
@@ -522,6 +755,78 @@ namespace PCBPlotter.ViewModels
             });
         }
 
+        /// <summary>
+        /// Selects a primitive at the specified world position (for GPU canvas click handling)
+        /// </summary>
+        /// <param name="worldPos">Click position in world coordinates</param>
+        /// <param name="addToSelection">If true, toggles selection; if false, replaces selection</param>
+        /// <param name="hitRadiusWorld">Hit radius in world units (default 0.5, but should be zoom-adjusted)</param>
+        public void SelectPrimitiveAtPoint(Point worldPos, bool addToSelection = false, double hitRadiusWorld = 0.5)
+        {
+            if (SelectedLayer == null) return;
+
+            double hitRadius = hitRadiusWorld;
+
+            GerberPrimitive closestPrimitive = null;
+            double closestDistance = double.MaxValue;
+
+            foreach (var primitive in SelectedLayer.Primitives)
+            {
+                // Skip non-dark (clear/negative) primitives
+                if (!primitive.IsDark)
+                    continue;
+
+                // Calculate distance to primitive center
+                double dx = worldPos.X - primitive.X;
+                double dy = worldPos.Y - primitive.Y;
+                double distance = Math.Sqrt(dx * dx + dy * dy);
+
+                // Check if point is within primitive bounds with some tolerance
+                var bounds = primitive.GetBounds();
+                bounds.Inflate(hitRadius, hitRadius);
+
+                if (bounds.Contains(worldPos) && distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closestPrimitive = primitive;
+                }
+            }
+
+            if (closestPrimitive != null)
+            {
+                if (addToSelection)
+                {
+                    // Toggle selection
+                    closestPrimitive.IsSelected = !closestPrimitive.IsSelected;
+                    if (closestPrimitive.IsSelected)
+                    {
+                        if (!SelectedPrimitives.Contains(closestPrimitive))
+                            SelectedPrimitives.Add(closestPrimitive);
+                    }
+                    else
+                    {
+                        SelectedPrimitives.Remove(closestPrimitive);
+                    }
+                }
+                else
+                {
+                    ExecuteSelectNone();
+                    closestPrimitive.IsSelected = true;
+                    SelectedPrimitives.Add(closestPrimitive);
+                }
+
+                Publish(new GerberSelectionChangedEvent
+                {
+                    SelectedPrimitives = SelectedPrimitives.ToList()
+                });
+            }
+            else if (!addToSelection)
+            {
+                // Clicked on empty space - clear selection
+                ExecuteSelectNone();
+            }
+        }
+
         #endregion
 
         #region Event Handlers
@@ -529,6 +834,7 @@ namespace PCBPlotter.ViewModels
         private void OnLayerAdded(GerberLayerAddedEvent e)
         {
             OnPropertyChanged("Layers");
+            OnPropertyChanged("GerberLayersCollection");
             if (SelectedLayer == null)
             {
                 SelectedLayer = e.Layer;
@@ -538,6 +844,7 @@ namespace PCBPlotter.ViewModels
         private void OnLayerRemoved(GerberLayerRemovedEvent e)
         {
             OnPropertyChanged("Layers");
+            OnPropertyChanged("GerberLayersCollection");
         }
 
         #endregion

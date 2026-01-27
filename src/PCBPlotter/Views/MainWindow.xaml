@@ -25,113 +25,125 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Menu Bar -->
-        <Menu Grid.Row="0" Background="{StaticResource BackgroundMediumBrush}">
+        <Menu Grid.Row="0" Background="{StaticResource BackgroundLightBrush}">
             <MenuItem Header="_File">
                 <MenuItem Header="_New Project" Command="{Binding NewProjectCommand}" InputGestureText="Ctrl+N"/>
                 <MenuItem Header="_Open Project..." Command="{Binding OpenProjectCommand}" InputGestureText="Ctrl+O"/>
+                <MenuItem Header="Open _Recent" ItemsSource="{Binding RecentProjects}">
+                    <MenuItem.ItemContainerStyle>
+                        <Style TargetType="MenuItem" BasedOn="{StaticResource {x:Type MenuItem}}">
+                            <Setter Property="Header" Value="{Binding Name}"/>
+                            <Setter Property="Command" Value="{Binding DataContext.OpenRecentProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                            <Setter Property="CommandParameter" Value="{Binding FilePath}"/>
+                        </Style>
+                    </MenuItem.ItemContainerStyle>
+                </MenuItem>
                 <Separator/>
                 <MenuItem Header="_Save" Command="{Binding SaveProjectCommand}" InputGestureText="Ctrl+S"/>
                 <MenuItem Header="Save _As..." Command="{Binding SaveProjectAsCommand}" InputGestureText="Ctrl+Shift+S"/>
                 <Separator/>
                 <MenuItem Header="_Close Project" Command="{Binding CloseProjectCommand}"/>
                 <Separator/>
+                <MenuItem Header="_Settings..." Command="{Binding OpenSettingsCommand}"/>
+                <Separator/>
                 <MenuItem Header="E_xit" Command="{Binding ExitCommand}" InputGestureText="Alt+F4"/>
             </MenuItem>
             <MenuItem Header="_Edit">
                 <MenuItem Header="_Undo" Command="{Binding UndoCommand}" InputGestureText="Ctrl+Z"/>
                 <MenuItem Header="_Redo" Command="{Binding RedoCommand}" InputGestureText="Ctrl+Y"/>
+                <Separator/>
+                <MenuItem Header="Select _All" InputGestureText="Ctrl+A"/>
+                <MenuItem Header="Select _None" InputGestureText="Escape"/>
+            </MenuItem>
+            <MenuItem Header="_Board">
+                <MenuItem Header="_Set Board Area..." Command="{Binding SetBoardAreaCommand}"/>
+                <Separator/>
+                <MenuItem Header="_Translate Board..." Command="{Binding TranslateBoardCommand}"/>
+                <MenuItem Header="Translate _Top Placements..." Command="{Binding TranslateTopPlacementsCommand}"/>
+                <MenuItem Header="Translate B_ottom Placements..." Command="{Binding TranslateBottomPlacementsCommand}"/>
             </MenuItem>
             <MenuItem Header="_Import">
+                <MenuItem Header="Import _PNP Text File..." Command="{Binding ImportPnpTextCommand}"/>
                 <MenuItem Header="Import _CAD Data..." Command="{Binding ImportCadCommand}"/>
                 <MenuItem Header="Import _BOM..." Command="{Binding ImportBomCommand}"/>
                 <MenuItem Header="Import _Gerber..." Command="{Binding ImportGerberCommand}"/>
             </MenuItem>
             <MenuItem Header="E_xport">
                 <MenuItem Header="Export _Machine File..." Command="{Binding ExportMachineFileCommand}"/>
+                <MenuItem Header="Export _BOM..." Command="{Binding ExportBomCommand}"/>
             </MenuItem>
             <MenuItem Header="_View">
-                <MenuItem Header="Float _Output Plot" Command="{Binding FloatOutputPlotCommand}"/>
+                <MenuItem Header="Float _Design View" Command="{Binding FloatDesignViewCommand}"/>
                 <MenuItem Header="Float _Placement Editor" Command="{Binding FloatPlacementEditorCommand}"/>
                 <MenuItem Header="Float _Component Editor" Command="{Binding FloatComponentEditorCommand}"/>
+                <MenuItem Header="Float _BOM Editor" Command="{Binding FloatBomEditorCommand}"/>
+                <MenuItem Header="Float _Gerber Viewer" Command="{Binding FloatGerberViewerCommand}"/>
+                <Separator/>
+                <MenuItem Header="_Theme">
+                    <MenuItem Header="Follow _System" IsCheckable="True" IsChecked="{Binding UseSystemTheme}"/>
+                    <MenuItem Header="_Dark" IsCheckable="True" IsChecked="{Binding UseDarkTheme}"/>
+                    <MenuItem Header="_Light" IsCheckable="True" IsChecked="{Binding UseLightTheme}"/>
+                </MenuItem>
             </MenuItem>
             <MenuItem Header="_Help">
-                <MenuItem Header="_About" Command="{Binding AboutCommand}"/>
+                <MenuItem Header="_About PCB Plotter" Command="{Binding AboutCommand}"/>
             </MenuItem>
         </Menu>
 
-        <!-- Toolbar -->
-        <ToolBarTray Grid.Row="1" Background="{StaticResource BackgroundMediumBrush}">
-            <ToolBar Background="{StaticResource BackgroundMediumBrush}" Band="0" BandIndex="0">
-                <Button Command="{Binding NewProjectCommand}" ToolTip="New Project" Padding="4">
-                    <TextBlock Text="New" FontSize="11"/>
-                </Button>
-                <Button Command="{Binding OpenProjectCommand}" ToolTip="Open Project" Padding="4">
-                    <TextBlock Text="Open" FontSize="11"/>
-                </Button>
-                <Button Command="{Binding SaveProjectCommand}" ToolTip="Save Project" Padding="4">
-                    <TextBlock Text="Save" FontSize="11"/>
-                </Button>
-                <Separator/>
-                <Button Command="{Binding UndoCommand}" ToolTip="Undo" Padding="4">
-                    <TextBlock Text="Undo" FontSize="11"/>
-                </Button>
-                <Button Command="{Binding RedoCommand}" ToolTip="Redo" Padding="4">
-                    <TextBlock Text="Redo" FontSize="11"/>
-                </Button>
-                <Separator/>
-                <Button Command="{Binding ImportCadCommand}" ToolTip="Import CAD" Padding="4">
-                    <TextBlock Text="Import CAD" FontSize="11"/>
-                </Button>
-                <Button Command="{Binding ImportBomCommand}" ToolTip="Import BOM" Padding="4">
-                    <TextBlock Text="Import BOM" FontSize="11"/>
-                </Button>
-                <Button Command="{Binding ExportMachineFileCommand}" ToolTip="Export Machine File" Padding="4">
-                    <TextBlock Text="Export" FontSize="11"/>
-                </Button>
-            </ToolBar>
-        </ToolBarTray>
-
         <!-- Main Content Area -->
-        <TabControl Grid.Row="2"
-                    SelectedIndex="{Binding SelectedTabIndex}"
-                    Background="{StaticResource BackgroundMediumBrush}"
-                    BorderBrush="{StaticResource BorderDarkBrush}">
+        <Grid Grid.Row="1">
+            <!-- Start Screen (shown when no project is open) -->
+            <local:StartScreenView x:Name="StartScreen"
+                                   DataContext="{Binding}"
+                                   Visibility="{Binding ShowStartScreen, Converter={StaticResource BoolToVisibilityConverter}}"/>
 
-            <!-- Output Plot Tab -->
-            <TabItem Header="Output Plot">
-                <local:OutputPlotView DataContext="{Binding OutputPlotViewModel}"/>
-            </TabItem>
+            <!-- Project Tabs (shown when a project is open) -->
+            <TabControl x:Name="MainTabs"
+                        SelectedIndex="{Binding SelectedTabIndex}"
+                        Background="{StaticResource BackgroundMediumBrush}"
+                        BorderBrush="{StaticResource BorderDarkBrush}"
+                        Visibility="{Binding ShowStartScreen, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=invert}">
 
-            <!-- Placement Editor Tab -->
-            <TabItem Header="Placements">
-                <local:PlacementEditorView DataContext="{Binding PlacementEditorViewModel}"/>
-            </TabItem>
+                <!-- Design Tab (renamed from Output Plot) -->
+                <TabItem Header="Design">
+                    <local:OutputPlotView DataContext="{Binding OutputPlotViewModel}"/>
+                </TabItem>
 
-            <!-- Component Editor Tab -->
-            <TabItem Header="Components">
-                <local:ComponentEditorView DataContext="{Binding ComponentEditorViewModel}"/>
-            </TabItem>
+                <!-- Placement Editor Tab -->
+                <TabItem Header="Placements">
+                    <local:PlacementEditorView DataContext="{Binding PlacementEditorViewModel}"/>
+                </TabItem>
 
-            <!-- BOM Editor Tab -->
-            <TabItem Header="BOM">
-                <local:BomEditorView DataContext="{Binding BomEditorViewModel}"/>
-            </TabItem>
+                <!-- Component Editor Tab -->
+                <TabItem Header="Components">
+                    <local:ComponentEditorView DataContext="{Binding ComponentEditorViewModel}"/>
+                </TabItem>
 
-            <!-- Gerber Viewer Tab -->
-            <TabItem Header="Gerber">
-                <local:GerberViewerView DataContext="{Binding GerberViewerViewModel}"/>
-            </TabItem>
+                <!-- BOM Editor Tab -->
+                <TabItem Header="BOM">
+                    <local:BomEditorView DataContext="{Binding BomEditorViewModel}"/>
+                </TabItem>
 
-        </TabControl>
+                <!-- Gerber Viewer Tab -->
+                <TabItem Header="Gerber">
+                    <local:GerberViewerView DataContext="{Binding GerberViewerViewModel}"/>
+                </TabItem>
+
+                <!-- Log Tab -->
+                <TabItem Header="Log">
+                    <local:LogView DataContext="{Binding LogViewModel}"/>
+                </TabItem>
+
+            </TabControl>
+        </Grid>
 
         <!-- Status Bar -->
-        <StatusBar Grid.Row="3" Background="{StaticResource AccentPrimaryBrush}">
+        <StatusBar Grid.Row="2" Background="{StaticResource AccentPrimaryBrush}">
             <StatusBarItem>
                 <TextBlock Text="{Binding StatusMessage}" Foreground="White"/>
             </StatusBarItem>

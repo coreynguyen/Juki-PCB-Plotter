@@ -1,0 +1,116 @@
+<Window x:Class="PCBPlotter.Views.ImportOdbDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Import ODB++" Height="550" Width="650"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        MinHeight="400" MinWidth="500"
+        Background="{DynamicResource BackgroundMediumBrush}">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- File Selection -->
+        <GroupBox Grid.Row="0" Header="ODB++ Source" Margin="0,0,0,12">
+            <Grid Margin="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBox x:Name="SourcePathTextBox" Grid.Row="0" Grid.Column="0"
+                         Margin="0,0,8,0" VerticalContentAlignment="Center"/>
+                <Button x:Name="BrowseFileButton" Grid.Row="0" Grid.Column="1"
+                        Content="File..." Width="60" Margin="0,0,4,0"
+                        Click="BrowseFileButton_Click"/>
+                <Button x:Name="BrowseFolderButton" Grid.Row="0" Grid.Column="2"
+                        Content="Folder..." Width="60"
+                        Click="BrowseFolderButton_Click"/>
+
+                <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Margin="0,8,0,0"
+                           TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}">
+                    Supports: .tgz, .tar.gz, .tar, .zip, .odb files or unpacked ODB++ directory
+                </TextBlock>
+            </Grid>
+        </GroupBox>
+
+        <!-- Parse Status -->
+        <GroupBox Grid.Row="1" Header="Parse Status" Margin="0,0,0,12">
+            <Grid Margin="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="StatusText" Grid.Column="0" VerticalAlignment="Center"
+                           Text="No file loaded"/>
+                <Button x:Name="ParseButton" Grid.Column="2" Content="Parse"
+                        Width="80" Click="ParseButton_Click"/>
+            </Grid>
+        </GroupBox>
+
+        <!-- Preview Data -->
+        <GroupBox Grid.Row="2" Header="Preview" Margin="0,0,0,12">
+            <Grid Margin="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock Text="Show:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <RadioButton x:Name="ShowTopRadio" Content="Top" GroupName="Side"
+                                 IsChecked="True" Margin="0,0,12,0"
+                                 Checked="SideRadio_Changed"/>
+                    <RadioButton x:Name="ShowBottomRadio" Content="Bottom" GroupName="Side"
+                                 Checked="SideRadio_Changed"/>
+                    <RadioButton x:Name="ShowAllRadio" Content="All" GroupName="Side"
+                                 Checked="SideRadio_Changed"/>
+                </StackPanel>
+
+                <DataGrid x:Name="ComponentsGrid" Grid.Row="1"
+                          AutoGenerateColumns="False" IsReadOnly="True"
+                          CanUserAddRows="False" CanUserDeleteRows="False"
+                          HeadersVisibility="Column"
+                          GridLinesVisibility="Horizontal"
+                          SelectionMode="Extended">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="RefDes" Binding="{Binding RefDes}" Width="70"/>
+                        <DataGridTextColumn Header="X (mm)" Binding="{Binding XMm, StringFormat=F3}" Width="70"/>
+                        <DataGridTextColumn Header="Y (mm)" Binding="{Binding YMm, StringFormat=F3}" Width="70"/>
+                        <DataGridTextColumn Header="Rot" Binding="{Binding Rotation, StringFormat=F1}" Width="50"/>
+                        <DataGridTextColumn Header="Layer" Binding="{Binding Layer}" Width="60"/>
+                        <DataGridTextColumn Header="Package" Binding="{Binding PackageName}" Width="100"/>
+                        <DataGridTextColumn Header="Part Number" Binding="{Binding PartNumber}" Width="*"/>
+                        <DataGridTextColumn Header="Pins" Binding="{Binding Pins.Count}" Width="45"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </GroupBox>
+
+        <!-- Summary -->
+        <GroupBox Grid.Row="3" Header="Summary" Margin="0,0,0,12">
+            <TextBlock x:Name="SummaryText" Margin="8" TextWrapping="Wrap"/>
+        </GroupBox>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="ImportButton" Content="Import" Width="100" Padding="8,4"
+                    IsEnabled="False" Click="ImportButton_Click"/>
+            <Button Content="Cancel" Width="80" Padding="8,4" Margin="8,0,0,0"
+                    IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

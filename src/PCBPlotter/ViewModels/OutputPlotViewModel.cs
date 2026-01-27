@@ -30,6 +30,8 @@ namespace PCBPlotter.ViewModels
         private double _gridSpacing = 1.0;
         private ObservableCollection<Placement> _selectedPlacements;
         private string _coordinateDisplay;
+        private string _currentSelectionSetName;
+        private ObservableCollection<string> _selectionSetNames;
 
         public Project Project
         {
@@ -40,7 +42,20 @@ namespace PCBPlotter.ViewModels
                 {
                     OnPropertyChanged("Placements");
                     OnPropertyChanged("Fiducials");
+                    RefreshSelectionSetNames();
                     Publish(new RequestRefreshEvent { FullRefresh = true });
+                }
+            }
+        }
+
+        private void RefreshSelectionSetNames()
+        {
+            SelectionSetNames.Clear();
+            if (Project?.SelectionSets != null)
+            {
+                foreach (var set in Project.SelectionSets)
+                {
+                    SelectionSetNames.Add(set.Name);
                 }
             }
         }
@@ -50,7 +65,7 @@ namespace PCBPlotter.ViewModels
             get { return _zoom; }
             set
             {
-                if (SetProperty(ref _zoom, Math.Max(0.1, Math.Min(50, value))))
+                if (SetProperty(ref _zoom, Math.Max(0.1, Math.Min(500, value))))
                 {
                     Publish(new ZoomChangedEvent { ZoomLevel = _zoom });
                 }
@@ -188,6 +203,24 @@ namespace PCBPlotter.ViewModels
             get { return _project != null ? _project.Fiducials : Enumerable.Empty<Fiducial>(); }
         }
 
+        /// <summary>
+        /// Names of all selection sets for the dropdown
+        /// </summary>
+        public ObservableCollection<string> SelectionSetNames
+        {
+            get { return _selectionSetNames; }
+            set { SetProperty(ref _selectionSetNames, value); }
+        }
+
+        /// <summary>
+        /// Current selection set name (for typing new names)
+        /// </summary>
+        public string CurrentSelectionSetName
+        {
+            get { return _currentSelectionSetName; }
+            set { SetProperty(ref _currentSelectionSetName, value); }
+        }
+
         // Commands
         public ICommand ZoomInCommand { get; private set; }
         public ICommand ZoomOutCommand { get; private set; }
@@ -205,10 +238,17 @@ namespace PCBPlotter.ViewModels
         public ICommand FocusSelectionCommand { get; private set; }
         public ICommand EnableForExportCommand { get; private set; }
         public ICommand DisableForExportCommand { get; private set; }
+        public ICommand AddPcbAreaCommand { get; private set; }
+        public ICommand AddPlacementCommand { get; private set; }
+        public ICommand AddFiducialCommand { get; private set; }
+        public ICommand DeleteSelectionSetCommand { get; private set; }
+        public ICommand TranslateSelectedCommand { get; private set; }
+        public ICommand ShowPlacementCommand { get; private set; }
 
         public OutputPlotViewModel()
         {
             _selectedPlacements = new ObservableCollection<Placement>();
+            _selectionSetNames = new ObservableCollection<string>();
             InitializeCommands();
             SubscribeToEvents();
         }
@@ -231,12 +271,33 @@ namespace PCBPlotter.ViewModels
             FocusSelectionCommand = new RelayCommand(ExecuteFocusSelection, () => SelectedPlacements.Count > 0);
             EnableForExportCommand = new RelayCommand(ExecuteEnableForExport, () => SelectedPlacements.Count > 0);
             DisableForExportCommand = new RelayCommand(ExecuteDisableForExport, () => SelectedPlacements.Count > 0);
+            AddPcbAreaCommand = new RelayCommand(ExecuteAddPcbArea, () => Project != null);
+            AddPlacementCommand = new RelayCommand(ExecuteAddPlacement, () => Project != null);
+            AddFiducialCommand = new RelayCommand(ExecuteAddFiducial, () => Project != null);
+            DeleteSelectionSetCommand = new RelayCommand(ExecuteDeleteSelectionSet, () => !string.IsNullOrEmpty(CurrentSelectionSetName));
+            TranslateSelectedCommand = new RelayCommand(ExecuteTranslateSelected, () => SelectedPlacements.Count > 0);
+            ShowPlacementCommand = new RelayCommand(ExecuteShowPlacement, () => SelectedPlacements.Count > 0);
         }
 
         private void SubscribeToEvents()
         {
             Subscribe<SelectionChangedEvent>(OnSelectionChanged);
             Subscribe<FocusPlacementEvent>(OnFocusPlacement);
+            Subscribe<ZoomFitRequestEvent>(OnZoomFitRequest);
+            Subscribe<RequestRefreshEvent>(OnRefreshRequest);
+        }
+
+        private void OnZoomFitRequest(ZoomFitRequestEvent e)
+        {
+            ExecuteZoomFit();
+        }
+
+        private void OnRefreshRequest(RequestRefreshEvent e)
+        {
+            // Notify bindings to refresh
+            OnPropertyChanged("Placements");
+            OnPropertyChanged("Fiducials");
+            OnPropertyChanged("Project");
         }
 
         private void UpdateCoordinateDisplay()
@@ -269,12 +330,86 @@ namespace PCBPlotter.ViewModels
 
         #region Command Implementations
 
+        // Viewport dimensions (set by the view)
+        public double ViewportWidth { get; set; } = 800;
+        public double ViewportHeight { get; set; } = 600;
+
         private void ExecuteZoomFit()
         {
-            // TODO: Calculate bounds and fit to view
-            Zoom = 1.0;
-            PanX = 0;
-            PanY = 0;
+            if (Project == null || !Project.Placements.Any())
+            {
+                Zoom = 20.0; // Better default zoom for mm-based designs
+                PanX = ViewportWidth / 2;
+                PanY = ViewportHeight / 2;
+                return;
+            }
+
+            // Calculate bounds of all placements
+            double minX = double.MaxValue, minY = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue;
+
+            foreach (var placement in Project.Placements)
+            {
+                if (placement.X < minX) minX = placement.X;
+                if (placement.Y < minY) minY = placement.Y;
+                if (placement.X > maxX) maxX = placement.X;
+                if (placement.Y > maxY) maxY = placement.Y;
+            }
+
+            // Add fiducials to bounds
+            foreach (var fiducial in Project.Fiducials)
+            {
+                if (fiducial.X < minX) minX = fiducial.X;
+                if (fiducial.Y < minY) minY = fiducial.Y;
+                if (fiducial.X > maxX) maxX = fiducial.X;
+                if (fiducial.Y > maxY) maxY = fiducial.Y;
+            }
+
+            // Handle edge cases
+            if (minX == double.MaxValue)
+            {
+                Zoom = 20.0; // Better default zoom for mm-based designs
+                PanX = ViewportWidth / 2;
+                PanY = ViewportHeight / 2;
+                return;
+            }
+
+            // Add margin (10%)
+            double margin = Math.Max(maxX - minX, maxY - minY) * 0.1;
+            if (margin < 5) margin = 5;
+            minX -= margin;
+            minY -= margin;
+            maxX += margin;
+            maxY += margin;
+
+            double boundsWidth = maxX - minX;
+            double boundsHeight = maxY - minY;
+
+            if (boundsWidth <= 0) boundsWidth = 100;
+            if (boundsHeight <= 0) boundsHeight = 100;
+
+            // Calculate zoom to fit
+            double zoomX = ViewportWidth / boundsWidth;
+            double zoomY = ViewportHeight / boundsHeight;
+            Zoom = Math.Min(zoomX, zoomY) * 0.85; // 85% to leave visual margin
+
+            // Calculate world center
+            double centerX = (minX + maxX) / 2;
+            double centerY = (minY + maxY) / 2;
+
+            // Calculate pan to center content
+            // WorldToScreen: screenX = world.X * Zoom + PanX
+            // We want: screenCenter = centerX * Zoom + PanX
+            // So: PanX = screenCenter - centerX * Zoom
+            PanX = (ViewportWidth / 2) - (centerX * Zoom);
+
+            // WorldToScreen: screenY = ViewportHeight - (world.Y * Zoom + PanY)
+            // We want: screenCenter (ViewportHeight/2) = ViewportHeight - (centerY * Zoom + PanY)
+            // Solving: centerY * Zoom + PanY = ViewportHeight/2
+            // So: PanY = ViewportHeight/2 - centerY * Zoom
+            PanY = (ViewportHeight / 2) - (centerY * Zoom);
+
+            Publish(new RequestRefreshEvent { FullRefresh = true });
         }
 
         private void ExecuteSelectAll()
@@ -433,6 +568,144 @@ namespace PCBPlotter.ViewModels
                     placement.IsExportEnabledBottom = false;
             }
             Publish(new RequestRefreshEvent { FullRefresh = false });
+        }
+
+        private void ExecuteAddPcbArea()
+        {
+            // TODO: Show dialog to define PCB area
+            Publish(new ShowDialogEvent { DialogType = "PcbArea" });
+            Publish(new StatusMessageEvent { Message = "Draw PCB area on canvas" });
+        }
+
+        private void ExecuteAddPlacement()
+        {
+            if (Project == null) return;
+
+            // Create a new placement at cursor position
+            var placement = new Placement
+            {
+                Reference = string.Format("U{0}", Project.Placements.Count + 1),
+                X = CursorPosition.X,
+                Y = CursorPosition.Y,
+                Rotation = 0,
+                Side = ViewSide
+            };
+
+            Project.Placements.Add(placement);
+            SelectPlacement(placement);
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+            Publish(new StatusMessageEvent { Message = string.Format("Added placement {0}", placement.Reference) });
+        }
+
+        private void ExecuteAddFiducial()
+        {
+            if (Project == null) return;
+
+            var fiducial = new Fiducial
+            {
+                Name = string.Format("FID{0}", Project.Fiducials.Count + 1),
+                X = CursorPosition.X,
+                Y = CursorPosition.Y,
+                Side = ViewSide,
+                Type = FiducialType.Global
+            };
+
+            Project.Fiducials.Add(fiducial);
+            Publish(new RequestRefreshEvent { FullRefresh = true });
+            Publish(new StatusMessageEvent { Message = string.Format("Added fiducial {0}", fiducial.Name) });
+        }
+
+        private void ExecuteDeleteSelectionSet()
+        {
+            if (Project == null || string.IsNullOrEmpty(CurrentSelectionSetName)) return;
+
+            var set = Project.SelectionSets.FirstOrDefault(s => s.Name == CurrentSelectionSetName);
+            if (set != null)
+            {
+                Project.SelectionSets.Remove(set);
+                RefreshSelectionSetNames();
+                CurrentSelectionSetName = null;
+            }
+        }
+
+        private void ExecuteTranslateSelected()
+        {
+            Publish(new ShowDialogEvent
+            {
+                DialogType = "TranslatePlacements",
+                Parameter = SelectedPlacements.ToList()
+            });
+        }
+
+        private void ExecuteShowPlacement()
+        {
+            if (SelectedPlacements.Count == 0) return;
+
+            // Navigate to Placements tab (index 1) and scroll to first selected placement
+            Publish(new NavigateToTabEvent
+            {
+                TabIndex = 1, // Placements tab
+                ScrollToPlacement = SelectedPlacements.First()
+            });
+        }
+
+        /// <summary>
+        /// Creates a new selection set or updates existing one with current selection
+        /// </summary>
+        public void CreateOrUpdateSelectionSet(string name)
+        {
+            if (Project == null || string.IsNullOrEmpty(name)) return;
+
+            // Find existing set or create new
+            var existing = Project.SelectionSets.FirstOrDefault(s =>
+                string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+
+            if (existing != null)
+            {
+                // Update existing
+                existing.PlacementIds.Clear();
+                foreach (var p in SelectedPlacements)
+                {
+                    existing.Add(p);
+                }
+            }
+            else
+            {
+                // Create new
+                var newSet = new SelectionSet(name, SelectedPlacements);
+                Project.SelectionSets.Add(newSet);
+                RefreshSelectionSetNames();
+            }
+
+            CurrentSelectionSetName = name;
+            Publish(new StatusMessageEvent
+            {
+                Message = string.Format("Selection set '{0}' saved with {1} items", name, SelectedPlacements.Count)
+            });
+        }
+
+        /// <summary>
+        /// Recalls a selection set by name
+        /// </summary>
+        public List<Placement> RecallSelectionSet(string name)
+        {
+            if (Project == null || string.IsNullOrEmpty(name)) return null;
+
+            var set = Project.SelectionSets.FirstOrDefault(s => s.Name == name);
+            if (set == null) return null;
+
+            var result = new List<Placement>();
+            foreach (var id in set.PlacementIds)
+            {
+                var placement = Project.Placements.FirstOrDefault(p => p.Id == id);
+                if (placement != null)
+                {
+                    result.Add(placement);
+                }
+            }
+
+            CurrentSelectionSetName = name;
+            return result;
         }
 
         #endregion
