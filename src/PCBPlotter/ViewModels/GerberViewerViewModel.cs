@@ -732,6 +732,13 @@ namespace PCBPlotter.ViewModels
                 "");
             inputDialog.Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
 
+            // Provide existing references for duplicate validation
+            inputDialog.ExistingValues = new HashSet<string>(
+                Project.Placements
+                    .Where(p => !string.IsNullOrEmpty(p.Reference))
+                    .Select(p => p.Reference.ToUpperInvariant()),
+                StringComparer.OrdinalIgnoreCase);
+
             if (inputDialog.ShowDialog() != true)
                 return;
 
