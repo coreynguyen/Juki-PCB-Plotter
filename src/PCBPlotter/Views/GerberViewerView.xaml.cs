@@ -64,9 +64,8 @@ namespace PCBPlotter.Views
             OpenGLCanvas.LayerPicked += OnLayerPicked;
 
             // Right-click creates placement from selection
-            // Use Preview event for OpenGL canvas (WinForms interop doesn't bubble routed events)
             GerberCanvas.MouseRightButtonUp += OnCanvasRightClick;
-            OpenGLCanvas.PreviewMouseRightButtonUp += OnCanvasRightClick;
+            OpenGLCanvas.RightClicked += OnOpenGLCanvasRightClick;
 
             // Force refresh when the view becomes visible (e.g. switching to Gerber tab)
             // This fixes layers not rendering after tab content is deferred-loaded by WPF
@@ -296,7 +295,7 @@ namespace PCBPlotter.Views
         }
 
         /// <summary>
-        /// Right-click on canvas directly creates placement from selection (same as Enter key).
+        /// Right-click on CPU canvas directly creates placement from selection (same as Enter key).
         /// </summary>
         private void OnCanvasRightClick(object sender, MouseButtonEventArgs e)
         {
@@ -307,6 +306,20 @@ namespace PCBPlotter.Views
             {
                 vm.AddSelectionToOutputCommand.Execute(null);
                 e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Right-click on OpenGL canvas directly creates placement from selection (same as Enter key).
+        /// </summary>
+        private void OnOpenGLCanvasRightClick(object sender, Point worldPos)
+        {
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm == null) return;
+
+            if (vm.SelectedPrimitives != null && vm.SelectedPrimitives.Count > 0)
+            {
+                vm.AddSelectionToOutputCommand.Execute(null);
             }
         }
 

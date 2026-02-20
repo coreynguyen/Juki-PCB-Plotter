@@ -2877,6 +2877,13 @@ void main()
                     PointClicked?.Invoke(this, worldPos);
                 }
             }
+            else if (e.Button == System.Windows.Forms.MouseButtons.Right)
+            {
+                // Right-click - raise right clicked event
+                Point screenPos = new Point(e.X, e.Y);
+                Point worldPos = ScreenToWorld(screenPos);
+                RightClicked?.Invoke(this, worldPos);
+            }
         }
 
         private void GlControl_MouseMove(object sender, System.Windows.Forms.MouseEventArgs e)
@@ -3002,6 +3009,11 @@ void main()
         /// Raised when user clicks in the canvas (for selection)
         /// </summary>
         public event EventHandler<Point> PointClicked;
+
+        /// <summary>
+        /// Raised when user right-clicks in the canvas
+        /// </summary>
+        public event EventHandler<Point> RightClicked;
 
         /// <summary>
         /// Raised when user completes a selection rectangle
