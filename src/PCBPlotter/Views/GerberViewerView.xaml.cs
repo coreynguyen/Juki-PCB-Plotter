@@ -295,7 +295,7 @@ namespace PCBPlotter.Views
         }
 
         /// <summary>
-        /// Right-click on canvas shows a context menu when primitives are selected.
+        /// Right-click on canvas directly creates placement from selection (same as Enter key).
         /// </summary>
         private void OnCanvasRightClick(object sender, MouseButtonEventArgs e)
         {
@@ -304,28 +304,7 @@ namespace PCBPlotter.Views
 
             if (vm.SelectedPrimitives != null && vm.SelectedPrimitives.Count > 0)
             {
-                var canvas = sender as FrameworkElement;
-                if (canvas == null) return;
-
-                var menu = new ContextMenu();
-
-                var addToOutput = new MenuItem
-                {
-                    Header = string.Format("Create Placement from Selection ({0} primitives)", vm.SelectedPrimitives.Count),
-                    InputGestureText = "Enter"
-                };
-                addToOutput.Click += (s, args) => vm.AddSelectionToOutputCommand.Execute(null);
-                menu.Items.Add(addToOutput);
-
-                var createPackage = new MenuItem
-                {
-                    Header = "Create Package from Selection"
-                };
-                createPackage.Click += (s, args) => vm.CreatePackageFromSelectionCommand.Execute(null);
-                menu.Items.Add(createPackage);
-
-                menu.PlacementTarget = canvas;
-                menu.IsOpen = true;
+                vm.AddSelectionToOutputCommand.Execute(null);
                 e.Handled = true;
             }
         }
