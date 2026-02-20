@@ -45,19 +45,15 @@ namespace PCBPlotter.Views
             GerberCanvas.CursorPositionChanged += OnCursorPositionChanged;
             GerberCanvas.SelectionRectCompleted += OnSelectionRectCompleted;
             GerberCanvas.GerberSelectionChanged += OnCpuGerberSelectionChanged;
-            GerberCanvas.Loaded += (s, e) =>
-            {
-                var vm = DataContext as GerberViewerViewModel;
-                if (vm != null)
-                {
-                    vm.ZoomToFitWithViewport(GerberCanvas.ActualWidth, GerberCanvas.ActualHeight);
-                }
-            };
+            GerberCanvas.Loaded += OnCanvasLoaded;
+            GerberCanvas.SizeChanged += OnCanvasSizeChanged;
 
             // Wire up OpenGL canvas events for selection support
             OpenGLCanvas.CursorPositionChanged += OnCursorPositionChanged;
             OpenGLCanvas.SelectionRectCompleted += OnOpenGLSelectionRectCompleted;
             OpenGLCanvas.PointClicked += OnOpenGLPointClicked;
+            OpenGLCanvas.Loaded += OnCanvasLoaded;
+            OpenGLCanvas.SizeChanged += OnCanvasSizeChanged;
 
             // Alt+Click in viewport picks a layer
             GerberCanvas.LayerPicked += OnLayerPicked;
@@ -117,6 +113,53 @@ namespace PCBPlotter.Views
             GerberCanvas.InvalidateGerberCache();
             if (OpenGLCanvas.Visibility == Visibility.Visible)
                 OpenGLCanvas.Invalidate();
+        }
+
+        private void OnCanvasLoaded(object sender, RoutedEventArgs e)
+        {
+            UpdateViewportSize();
+            // Initial zoom fit when canvas is first loaded
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm != null)
+            {
+                var (width, height) = GetActiveCanvasSize();
+                if (width > 0 && height > 0)
+                {
+                    vm.ZoomToFitWithViewport(width, height);
+                }
+            }
+        }
+
+        private void OnCanvasSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            UpdateViewportSize();
+        }
+
+        private void UpdateViewportSize()
+        {
+            var vm = DataContext as GerberViewerViewModel;
+            if (vm == null) return;
+
+            var (width, height) = GetActiveCanvasSize();
+            if (width > 0 && height > 0)
+            {
+                vm.UpdateViewportSize(width, height);
+            }
+        }
+
+        private (double width, double height) GetActiveCanvasSize()
+        {
+            // Use whichever canvas is currently visible
+            if (_useOpenGL && OpenGLCanvas.Visibility == Visibility.Visible)
+            {
+                return (OpenGLCanvas.ActualWidth, OpenGLCanvas.ActualHeight);
+            }
+            else if (GerberCanvas.Visibility == Visibility.Visible)
+            {
+                return (GerberCanvas.ActualWidth, GerberCanvas.ActualHeight);
+            }
+            // Fallback to OpenGL canvas dimensions even if collapsed (for initial load)
+            return (OpenGLCanvas.ActualWidth, OpenGLCanvas.ActualHeight);
         }
 
         private void OnActiveLayerChanged(GerberLayer layer)

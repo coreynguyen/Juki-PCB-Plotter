@@ -21,6 +21,8 @@ namespace PCBPlotter.ViewModels
         private double _zoom = 1.0;
         private double _panX;
         private double _panY;
+        private double _viewportWidth = 800;
+        private double _viewportHeight = 600;
         private Point _cursorPosition;
         private GerberLayer _selectedLayer;
         private ObservableCollection<GerberPrimitive> _selectedPrimitives;
@@ -591,44 +593,27 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteZoomFit()
         {
-            if (Project == null || !Project.GerberLayers.Any()) return;
+            // Use stored viewport dimensions (updated by View when canvas size changes)
+            ZoomToFitWithViewport(_viewportWidth, _viewportHeight);
+        }
 
-            // Calculate bounds of all visible layers
-            Rect bounds = Rect.Empty;
-            foreach (var layer in Project.GerberLayers.Where(l => l.IsVisible))
+        /// <summary>
+        /// Updates the stored viewport size. Called by the View when canvas size changes.
+        /// </summary>
+        public void UpdateViewportSize(double width, double height)
+        {
+            if (width > 0 && height > 0)
             {
-                var layerBounds = layer.Bounds;
-                if (!layerBounds.IsEmpty)
-                {
-                    if (bounds.IsEmpty)
-                        bounds = layerBounds;
-                    else
-                        bounds.Union(layerBounds);
-                }
-            }
-
-            if (!bounds.IsEmpty && bounds.Width > 0 && bounds.Height > 0)
-            {
-                // Calculate zoom to fit bounds with margin
-                // Assume a reasonable viewport size if not available
-                double viewportWidth = 800;
-                double viewportHeight = 600;
-
-                double marginFactor = 0.9; // Use 90% of viewport
-                double zoomX = (viewportWidth * marginFactor) / bounds.Width;
-                double zoomY = (viewportHeight * marginFactor) / bounds.Height;
-                Zoom = Math.Min(zoomX, zoomY);
-
-                // Center the bounds
-                double centerX = bounds.X + bounds.Width / 2;
-                double centerY = bounds.Y + bounds.Height / 2;
-                PanX = viewportWidth / 2 - centerX * Zoom;
-                PanY = viewportHeight / 2 - centerY * Zoom;
+                _viewportWidth = width;
+                _viewportHeight = height;
             }
         }
 
         public void ZoomToFitWithViewport(double viewportWidth, double viewportHeight)
         {
+            // Store the viewport size for future ZoomFit calls
+            UpdateViewportSize(viewportWidth, viewportHeight);
+
             if (Project == null || !Project.GerberLayers.Any()) return;
 
             // Calculate bounds of all visible layers

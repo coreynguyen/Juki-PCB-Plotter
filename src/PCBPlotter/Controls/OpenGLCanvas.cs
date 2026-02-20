@@ -3125,8 +3125,13 @@ void main()
             double zoomY = height / bounds.Height * 0.9;
             Zoom = Math.Min(zoomX, zoomY);
 
-            PanX = bounds.X + bounds.Width / 2;
-            PanY = bounds.Y + bounds.Height / 2;
+            // Center the bounds in the viewport
+            // WorldToScreen: screenX = world.X * Zoom + PanX
+            // To center: width/2 = centerX * Zoom + PanX => PanX = width/2 - centerX * Zoom
+            double centerX = bounds.X + bounds.Width / 2;
+            double centerY = bounds.Y + bounds.Height / 2;
+            PanX = width / 2 - centerX * Zoom;
+            PanY = height / 2 - centerY * Zoom;
         }
 
         /// <summary>
