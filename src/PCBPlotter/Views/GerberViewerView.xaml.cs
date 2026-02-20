@@ -63,9 +63,10 @@ namespace PCBPlotter.Views
             GerberCanvas.LayerPicked += OnLayerPicked;
             OpenGLCanvas.LayerPicked += OnLayerPicked;
 
-            // Right-click shows context menu when there's a selection
+            // Right-click creates placement from selection
+            // Use Preview event for OpenGL canvas (WinForms interop doesn't bubble routed events)
             GerberCanvas.MouseRightButtonUp += OnCanvasRightClick;
-            OpenGLCanvas.MouseRightButtonUp += OnCanvasRightClick;
+            OpenGLCanvas.PreviewMouseRightButtonUp += OnCanvasRightClick;
 
             // Force refresh when the view becomes visible (e.g. switching to Gerber tab)
             // This fixes layers not rendering after tab content is deferred-loaded by WPF
