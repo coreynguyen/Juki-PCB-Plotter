@@ -164,7 +164,7 @@
                         <TextBlock Text="Renderer:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox x:Name="RendererComboBox" Width="100"
                                   SelectionChanged="RendererComboBox_SelectionChanged"
-                                  SelectedIndex="0">
+                                  SelectedIndex="1">
                             <ComboBoxItem Content="WPF (CPU)"/>
                             <ComboBoxItem Content="OpenGL (GPU)"/>
                         </ComboBox>
@@ -177,8 +177,9 @@
 
             <!-- Canvas Container - switches between WPF and OpenGL -->
             <Grid Grid.Row="1">
-                <!-- WPF Canvas (CPU) -->
+                <!-- WPF Canvas (CPU) - fallback if GPU fails -->
                 <controls:DesignCanvas x:Name="GerberCanvas"
+                                       Visibility="Collapsed"
                                        Zoom="{Binding Zoom, Mode=TwoWay}"
                                        PanX="{Binding PanX, Mode=TwoWay}"
                                        PanY="{Binding PanY, Mode=TwoWay}"
@@ -186,9 +187,8 @@
                                        UseScreenBlend="True"
                                        ShowGrid="True"/>
 
-                <!-- OpenGL Canvas (GPU) - hidden by default -->
+                <!-- OpenGL Canvas (GPU) - default renderer -->
                 <controls:OpenGLCanvas x:Name="OpenGLCanvas"
-                                       Visibility="Collapsed"
                                        Zoom="{Binding Zoom, Mode=TwoWay}"
                                        PanX="{Binding PanX, Mode=TwoWay}"
                                        PanY="{Binding PanY, Mode=TwoWay}"

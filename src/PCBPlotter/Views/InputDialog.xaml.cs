@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 
 namespace PCBPlotter.Views
 {
@@ -10,6 +11,7 @@ namespace PCBPlotter.Views
         {
             InitializeComponent();
             Title = title;
+            TitleText.Text = title;
             PromptText.Text = prompt;
             InputTextBox.Text = defaultValue;
             InputTextBox.SelectAll();
@@ -21,6 +23,18 @@ namespace PCBPlotter.Views
             Value = InputTextBox.Text;
             DialogResult = true;
             Close();
+        }
+
+        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            DialogResult = false;
+            Close();
+        }
+
+        private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 1)
+                DragMove();
         }
     }
 }

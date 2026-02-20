@@ -16,7 +16,7 @@ namespace PCBPlotter.Views
     /// </summary>
     public partial class GerberViewerView : UserControl
     {
-        private bool _useOpenGL = false;
+        private bool _useOpenGL = true;
         // Preset colors for quick layer color selection
         private static readonly Color[] _presetColors = new[]
         {
@@ -63,8 +63,9 @@ namespace PCBPlotter.Views
             GerberCanvas.LayerPicked += OnLayerPicked;
             OpenGLCanvas.LayerPicked += OnLayerPicked;
 
-            // Right-click directly adds selection to output (no context menu)
+            // Right-click shows context menu when there's a selection
             GerberCanvas.MouseRightButtonUp += OnCanvasRightClick;
+            OpenGLCanvas.MouseRightButtonUp += OnCanvasRightClick;
 
             // Force refresh when the view becomes visible (e.g. switching to Gerber tab)
             // This fixes layers not rendering after tab content is deferred-loaded by WPF
@@ -294,7 +295,7 @@ namespace PCBPlotter.Views
         }
 
         /// <summary>
-        /// Right-click on canvas directly adds selection to output (no context menu).
+        /// Right-click on canvas shows a context menu when primitives are selected.
         /// </summary>
         private void OnCanvasRightClick(object sender, MouseButtonEventArgs e)
         {
@@ -303,7 +304,28 @@ namespace PCBPlotter.Views
 
             if (vm.SelectedPrimitives != null && vm.SelectedPrimitives.Count > 0)
             {
-                vm.AddSelectionToOutputCommand.Execute(null);
+                var canvas = sender as FrameworkElement;
+                if (canvas == null) return;
+
+                var menu = new ContextMenu();
+
+                var addToOutput = new MenuItem
+                {
+                    Header = string.Format("Create Placement from Selection ({0} primitives)", vm.SelectedPrimitives.Count),
+                    InputGestureText = "Enter"
+                };
+                addToOutput.Click += (s, args) => vm.AddSelectionToOutputCommand.Execute(null);
+                menu.Items.Add(addToOutput);
+
+                var createPackage = new MenuItem
+                {
+                    Header = "Create Package from Selection"
+                };
+                createPackage.Click += (s, args) => vm.CreatePackageFromSelectionCommand.Execute(null);
+                menu.Items.Add(createPackage);
+
+                menu.PlacementTarget = canvas;
+                menu.IsOpen = true;
                 e.Handled = true;
             }
         }
@@ -425,12 +447,29 @@ namespace PCBPlotter.Views
         {
             if (useOpenGL)
             {
-                // Switch to OpenGL
-                GerberCanvas.Visibility = Visibility.Collapsed;
-                OpenGLCanvas.Visibility = Visibility.Visible;
+                try
+                {
+                    // Switch to OpenGL
+                    GerberCanvas.Visibility = Visibility.Collapsed;
+                    OpenGLCanvas.Visibility = Visibility.Visible;
 
-                // Apply screen blend setting
-                OpenGLCanvas.UseScreenBlend = ScreenBlendCheckBox?.IsChecked ?? true;
+                    // Apply screen blend setting
+                    OpenGLCanvas.UseScreenBlend = ScreenBlendCheckBox?.IsChecked ?? true;
+                }
+                catch (Exception ex)
+                {
+                    // GPU initialization failed - fall back to CPU renderer
+                    System.Diagnostics.Debug.WriteLine("OpenGL init failed, falling back to CPU: " + ex.Message);
+                    _useOpenGL = false;
+                    OpenGLCanvas.Visibility = Visibility.Collapsed;
+                    GerberCanvas.Visibility = Visibility.Visible;
+                    GerberCanvas.UseScreenBlend = ScreenBlendCheckBox?.IsChecked ?? true;
+
+                    // Update the ComboBox to reflect the fallback
+                    RendererComboBox.SelectionChanged -= RendererComboBox_SelectionChanged;
+                    RendererComboBox.SelectedIndex = 0;
+                    RendererComboBox.SelectionChanged += RendererComboBox_SelectionChanged;
+                }
             }
             else
             {
