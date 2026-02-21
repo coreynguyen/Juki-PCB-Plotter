@@ -866,6 +866,7 @@ namespace PCBPlotter.Controls
                 RenderActiveLayerHighlight(dc);
             }
 
+            RenderGerberConsumedOverlay(dc);
             RenderGerberSelectionHighlights(dc);
         }
 
@@ -1554,6 +1555,26 @@ namespace PCBPlotter.Controls
                         dc.DrawGeometry(fillBrush, null, geometry);
                     }
                     break;
+            }
+        }
+
+        private void RenderGerberConsumedOverlay(DrawingContext dc)
+        {
+            if (GerberLayers == null) return;
+
+            // Green overlay for primitives that have been used to create placements
+            var consumedBrush = new SolidColorBrush(Color.FromArgb(160, 0, 180, 80));
+            consumedBrush.Freeze();
+
+            foreach (var layer in GerberLayers)
+            {
+                if (!layer.IsVisible || layer.Primitives == null)
+                    continue;
+
+                foreach (var prim in layer.Primitives.Where(p => p.IsConsumed && p.IsDark))
+                {
+                    RenderGerberPrimitiveToScreen(dc, prim, consumedBrush);
+                }
             }
         }
 

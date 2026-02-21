@@ -781,6 +781,20 @@ namespace PCBPlotter.ViewModels
                     package.Pins.Count, features.Centroid.X, features.Centroid.Y, placementRotation)
             });
 
+            // Mark the consumed primitives so they appear highlighted in the Gerber viewer
+            foreach (var prim in primitives)
+            {
+                prim.IsConsumed = true;
+                prim.IsSelected = false;
+            }
+
+            // Clear selection so user can immediately start the next selection
+            SelectedPrimitives.Clear();
+            Publish(new GerberSelectionChangedEvent
+            {
+                SelectedPrimitives = new List<GerberPrimitive>()
+            });
+
             // Navigate to the Design tab (tab index 0) to show the result
             Publish(new NavigateToTabEvent
             {

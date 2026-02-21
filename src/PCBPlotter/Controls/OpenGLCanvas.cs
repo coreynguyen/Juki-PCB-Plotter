@@ -838,6 +838,9 @@ void main()
                 RenderSelectionRect();
             }
 
+            // Render consumed overlay on primitives used for placements
+            RenderConsumedOverlay();
+
             // Render selection highlights on selected primitives
             RenderSelectionHighlights();
 
@@ -969,6 +972,49 @@ void main()
 
         /// <summary>
         /// Render highlight outlines around selected primitives on all visible layers.
+        /// Renders a green overlay on primitives that have been consumed (used to create placements).
+        /// </summary>
+        private void RenderConsumedOverlay()
+        {
+            if (GerberLayers == null || GerberLayers.Count == 0)
+                return;
+
+            bool hasConsumed = false;
+            foreach (var layer in GerberLayers)
+            {
+                if (!layer.IsVisible || layer.Primitives == null) continue;
+                foreach (var prim in layer.Primitives)
+                {
+                    if (prim.IsConsumed && prim.IsDark) { hasConsumed = true; break; }
+                }
+                if (hasConsumed) break;
+            }
+            if (!hasConsumed) return;
+
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+            // Green overlay for consumed primitives
+            var consumedColor = new OpenTK.Vector4(0.0f, 0.7f, 0.3f, 0.6f);
+
+            foreach (var layer in GerberLayers)
+            {
+                if (!layer.IsVisible || layer.Primitives == null) continue;
+                foreach (var prim in layer.Primitives)
+                {
+                    if (!prim.IsConsumed || !prim.IsDark) continue;
+                    RenderPrimitive(prim, consumedColor, 1.0f);
+                }
+            }
+        }
+
+        /// <summary>
         /// Uses the world-space projection so highlights align with the geometry.
         /// </summary>
         private void RenderSelectionHighlights()

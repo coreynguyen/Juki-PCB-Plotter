@@ -204,6 +204,7 @@ namespace PCBPlotter.Core.Models
         private int _apertureIndex;
         private bool _isSelected;
         private bool _isDark = true;
+        private bool _isConsumed;
 
         public string Id
         {
@@ -273,6 +274,16 @@ namespace PCBPlotter.Core.Models
         {
             get { return _isDark; }
             set { SetProperty(ref _isDark, value); }
+        }
+
+        /// <summary>
+        /// Whether this primitive has been used to create a placement.
+        /// Consumed primitives are rendered with a distinct overlay in the Gerber viewer.
+        /// </summary>
+        public bool IsConsumed
+        {
+            get { return _isConsumed; }
+            set { SetProperty(ref _isConsumed, value); }
         }
 
         public Point Position
