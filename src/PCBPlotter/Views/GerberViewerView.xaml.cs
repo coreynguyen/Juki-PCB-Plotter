@@ -95,6 +95,7 @@ namespace PCBPlotter.Views
                 oldVm.LayerVisibilityChanged -= OnLayerVisibilityChanged;
                 oldVm.ActiveLayerChanged -= OnActiveLayerChanged;
                 oldVm.RequestLayerListSelection -= OnRequestLayerListSelection;
+                oldVm.CanvasRefreshRequested -= OnCanvasRefreshRequested;
             }
 
             // Subscribe to new view model
@@ -104,6 +105,7 @@ namespace PCBPlotter.Views
                 newVm.LayerVisibilityChanged += OnLayerVisibilityChanged;
                 newVm.ActiveLayerChanged += OnActiveLayerChanged;
                 newVm.RequestLayerListSelection += OnRequestLayerListSelection;
+                newVm.CanvasRefreshRequested += OnCanvasRefreshRequested;
             }
         }
 
@@ -179,6 +181,14 @@ namespace PCBPlotter.Views
                 LayerListBox.SelectedItem = layer;
                 LayerListBox.ScrollIntoView(layer);
             }
+        }
+
+        private void OnCanvasRefreshRequested()
+        {
+            // Refresh both canvases to show consumed region overlays
+            GerberCanvas.InvalidateGerberCache();
+            if (OpenGLCanvas.Visibility == Visibility.Visible)
+                OpenGLCanvas.Invalidate();
         }
 
         /// <summary>

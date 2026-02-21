@@ -140,6 +140,7 @@ namespace PCBPlotter.ViewModels
 
         // Event to notify view of layer changes requiring refresh
         public event Action LayerVisibilityChanged;
+        public event Action CanvasRefreshRequested;
 
         // Event to notify view when active layer changes (for canvas update)
         public event Action<GerberLayer> ActiveLayerChanged;
@@ -802,8 +803,8 @@ namespace PCBPlotter.ViewModels
                 SelectedPrimitives = new List<GerberPrimitive>()
             });
 
-            // Request a refresh to show the consumed regions
-            Publish(new RequestRefreshEvent { FullRefresh = true });
+            // Request canvas refresh to show the consumed regions
+            CanvasRefreshRequested?.Invoke();
 
             // Navigate to the Design tab (tab index 0) to show the result
             Publish(new NavigateToTabEvent
