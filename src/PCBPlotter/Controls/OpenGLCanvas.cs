@@ -21,6 +21,26 @@ using PCBPlotter.Core.Models;
 namespace PCBPlotter.Controls
 {
     /// <summary>
+    /// Event args for point click events that include modifier key state
+    /// </summary>
+    public class PointClickedEventArgs : EventArgs
+    {
+        public Point WorldPosition { get; set; }
+        public bool IsCtrlPressed { get; set; }
+        public bool IsShiftPressed { get; set; }
+    }
+
+    /// <summary>
+    /// Event args for selection rectangle events that include modifier key state
+    /// </summary>
+    public class SelectionRectEventArgs : EventArgs
+    {
+        public Rect WorldRect { get; set; }
+        public bool IsCtrlPressed { get; set; }
+        public bool IsShiftPressed { get; set; }
+    }
+
+    /// <summary>
     /// High-performance OpenGL-accelerated canvas for rendering PCB layouts.
     /// Uses GPU batching, instancing, and proper screen blend mode support.
     /// NOTE: Requires OpenTK NuGet packages. Run 'nuget restore' if you see compile errors.
@@ -2934,16 +2954,28 @@ void main()
                     double worldTop = Math.Max(worldTL.Y, worldBR.Y);
 
                     Rect worldRect = new Rect(worldLeft, worldBottom, worldRight - worldLeft, worldTop - worldBottom);
-                    SelectionRectCompleted?.Invoke(this, worldRect);
+                    var rectArgs = new SelectionRectEventArgs
+                    {
+                        WorldRect = worldRect,
+                        IsCtrlPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Control) != 0,
+                        IsShiftPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Shift) != 0
+                    };
+                    SelectionRectCompleted?.Invoke(this, rectArgs);
 
                     _selectionRect = Rect.Empty;
                     Invalidate();
                 }
                 else
                 {
-                    // Single click - raise point clicked event
+                    // Single click - raise point clicked event with modifier keys from WinForms
                     Point worldPos = ScreenToWorld(screenPos);
-                    PointClicked?.Invoke(this, worldPos);
+                    var args = new PointClickedEventArgs
+                    {
+                        WorldPosition = worldPos,
+                        IsCtrlPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Control) != 0,
+                        IsShiftPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Shift) != 0
+                    };
+                    PointClicked?.Invoke(this, args);
                 }
             }
             else if (e.Button == System.Windows.Forms.MouseButtons.Right)
@@ -3077,7 +3109,7 @@ void main()
         /// <summary>
         /// Raised when user clicks in the canvas (for selection)
         /// </summary>
-        public event EventHandler<Point> PointClicked;
+        public event EventHandler<PointClickedEventArgs> PointClicked;
 
         /// <summary>
         /// Raised when user right-clicks in the canvas
@@ -3087,7 +3119,7 @@ void main()
         /// <summary>
         /// Raised when user completes a selection rectangle
         /// </summary>
-        public event EventHandler<Rect> SelectionRectCompleted;
+        public event EventHandler<SelectionRectEventArgs> SelectionRectCompleted;
 
         /// <summary>
         /// Raised when Alt+Click picks a layer in the viewport

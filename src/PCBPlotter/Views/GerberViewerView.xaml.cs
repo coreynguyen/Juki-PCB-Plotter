@@ -395,28 +395,30 @@ namespace PCBPlotter.Views
             }
         }
 
-        private void OnOpenGLSelectionRectCompleted(object sender, Rect worldRect)
+        private void OnOpenGLSelectionRectCompleted(object sender, Controls.SelectionRectEventArgs e)
         {
             // Forward selection to view model (same as CPU canvas)
             var vm = DataContext as GerberViewerViewModel;
             if (vm != null)
             {
-                bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
-                vm.SelectPrimitivesInRect(worldRect, addToSelection);
+                // Use modifier keys from the WinForms event (WPF Keyboard.Modifiers doesn't work with WindowsFormsHost)
+                bool addToSelection = e.IsShiftPressed;
+                vm.SelectPrimitivesInRect(e.WorldRect, addToSelection);
             }
         }
 
-        private void OnOpenGLPointClicked(object sender, Point worldPos)
+        private void OnOpenGLPointClicked(object sender, Controls.PointClickedEventArgs e)
         {
             // Forward click to view model for hit testing
             var vm = DataContext as GerberViewerViewModel;
             if (vm != null)
             {
-                bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+                // Use modifier keys from the WinForms event (WPF Keyboard.Modifiers doesn't work with WindowsFormsHost)
+                bool addToSelection = e.IsCtrlPressed;
                 // Calculate hit radius in world units (5 pixels converted to world space)
                 // This matches the CPU canvas behavior which uses hitRadius / Zoom
                 double hitRadiusWorld = 5.0 / OpenGLCanvas.Zoom;
-                vm.SelectPrimitiveAtPoint(worldPos, addToSelection, hitRadiusWorld);
+                vm.SelectPrimitiveAtPoint(e.WorldPosition, addToSelection, hitRadiusWorld);
             }
         }
 
