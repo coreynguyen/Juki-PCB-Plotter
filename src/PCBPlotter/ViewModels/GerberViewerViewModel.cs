@@ -781,11 +781,18 @@ namespace PCBPlotter.ViewModels
                     package.Pins.Count, features.Centroid.X, features.Centroid.Y, placementRotation)
             });
 
-            // Mark the consumed primitives so they appear highlighted in the Gerber viewer
+            // Mark primitives as consumed and create simplified bounding shapes for visualization
             foreach (var prim in primitives)
             {
                 prim.IsConsumed = true;
                 prim.IsSelected = false;
+            }
+
+            // Add consumed regions (clustered bounding shapes) to the active layer
+            // These will be rendered as solid yellow shapes to indicate used areas
+            if (SelectedLayer != null)
+            {
+                SelectedLayer.AddConsumedRegions(primitives, reference);
             }
 
             // Clear selection so user can immediately start the next selection
@@ -794,6 +801,9 @@ namespace PCBPlotter.ViewModels
             {
                 SelectedPrimitives = new List<GerberPrimitive>()
             });
+
+            // Request a refresh to show the consumed regions
+            Publish(new RequestRefreshEvent { FullRefresh = true });
 
             // Navigate to the Design tab (tab index 0) to show the result
             Publish(new NavigateToTabEvent

@@ -972,7 +972,7 @@ void main()
 
         /// <summary>
         /// Render highlight outlines around selected primitives on all visible layers.
-        /// Renders a green overlay on primitives that have been consumed (used to create placements).
+        /// Renders solid yellow shapes for consumed regions (bounding boxes of used primitives).
         /// </summary>
         private void RenderConsumedOverlay()
         {
@@ -982,12 +982,9 @@ void main()
             bool hasConsumed = false;
             foreach (var layer in GerberLayers)
             {
-                if (!layer.IsVisible || layer.Primitives == null) continue;
-                foreach (var prim in layer.Primitives)
-                {
-                    if (prim.IsConsumed && prim.IsDark) { hasConsumed = true; break; }
-                }
-                if (hasConsumed) break;
+                if (!layer.IsVisible || layer.ConsumedRegions == null || layer.ConsumedRegions.Count == 0) continue;
+                hasConsumed = true;
+                break;
             }
             if (!hasConsumed) return;
 
@@ -1000,16 +997,28 @@ void main()
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            // Green overlay for consumed primitives
-            var consumedColor = new OpenTK.Vector4(0.0f, 0.7f, 0.3f, 0.6f);
+            // Solid yellow overlay for consumed regions
+            var consumedColor = new OpenTK.Vector4(1.0f, 0.8f, 0.0f, 0.8f);
 
             foreach (var layer in GerberLayers)
             {
-                if (!layer.IsVisible || layer.Primitives == null) continue;
-                foreach (var prim in layer.Primitives)
+                if (!layer.IsVisible || layer.ConsumedRegions == null) continue;
+
+                foreach (var region in layer.ConsumedRegions)
                 {
-                    if (!prim.IsConsumed || !prim.IsDark) continue;
-                    RenderPrimitive(prim, consumedColor, 1.0f);
+                    float centerX = (float)region.Center.X;
+                    float centerY = (float)region.Center.Y;
+                    float width = (float)region.Bounds.Width;
+                    float height = (float)region.Bounds.Height;
+
+                    if (region.Shape == ConsumedRegionShape.Ellipse)
+                    {
+                        RenderEllipse(centerX, centerY, width / 2, height / 2, consumedColor);
+                    }
+                    else
+                    {
+                        RenderRectangle(centerX, centerY, width, height, consumedColor);
+                    }
                 }
             }
         }
@@ -2638,6 +2647,20 @@ void main()
             GL.Vertex2(x + hw, y - hh);
             GL.Vertex2(x + hw, y + hh);
             GL.Vertex2(x - hw, y + hh);
+            GL.End();
+        }
+
+        private void RenderEllipse(float x, float y, float radiusX, float radiusY, OpenTK.Vector4 color)
+        {
+            GL.Begin(PrimitiveType.TriangleFan);
+            GL.Color4(color.X, color.Y, color.Z, color.W);
+            GL.Vertex2(x, y);
+
+            for (int i = 0; i <= CIRCLE_SEGMENTS; i++)
+            {
+                float angle = (float)(2 * Math.PI * i / CIRCLE_SEGMENTS);
+                GL.Vertex2(x + radiusX * Math.Cos(angle), y + radiusY * Math.Sin(angle));
+            }
             GL.End();
         }
 

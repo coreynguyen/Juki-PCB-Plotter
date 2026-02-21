@@ -1562,18 +1562,38 @@ namespace PCBPlotter.Controls
         {
             if (GerberLayers == null) return;
 
-            // Green overlay for primitives that have been used to create placements
-            var consumedBrush = new SolidColorBrush(Color.FromArgb(160, 0, 180, 80));
+            // Solid yellow overlay for consumed regions (bounding shapes of used primitives)
+            var consumedBrush = new SolidColorBrush(Color.FromArgb(200, 255, 200, 0));
             consumedBrush.Freeze();
 
             foreach (var layer in GerberLayers)
             {
-                if (!layer.IsVisible || layer.Primitives == null)
+                if (!layer.IsVisible || layer.ConsumedRegions == null || layer.ConsumedRegions.Count == 0)
                     continue;
 
-                foreach (var prim in layer.Primitives.Where(p => p.IsConsumed && p.IsDark))
+                foreach (var region in layer.ConsumedRegions)
                 {
-                    RenderGerberPrimitiveToScreen(dc, prim, consumedBrush);
+                    // Convert world bounds to screen coordinates
+                    Point topLeft = WorldToScreen(new Point(region.Bounds.Left, region.Bounds.Top));
+                    Point bottomRight = WorldToScreen(new Point(region.Bounds.Right, region.Bounds.Bottom));
+
+                    double screenX = Math.Min(topLeft.X, bottomRight.X);
+                    double screenY = Math.Min(topLeft.Y, bottomRight.Y);
+                    double screenWidth = Math.Abs(bottomRight.X - topLeft.X);
+                    double screenHeight = Math.Abs(bottomRight.Y - topLeft.Y);
+
+                    if (region.Shape == ConsumedRegionShape.Ellipse)
+                    {
+                        // Draw ellipse
+                        double centerX = screenX + screenWidth / 2;
+                        double centerY = screenY + screenHeight / 2;
+                        dc.DrawEllipse(consumedBrush, null, new Point(centerX, centerY), screenWidth / 2, screenHeight / 2);
+                    }
+                    else
+                    {
+                        // Draw rectangle
+                        dc.DrawRectangle(consumedBrush, null, new Rect(screenX, screenY, screenWidth, screenHeight));
+                    }
                 }
             }
         }

@@ -19,6 +19,7 @@ namespace PCBPlotter.Core.Models
         private double _opacity = 1.0;
         private uint _color = 0xFF00FF00; // Green
         private List<GerberPrimitive> _primitives;
+        private List<ConsumedRegion> _consumedRegions = new List<ConsumedRegion>();
 
         // Cached bounds - computed once on first access or when invalidated
         private Rect _cachedBounds = Rect.Empty;
@@ -114,6 +115,25 @@ namespace PCBPlotter.Core.Models
                 SetProperty(ref _primitives, value);
                 _boundsDirty = true; // Invalidate cached bounds
             }
+        }
+
+        /// <summary>
+        /// Consumed regions (simplified bounding shapes for primitives used in placements).
+        /// These are drawn as solid yellow shapes to indicate used areas.
+        /// </summary>
+        public List<ConsumedRegion> ConsumedRegions
+        {
+            get { return _consumedRegions; }
+        }
+
+        /// <summary>
+        /// Adds consumed regions from primitives that were used to create a placement.
+        /// Clusters the primitives into islands and creates bounding shapes.
+        /// </summary>
+        public void AddConsumedRegions(IEnumerable<GerberPrimitive> primitives, string placementReference)
+        {
+            var regions = ConsumedRegion.CreateFromPrimitives(primitives, placementReference);
+            _consumedRegions.AddRange(regions);
         }
 
         /// <summary>
@@ -353,5 +373,171 @@ namespace PCBPlotter.Core.Models
         Line,
         Arc,
         Contour
+    }
+
+    /// <summary>
+    /// Shape type for consumed regions
+    /// </summary>
+    public enum ConsumedRegionShape
+    {
+        Rectangle,
+        Ellipse
+    }
+
+    /// <summary>
+    /// Represents a simplified bounding shape for consumed (used) primitives.
+    /// Instead of highlighting each individual primitive, we cluster nearby primitives
+    /// into islands and draw a solid shape over each cluster.
+    /// </summary>
+    public class ConsumedRegion
+    {
+        /// <summary>
+        /// Bounding rectangle in world coordinates
+        /// </summary>
+        public Rect Bounds { get; set; }
+
+        /// <summary>
+        /// Shape type - rectangle or ellipse based on primitive analysis
+        /// </summary>
+        public ConsumedRegionShape Shape { get; set; }
+
+        /// <summary>
+        /// The placement reference this region is associated with
+        /// </summary>
+        public string PlacementReference { get; set; }
+
+        /// <summary>
+        /// Center point (computed from bounds)
+        /// </summary>
+        public Point Center
+        {
+            get { return new Point(Bounds.X + Bounds.Width / 2, Bounds.Y + Bounds.Height / 2); }
+        }
+
+        /// <summary>
+        /// Creates consumed regions from a list of primitives by clustering them into islands
+        /// </summary>
+        public static List<ConsumedRegion> CreateFromPrimitives(IEnumerable<GerberPrimitive> primitives, string placementReference)
+        {
+            var regions = new List<ConsumedRegion>();
+            var primList = new List<GerberPrimitive>(primitives);
+
+            if (primList.Count == 0)
+                return regions;
+
+            // Cluster primitives into islands based on spatial proximity
+            var clusters = ClusterPrimitives(primList);
+
+            foreach (var cluster in clusters)
+            {
+                if (cluster.Count == 0)
+                    continue;
+
+                // Compute bounding box for this cluster
+                double minX = double.MaxValue, minY = double.MaxValue;
+                double maxX = double.MinValue, maxY = double.MinValue;
+                bool hasCircularPrimitives = false;
+                int circleCount = 0;
+                int rectCount = 0;
+
+                foreach (var prim in cluster)
+                {
+                    var bounds = prim.GetBounds();
+                    if (bounds.Left < minX) minX = bounds.Left;
+                    if (bounds.Top < minY) minY = bounds.Top;
+                    if (bounds.Right > maxX) maxX = bounds.Right;
+                    if (bounds.Bottom > maxY) maxY = bounds.Bottom;
+
+                    // Track primitive types for shape determination
+                    if (prim.Type == GerberPrimitiveType.Circle || prim.Type == GerberPrimitiveType.Flash)
+                    {
+                        circleCount++;
+                        // Check if roughly circular (aspect ratio near 1:1)
+                        if (Math.Abs(prim.Width - prim.Height) < Math.Max(prim.Width, prim.Height) * 0.1)
+                            hasCircularPrimitives = true;
+                    }
+                    else
+                    {
+                        rectCount++;
+                    }
+                }
+
+                var regionBounds = new Rect(minX, minY, maxX - minX, maxY - minY);
+
+                // Determine shape: ellipse if mostly circular primitives and roughly square bounds
+                var shape = ConsumedRegionShape.Rectangle;
+                double aspectRatio = regionBounds.Width / Math.Max(regionBounds.Height, 0.001);
+                if (hasCircularPrimitives && circleCount > rectCount && aspectRatio > 0.8 && aspectRatio < 1.2)
+                {
+                    shape = ConsumedRegionShape.Ellipse;
+                }
+
+                regions.Add(new ConsumedRegion
+                {
+                    Bounds = regionBounds,
+                    Shape = shape,
+                    PlacementReference = placementReference
+                });
+            }
+
+            return regions;
+        }
+
+        /// <summary>
+        /// Clusters primitives into islands based on spatial proximity.
+        /// Two primitives are in the same cluster if their bounding boxes overlap or are within a threshold distance.
+        /// </summary>
+        private static List<List<GerberPrimitive>> ClusterPrimitives(List<GerberPrimitive> primitives)
+        {
+            var clusters = new List<List<GerberPrimitive>>();
+            var assigned = new bool[primitives.Count];
+
+            // Distance threshold for clustering (primitives within this distance are grouped)
+            const double clusterThreshold = 0.5; // mm
+
+            for (int i = 0; i < primitives.Count; i++)
+            {
+                if (assigned[i])
+                    continue;
+
+                // Start a new cluster
+                var cluster = new List<GerberPrimitive>();
+                var queue = new Queue<int>();
+                queue.Enqueue(i);
+                assigned[i] = true;
+
+                while (queue.Count > 0)
+                {
+                    int idx = queue.Dequeue();
+                    cluster.Add(primitives[idx]);
+                    var bounds1 = primitives[idx].GetBounds();
+
+                    // Expand bounds by threshold for proximity check
+                    var expandedBounds = new Rect(
+                        bounds1.X - clusterThreshold,
+                        bounds1.Y - clusterThreshold,
+                        bounds1.Width + clusterThreshold * 2,
+                        bounds1.Height + clusterThreshold * 2);
+
+                    // Find all unassigned primitives that overlap with expanded bounds
+                    for (int j = 0; j < primitives.Count; j++)
+                    {
+                        if (assigned[j])
+                            continue;
+
+                        var bounds2 = primitives[j].GetBounds();
+                        if (expandedBounds.IntersectsWith(bounds2))
+                        {
+                            queue.Enqueue(j);
+                            assigned[j] = true;
+                        }
+                    }
+                }
+
+                clusters.Add(cluster);
+            }
+
+            return clusters;
+        }
     }
 }
