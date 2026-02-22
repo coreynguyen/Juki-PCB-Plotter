@@ -186,12 +186,12 @@ namespace PCBPlotter.Core.Services
             features.PadCount = features.Pads.Count;
             if (features.PadCount == 0) return features;
 
-            // Bounding box
-            double minX = features.Pads.Min(p => p.X - p.Width / 2);
-            double minY = features.Pads.Min(p => p.Y - p.Height / 2);
-            double maxX = features.Pads.Max(p => p.X + p.Width / 2);
-            double maxY = features.Pads.Max(p => p.Y + p.Height / 2);
-            features.BoundingBox = new Rect(minX, minY, maxX - minX, maxY - minY);
+            // Bounding box (from pad centers/extents)
+            double bbMinX = features.Pads.Min(p => p.X - p.Width / 2);
+            double bbMinY = features.Pads.Min(p => p.Y - p.Height / 2);
+            double bbMaxX = features.Pads.Max(p => p.X + p.Width / 2);
+            double bbMaxY = features.Pads.Max(p => p.Y + p.Height / 2);
+            features.BoundingBox = new Rect(bbMinX, bbMinY, bbMaxX - bbMinX, bbMaxY - bbMinY);
 
             // Centroid
             features.Centroid = new Point(
