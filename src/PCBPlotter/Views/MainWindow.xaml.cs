@@ -342,8 +342,8 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad|" +
-                         "CircuitCAM / Fabmaster / Altium / GenCAD (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad|" +
+                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad;*.ssa)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad;*.ssa|" +
+                         "CircuitCAM / Fabmaster / Altium / GenCAD / SSA (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad;*.ssa)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad;*.ssa|" +
                          "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|" +
                          "ODB++ Archives (*.tgz;*.tar;*.zip;*.odb;*.tar.gz)|*.tgz;*.tar;*.zip;*.odb;*.tar.gz|" +
                          "All Files (*.*)|*.*",
@@ -356,9 +356,9 @@ namespace PCBPlotter.Views
                 string fileName = System.IO.Path.GetFileName(dialog.FileName).ToLowerInvariant();
                 string fullPath = dialog.FileName.ToLowerInvariant();
 
-                // Route CircuitCAM Express / Valor CIM files, Allegro Fabmaster files, Altium files, and GenCAD files
+                // Route CircuitCAM Express / Valor CIM files, Allegro Fabmaster files, Altium files, GenCAD files, and SSA files
                 if (ext == ".cpf" || ext == ".mdb" || ext == ".val" || ext == ".fab" || ext == ".va2" ||
-                    ext == ".pcbdoc" || ext == ".pcb" || ext == ".pro" || ext == ".cad")
+                    ext == ".pcbdoc" || ext == ".pcb" || ext == ".pro" || ext == ".cad" || ext == ".ssa")
                 {
                     ShowUnifiedCadImportDialogWithFile(dialog.FileName);
                 }

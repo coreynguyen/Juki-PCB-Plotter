@@ -74,6 +74,8 @@
     <Compile Include="Services\ProtelImporter.cs" />
     <Compile Include="Services\GenCadParser.cs" />
     <Compile Include="Services\GenCadImporter.cs" />
+    <Compile Include="Services\SsaParser.cs" />
+    <Compile Include="Services\SsaImporter.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
     <Compile Include="Utilities\UnicodeHelper.cs" />
     <Compile Include="Utilities\UnitConverter.cs" />

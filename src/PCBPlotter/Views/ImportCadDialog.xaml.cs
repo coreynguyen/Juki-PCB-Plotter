@@ -17,10 +17,11 @@ namespace PCBPlotter.Views
     /// - Altium Designer (.pcbdoc, .pcb)
     /// - Protel PCB 2.8 (.pro, .pcb)
     /// - GenCAD (.cad)
+    /// - Samsung SSA (.ssa)
     /// </summary>
     public partial class ImportCadDialog : Window
     {
-        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster, AltiumPcbDoc, ProtelPro, GenCad }
+        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster, AltiumPcbDoc, ProtelPro, GenCad, SamsungSsa }
 
         private CadFormat _detectedFormat = CadFormat.Unknown;
         private CpfImporter _cpfImporter;
@@ -28,6 +29,7 @@ namespace PCBPlotter.Views
         private AltiumImporter _altiumImporter;
         private ProtelImporter _protelImporter;
         private GenCadImporter _genCadImporter;
+        private SsaImporter _ssaImporter;
         private Project _project;
 
         // Unified placement data for preview
@@ -65,12 +67,13 @@ namespace PCBPlotter.Views
         {
             var dialog = new OpenFileDialog
             {
-                Filter = "CAD Files (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad|" +
+                Filter = "CAD Files (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad;*.ssa)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad;*.ssa|" +
                          "CircuitCAM Express (*.cpf;*.mdb)|*.cpf;*.mdb|" +
                          "Allegro Fabmaster (*.val;*.fab;*.va2)|*.val;*.fab;*.va2|" +
                          "Altium Designer (*.pcbdoc;*.pcb)|*.pcbdoc;*.pcb|" +
                          "Protel PCB 2.8 (*.pro;*.pcb)|*.pro;*.pcb|" +
                          "GenCAD (*.cad)|*.cad|" +
+                         "Samsung SSA (*.ssa)|*.ssa|" +
                          "All Files (*.*)|*.*",
                 Title = "Select CAD Data File"
             };
@@ -127,6 +130,11 @@ namespace PCBPlotter.Views
                     FormatText.Text = "GenCAD (.cad)";
                     break;
 
+                case ".ssa":
+                    _detectedFormat = CadFormat.SamsungSsa;
+                    FormatText.Text = "Samsung SSA (.ssa)";
+                    break;
+
                 default:
                     _detectedFormat = CadFormat.Unknown;
                     FormatText.Text = "(unknown format)";
@@ -157,7 +165,8 @@ namespace PCBPlotter.Views
                     "- Allegro Fabmaster (.val, .fab, .va2)\n" +
                     "- Altium Designer (.pcbdoc, .pcb)\n" +
                     "- Protel PCB 2.8 (.pro, .pcb)\n" +
-                    "- GenCAD (.cad)",
+                    "- GenCAD (.cad)\n" +
+                    "- Samsung SSA (.ssa)",
                     "Format Error", MessageBoxButton.OK, MessageBoxImage.Warning, this);
                 return;
             }
@@ -189,6 +198,10 @@ namespace PCBPlotter.Views
                 else if (_detectedFormat == CadFormat.GenCad)
                 {
                     ParseGenCad(sourcePath);
+                }
+                else if (_detectedFormat == CadFormat.SamsungSsa)
+                {
+                    ParseSSA(sourcePath);
                 }
 
                 UpdatePreview();
@@ -440,6 +453,81 @@ namespace PCBPlotter.Views
             ImportButton.IsEnabled = plcCount > 0;
         }
 
+        private void ParseSSA(string sourcePath)
+        {
+            _ssaImporter = new SsaImporter();
+            _ssaImporter.Parse(sourcePath);
+
+            var data = _ssaImporter.ParsedData;
+
+            // Convert to unified display records - placements
+            foreach (var plc in data.Placements)
+            {
+                if (plc.IsFiducial)
+                {
+                    _allFiducials.Add(new CadPlacementRecord
+                    {
+                        RefDes = plc.RefDes,
+                        X = plc.X,
+                        Y = plc.Y,
+                        Rotation = plc.Rotation,
+                        IsBottom = plc.Side == "Bottom",
+                        Package = "",
+                        PartNumber = "FIDUCIAL"
+                    });
+                }
+                else if (!plc.Skip)
+                {
+                    _allPlacements.Add(new CadPlacementRecord
+                    {
+                        RefDes = plc.RefDes,
+                        X = plc.X,
+                        Y = plc.Y,
+                        Rotation = plc.Rotation,
+                        IsBottom = plc.Side == "Bottom",
+                        Package = plc.PackageType ?? "",
+                        PartNumber = plc.PartNumber ?? ""
+                    });
+                }
+            }
+
+            // Add board-level fiducials
+            if (data.Pcb.Fiducial.Shape != SsaMarkShape.None)
+            {
+                _allFiducials.Add(new CadPlacementRecord
+                {
+                    RefDes = "FID1",
+                    X = data.Pcb.Fiducial.X1,
+                    Y = data.Pcb.Fiducial.Y1,
+                    Rotation = 0,
+                    IsBottom = false,
+                    Package = "",
+                    PartNumber = "FIDUCIAL"
+                });
+
+                if (data.Pcb.Fiducial.X2 != 0 || data.Pcb.Fiducial.Y2 != 0)
+                {
+                    _allFiducials.Add(new CadPlacementRecord
+                    {
+                        RefDes = "FID2",
+                        X = data.Pcb.Fiducial.X2,
+                        Y = data.Pcb.Fiducial.Y2,
+                        Rotation = 0,
+                        IsBottom = false,
+                        Package = "",
+                        PartNumber = "FIDUCIAL"
+                    });
+                }
+            }
+
+            int plcCount = _allPlacements.Count;
+            int fidCount = _allFiducials.Count;
+
+            StatusText.Text = string.Format("Parsed: {0} placements, {1} fiducials",
+                plcCount, fidCount);
+            ImportButton.IsEnabled = plcCount > 0;
+        }
+
         private void CategoryRadio_Changed(object sender, RoutedEventArgs e)
         {
             UpdatePreview();
@@ -488,6 +576,10 @@ namespace PCBPlotter.Views
             else if (_detectedFormat == CadFormat.GenCad && _genCadImporter != null)
             {
                 SummaryText.Text = _genCadImporter.GetSummary();
+            }
+            else if (_detectedFormat == CadFormat.SamsungSsa && _ssaImporter != null)
+            {
+                SummaryText.Text = _ssaImporter.GetSummary();
             }
             else
             {
@@ -558,6 +650,17 @@ namespace PCBPlotter.Views
                     }
 
                     _genCadImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
+                }
+                else if (_detectedFormat == CadFormat.SamsungSsa)
+                {
+                    if (_ssaImporter?.ParsedData == null || _ssaImporter.ParsedData.Placements.Count == 0)
+                    {
+                        ThemedMessageBox.Show("No data to import.", "Import Error",
+                            MessageBoxButton.OK, MessageBoxImage.Warning, this);
+                        return;
+                    }
+
+                    _ssaImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
                 }
                 else
                 {
