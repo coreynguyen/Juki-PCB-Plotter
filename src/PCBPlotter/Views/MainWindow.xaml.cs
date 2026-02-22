@@ -113,10 +113,6 @@ namespace PCBPlotter.Views
                     ShowIpc356ImportDialog();
                     break;
 
-                case "CpfImport":
-                    ShowCpfImportDialog();
-                    break;
-
                 default:
                     System.Diagnostics.Debug.WriteLine("Unknown dialog type: " + e.DialogType);
                     break;
@@ -346,8 +342,8 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb|" +
-                         "CircuitCAM Express / Valor CIM (*.cpf;*.mdb)|*.cpf;*.mdb|" +
+                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2|" +
+                         "CircuitCAM / Fabmaster (*.cpf;*.mdb;*.val;*.fab;*.va2)|*.cpf;*.mdb;*.val;*.fab;*.va2|" +
                          "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|" +
                          "ODB++ Archives (*.tgz;*.tar;*.zip;*.odb;*.tar.gz)|*.tgz;*.tar;*.zip;*.odb;*.tar.gz|" +
                          "All Files (*.*)|*.*",
@@ -360,10 +356,10 @@ namespace PCBPlotter.Views
                 string fileName = System.IO.Path.GetFileName(dialog.FileName).ToLowerInvariant();
                 string fullPath = dialog.FileName.ToLowerInvariant();
 
-                // Route CircuitCAM Express / Valor CIM files
-                if (ext == ".cpf" || ext == ".mdb")
+                // Route CircuitCAM Express / Valor CIM files and Allegro Fabmaster files
+                if (ext == ".cpf" || ext == ".mdb" || ext == ".val" || ext == ".fab" || ext == ".va2")
                 {
-                    ShowCpfImportDialogWithFile(dialog.FileName);
+                    ShowUnifiedCadImportDialogWithFile(dialog.FileName);
                 }
                 // Route IPC-D-356 files to the dedicated importer
                 else if (ext == ".ipc" || ext == ".356" || ext == ".net")
@@ -507,7 +503,7 @@ namespace PCBPlotter.Views
             }
         }
 
-        private void ShowCpfImportDialog()
+        private void ShowUnifiedCadImportDialogWithFile(string filePath)
         {
             var mainVm = DataContext as MainViewModel;
             if (mainVm?.CurrentProject == null)
@@ -517,39 +513,16 @@ namespace PCBPlotter.Views
                 return;
             }
 
-            // Show file open dialog first
-            var fileDialog = new Microsoft.Win32.OpenFileDialog
-            {
-                Filter = "CircuitCAM Express Files (*.cpf;*.mdb)|*.cpf;*.mdb|All Files (*.*)|*.*",
-                Title = "Select CircuitCAM Express / Valor CIM File"
-            };
-
-            if (fileDialog.ShowDialog() == true)
-            {
-                ShowCpfImportDialogWithFile(fileDialog.FileName);
-            }
-        }
-
-        private void ShowCpfImportDialogWithFile(string filePath)
-        {
-            var mainVm = DataContext as MainViewModel;
-            if (mainVm?.CurrentProject == null)
-            {
-                System.Windows.MessageBox.Show("Please create or open a project first.",
-                    "No Project", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            var dialog = new ImportCpfDialog(mainVm.CurrentProject, filePath);
+            var dialog = new ImportCadDialog(mainVm.CurrentProject, filePath);
             dialog.Owner = this;
 
             if (dialog.ShowDialog() == true)
             {
-                ApplyCpfImportResults(mainVm, dialog);
+                ApplyCadImportResults(mainVm, dialog);
             }
         }
 
-        private void ApplyCpfImportResults(MainViewModel mainVm, ImportCpfDialog dialog)
+        private void ApplyCadImportResults(MainViewModel mainVm, ImportCadDialog dialog)
         {
             // Add packages to project
             foreach (var pkg in dialog.ImportedPackages)
@@ -584,7 +557,7 @@ namespace PCBPlotter.Views
             EventAggregator.Instance.Publish(new ZoomFitRequestEvent());
             EventAggregator.Instance.Publish(new StatusMessageEvent
             {
-                Message = string.Format("Imported {0} placements, {1} packages, {2} fiducials from CPF",
+                Message = string.Format("Imported {0} placements, {1} packages, {2} fiducials from CAD data",
                     dialog.ImportedPlacements.Count, dialog.ImportedPackages.Count,
                     dialog.ImportedFiducials.Count)
             });
