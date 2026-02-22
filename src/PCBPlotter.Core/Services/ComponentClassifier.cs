@@ -846,9 +846,9 @@ namespace PCBPlotter.Core.Services
             double cx = features.Centroid.X;
             double cy = features.Centroid.Y;
 
-            if (useSimplifiedLeads && features.LeadBounds.Count > 0)
+            if (useSimplifiedLeads && features.Pads.Count > 0)
             {
-                // Use simplified lead bounding boxes for placement display
+                // Use clustered pads directly as leads for placement display
                 AddSimplifiedLeadGraphics(package, features, cx, cy);
             }
             else
@@ -872,49 +872,51 @@ namespace PCBPlotter.Core.Services
         }
 
         /// <summary>
-        /// Add simplified lead graphics using bounding boxes (for placement display).
-        /// Each lead is represented as a single rectangular bounding box.
+        /// Add simplified lead graphics using clustered pad bounds (for placement display).
+        /// Each clustered pad becomes one lead at its full size - no separate pad graphic.
         /// </summary>
         private static void AddSimplifiedLeadGraphics(
             Package package, PadClusterFeatures features, double cx, double cy)
         {
             int pinNumber = 1;
 
-            // Sort lead bounds for consistent numbering (top-left first)
-            var sortedLeads = features.LeadBounds
-                .Select((rect, idx) => new { Rect = rect, Index = idx })
-                .OrderBy(r => r.Rect.X + r.Rect.Y)
-                .Select(r => r.Rect)
+            // Use the clustered pads directly - each pad IS a lead at its full size
+            // Sort for consistent numbering (top-left first)
+            var sortedPads = features.Pads
+                .OrderBy(p => p.X + p.Y)
                 .ToList();
 
-            foreach (var leadRect in sortedLeads)
+            foreach (var pad in sortedPads)
             {
-                // Lead center relative to component centroid
-                double leadCenterX = leadRect.X + leadRect.Width / 2 - cx;
-                double leadCenterY = leadRect.Y + leadRect.Height / 2 - cy;
+                // Lead position relative to component centroid
+                double leadX = pad.X - pad.Width / 2 - cx;
+                double leadY = pad.Y - pad.Height / 2 - cy;
+                double leadCenterX = pad.X - cx;
+                double leadCenterY = pad.Y - cy;
 
+                // The lead graphic IS the full pad size - no separate pad rectangle
                 var graphic = new PackageGraphic
                 {
-                    X = leadRect.X - cx,
-                    Y = leadRect.Y - cy,
-                    Width = leadRect.Width,
-                    Height = leadRect.Height,
-                    ShapeType = GraphicShapeType.Rectangle,
-                    IsPad = true,
+                    X = leadX,
+                    Y = leadY,
+                    Width = pad.Width,
+                    Height = pad.Height,
+                    ShapeType = pad.IsCircular ? GraphicShapeType.Circle : GraphicShapeType.Rectangle,
+                    IsPad = false,  // This is a lead, not a pad marker
                     IsFilled = true,
                     FillColor = System.Windows.Media.Color.FromRgb(180, 140, 60) // Golden lead color
                 };
                 package.Graphics.Add(graphic);
 
-                // Add pin at lead center
+                // Pin matches the lead size for pick-and-place
                 package.Pins.Add(new Pin
                 {
                     Number = pinNumber,
                     X = leadCenterX,
                     Y = leadCenterY,
-                    Width = leadRect.Width * 0.5,
-                    Height = leadRect.Height * 0.5,
-                    Shape = PinShape.Rectangle
+                    Width = pad.Width,
+                    Height = pad.Height,
+                    Shape = pad.IsCircular ? PinShape.Circle : PinShape.Rectangle
                 });
                 pinNumber++;
             }

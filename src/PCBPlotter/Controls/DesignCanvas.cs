@@ -257,6 +257,12 @@ namespace PCBPlotter.Controls
         private Point _packageSelectStart;
         private Rect _packageSelectRect;
 
+        // Resize handle state
+        private enum ResizeCorner { None, TopLeft, TopRight, BottomLeft, BottomRight }
+        private ResizeCorner _resizeCorner = ResizeCorner.None;
+        private bool _isResizingGraphic;
+        private Rect _resizeStartBounds;
+
         // Undo stack for package editing
         private Stack<PackageEditAction> _undoStack = new Stack<PackageEditAction>();
         private Stack<PackageEditAction> _redoStack = new Stack<PackageEditAction>();
@@ -2842,6 +2848,24 @@ namespace PCBPlotter.Controls
 
             bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
 
+            // Hit test corner handles first (for resize)
+            double handleRadius = 6 / Zoom; // Screen pixels converted to world
+            if (_selectedGraphicIndices.Count == 1)
+            {
+                int gIdx = _selectedGraphicIndices.First();
+                var g = package.Graphics[gIdx];
+                ResizeCorner corner = HitTestCornerHandles(g, worldPos, handleRadius);
+                if (corner != ResizeCorner.None)
+                {
+                    _resizeCorner = corner;
+                    _isResizingGraphic = true;
+                    _resizeStartBounds = new Rect(g.X, g.Y, g.Width, g.Height);
+                    SaveUndoState();
+                    CaptureMouse();
+                    return;
+                }
+            }
+
             // Hit test pins first (they're on top)
             double hitRadius = 10 / Zoom; // Screen pixels converted to world
             for (int i = 0; i < package.Pins.Count; i++)
@@ -2976,12 +3000,86 @@ namespace PCBPlotter.Controls
             return Math.Sqrt(Math.Pow(p.X - projX, 2) + Math.Pow(p.Y - projY, 2));
         }
 
+        private ResizeCorner HitTestCornerHandles(PackageGraphic g, Point worldPos, double handleRadius)
+        {
+            if (g.ShapeType != GraphicShapeType.Rectangle &&
+                g.ShapeType != GraphicShapeType.RoundedRectangle)
+                return ResizeCorner.None;
+
+            // Test each corner
+            Point topLeft = new Point(g.X, g.Y);
+            Point topRight = new Point(g.X + g.Width, g.Y);
+            Point bottomLeft = new Point(g.X, g.Y + g.Height);
+            Point bottomRight = new Point(g.X + g.Width, g.Y + g.Height);
+
+            double distTL = Math.Sqrt(Math.Pow(worldPos.X - topLeft.X, 2) + Math.Pow(worldPos.Y - topLeft.Y, 2));
+            double distTR = Math.Sqrt(Math.Pow(worldPos.X - topRight.X, 2) + Math.Pow(worldPos.Y - topRight.Y, 2));
+            double distBL = Math.Sqrt(Math.Pow(worldPos.X - bottomLeft.X, 2) + Math.Pow(worldPos.Y - bottomLeft.Y, 2));
+            double distBR = Math.Sqrt(Math.Pow(worldPos.X - bottomRight.X, 2) + Math.Pow(worldPos.Y - bottomRight.Y, 2));
+
+            if (distTL <= handleRadius) return ResizeCorner.TopLeft;
+            if (distTR <= handleRadius) return ResizeCorner.TopRight;
+            if (distBL <= handleRadius) return ResizeCorner.BottomLeft;
+            if (distBR <= handleRadius) return ResizeCorner.BottomRight;
+
+            return ResizeCorner.None;
+        }
+
         private void HandlePackageEditorMouseMove(Point mousePos)
         {
             var package = SelectedPackage;
             if (package == null) return;
 
             Point worldPos = ScreenToWorld(mousePos);
+
+            // Handle resize dragging
+            if (_isResizingGraphic && _selectedGraphicIndices.Count == 1)
+            {
+                int gIdx = _selectedGraphicIndices.First();
+                var g = package.Graphics[gIdx];
+
+                double newX = _resizeStartBounds.X;
+                double newY = _resizeStartBounds.Y;
+                double newW = _resizeStartBounds.Width;
+                double newH = _resizeStartBounds.Height;
+
+                switch (_resizeCorner)
+                {
+                    case ResizeCorner.TopLeft:
+                        newX = worldPos.X;
+                        newY = worldPos.Y;
+                        newW = _resizeStartBounds.Right - worldPos.X;
+                        newH = _resizeStartBounds.Bottom - worldPos.Y;
+                        break;
+                    case ResizeCorner.TopRight:
+                        newY = worldPos.Y;
+                        newW = worldPos.X - _resizeStartBounds.X;
+                        newH = _resizeStartBounds.Bottom - worldPos.Y;
+                        break;
+                    case ResizeCorner.BottomLeft:
+                        newX = worldPos.X;
+                        newW = _resizeStartBounds.Right - worldPos.X;
+                        newH = worldPos.Y - _resizeStartBounds.Y;
+                        break;
+                    case ResizeCorner.BottomRight:
+                        newW = worldPos.X - _resizeStartBounds.X;
+                        newH = worldPos.Y - _resizeStartBounds.Y;
+                        break;
+                }
+
+                // Enforce minimum size
+                const double minSize = 0.05;
+                if (newW >= minSize && newH >= minSize)
+                {
+                    g.X = newX;
+                    g.Y = newY;
+                    g.Width = newW;
+                    g.Height = newH;
+                    GraphicMoved?.Invoke(this, worldPos);
+                    InvalidateVisual();
+                }
+                return;
+            }
 
             // Handle rectangle selection
             if (_isPackageSelecting && !_isDraggingGraphic)
@@ -3106,6 +3204,14 @@ namespace PCBPlotter.Controls
                 _isDraggingGraphic = false;
                 ReleaseMouseCapture();
                 FinalizeUndoState(); // Save final positions
+            }
+
+            if (_isResizingGraphic)
+            {
+                _isResizingGraphic = false;
+                _resizeCorner = ResizeCorner.None;
+                ReleaseMouseCapture();
+                FinalizeUndoState(); // Save final dimensions
             }
         }
 
