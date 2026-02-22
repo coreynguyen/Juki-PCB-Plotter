@@ -118,10 +118,11 @@ namespace PCBPlotter.Core.Services
                 double padCY = (cMinY + cMaxY) / 2;
 
                 // Determine if the clustered shape is truly circular
-                // Only mark as circle if width and height are nearly identical (within 5%)
-                // Most SMD pads are rectangular - circles are the exception (BGA balls, vias)
+                // Be very strict - only perfect circles should be marked as circular
+                // Most SMD pads are rectangular; circles are rare (BGA balls, vias)
+                // A true circle has aspect ratio of 1.0; allow only 2% tolerance
                 double aspectRatio = Math.Min(padW, padH) / Math.Max(padW, padH);
-                bool isCircular = aspectRatio > 0.95; // Must be within 5% of square to be circular
+                bool isCircular = aspectRatio > 0.98;
 
                 features.Pads.Add(new PadInfo
                 {
