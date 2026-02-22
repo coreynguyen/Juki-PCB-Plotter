@@ -454,9 +454,15 @@ namespace PCBPlotter.Views
             var vm = DataContext as GerberViewerViewModel;
             if (vm != null)
             {
-                bool addToSelection = Keyboard.Modifiers.HasFlag(ModifierKeys.Control) ||
-                                      Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
-                vm.SelectPrimitivesInRect(worldRect, addToSelection);
+                bool isCtrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+                bool isAlt = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt);
+                bool isShift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+
+                // Ctrl+Alt = deselect, Ctrl or Shift = add to selection
+                bool removeFromSelection = isCtrl && isAlt;
+                bool addToSelection = (isCtrl || isShift) && !removeFromSelection;
+
+                vm.SelectPrimitivesInRect(worldRect, addToSelection, removeFromSelection);
             }
         }
 
@@ -467,8 +473,11 @@ namespace PCBPlotter.Views
             if (vm != null)
             {
                 // Use modifier keys from the WinForms event (WPF Keyboard.Modifiers doesn't work with WindowsFormsHost)
-                bool addToSelection = e.IsCtrlPressed || e.IsShiftPressed;
-                vm.SelectPrimitivesInRect(e.WorldRect, addToSelection);
+                // Ctrl+Alt = deselect, Ctrl or Shift = add to selection
+                bool removeFromSelection = e.IsCtrlPressed && e.IsAltPressed;
+                bool addToSelection = (e.IsCtrlPressed || e.IsShiftPressed) && !removeFromSelection;
+
+                vm.SelectPrimitivesInRect(e.WorldRect, addToSelection, removeFromSelection);
             }
         }
 
@@ -479,11 +488,14 @@ namespace PCBPlotter.Views
             if (vm != null)
             {
                 // Use modifier keys from the WinForms event (WPF Keyboard.Modifiers doesn't work with WindowsFormsHost)
-                bool addToSelection = e.IsCtrlPressed || e.IsShiftPressed;
+                // Ctrl+Alt = deselect, Ctrl or Shift = add to selection
+                bool removeFromSelection = e.IsCtrlPressed && e.IsAltPressed;
+                bool addToSelection = (e.IsCtrlPressed || e.IsShiftPressed) && !removeFromSelection;
+
                 // Calculate hit radius in world units (5 pixels converted to world space)
                 // This matches the CPU canvas behavior which uses hitRadius / Zoom
                 double hitRadiusWorld = 5.0 / OpenGLCanvas.Zoom;
-                vm.SelectPrimitiveAtPoint(e.WorldPosition, addToSelection, hitRadiusWorld);
+                vm.SelectPrimitiveAtPoint(e.WorldPosition, addToSelection, hitRadiusWorld, removeFromSelection);
             }
         }
 

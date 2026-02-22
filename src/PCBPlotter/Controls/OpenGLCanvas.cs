@@ -28,6 +28,7 @@ namespace PCBPlotter.Controls
         public Point WorldPosition { get; set; }
         public bool IsCtrlPressed { get; set; }
         public bool IsShiftPressed { get; set; }
+        public bool IsAltPressed { get; set; }
     }
 
     /// <summary>
@@ -38,6 +39,7 @@ namespace PCBPlotter.Controls
         public Rect WorldRect { get; set; }
         public bool IsCtrlPressed { get; set; }
         public bool IsShiftPressed { get; set; }
+        public bool IsAltPressed { get; set; }
     }
 
     /// <summary>
@@ -3231,7 +3233,8 @@ void main()
                     {
                         WorldRect = worldRect,
                         IsCtrlPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Control) != 0,
-                        IsShiftPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Shift) != 0
+                        IsShiftPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Shift) != 0,
+                        IsAltPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Alt) != 0
                     };
                     SelectionRectCompleted?.Invoke(this, rectArgs);
 
@@ -3246,7 +3249,8 @@ void main()
                     {
                         WorldPosition = worldPos,
                         IsCtrlPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Control) != 0,
-                        IsShiftPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Shift) != 0
+                        IsShiftPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Shift) != 0,
+                        IsAltPressed = (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Alt) != 0
                     };
                     PointClicked?.Invoke(this, args);
                 }

@@ -980,11 +980,11 @@ namespace PCBPlotter.ViewModels
             return new Rect(minX, minY, maxX - minX, maxY - minY);
         }
 
-        public void SelectPrimitivesInRect(Rect worldRect, bool addToSelection = false)
+        public void SelectPrimitivesInRect(Rect worldRect, bool addToSelection = false, bool removeFromSelection = false)
         {
             if (SelectedLayer == null) return;
 
-            if (!addToSelection)
+            if (!addToSelection && !removeFromSelection)
             {
                 ExecuteSelectNone();
             }
@@ -997,10 +997,20 @@ namespace PCBPlotter.ViewModels
 
                 if (worldRect.IntersectsWith(primitive.GetBounds()))
                 {
-                    primitive.IsSelected = true;
-                    if (!SelectedPrimitives.Contains(primitive))
+                    if (removeFromSelection)
                     {
-                        SelectedPrimitives.Add(primitive);
+                        // Deselect primitives in rect
+                        primitive.IsSelected = false;
+                        SelectedPrimitives.Remove(primitive);
+                    }
+                    else
+                    {
+                        // Select primitives in rect
+                        primitive.IsSelected = true;
+                        if (!SelectedPrimitives.Contains(primitive))
+                        {
+                            SelectedPrimitives.Add(primitive);
+                        }
                     }
                 }
             }
@@ -1014,7 +1024,7 @@ namespace PCBPlotter.ViewModels
         /// <summary>
         /// Selects a primitive at the specified world position (for GPU canvas click handling)
         /// </summary>
-        public void SelectPrimitiveAtPoint(Point worldPos, bool addToSelection = false, double hitRadiusWorld = 0.5)
+        public void SelectPrimitiveAtPoint(Point worldPos, bool addToSelection = false, double hitRadiusWorld = 0.5, bool removeFromSelection = false)
         {
             if (SelectedLayer == null) return;
 
@@ -1047,7 +1057,13 @@ namespace PCBPlotter.ViewModels
 
             if (closestPrimitive != null)
             {
-                if (addToSelection)
+                if (removeFromSelection)
+                {
+                    // Only deselect - don't toggle
+                    closestPrimitive.IsSelected = false;
+                    SelectedPrimitives.Remove(closestPrimitive);
+                }
+                else if (addToSelection)
                 {
                     // Toggle selection
                     closestPrimitive.IsSelected = !closestPrimitive.IsSelected;
