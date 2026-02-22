@@ -79,6 +79,8 @@ namespace PCBPlotter.Core.Services
 
         /// <summary>
         /// Extract features from a set of gerber primitives (pads).
+        /// Clusters overlapping/adjacent primitives into logical pads first,
+        /// since each physical lead may be drawn with multiple Gerber shapes.
         /// </summary>
         public static PadClusterFeatures ExtractFeatures(List<GerberPrimitive> primitives)
         {
@@ -86,20 +88,46 @@ namespace PCBPlotter.Core.Services
             if (primitives == null || primitives.Count == 0)
                 return features;
 
-            // Build pad info list
+            // Step 1: Get bounding boxes for all dark primitives
+            var primBounds = new List<Rect>();
             foreach (var prim in primitives)
             {
                 if (!prim.IsDark) continue;
-                var bounds = prim.GetBounds();
+                primBounds.Add(prim.GetBounds());
+            }
+
+            if (primBounds.Count == 0) return features;
+
+            // Step 2: Cluster overlapping/touching primitives into logical pads
+            // Each physical lead on the PCB may be drawn with multiple shapes
+            // (e.g., an oval + fill lines to create a rectangular pad appearance)
+            var clusters = ClusterOverlappingBounds(primBounds);
+
+            // Step 3: Create one PadInfo per cluster (logical pad)
+            foreach (var cluster in clusters)
+            {
+                // Compute bounding box of the cluster
+                double cMinX = cluster.Min(r => r.Left);
+                double cMinY = cluster.Min(r => r.Top);
+                double cMaxX = cluster.Max(r => r.Right);
+                double cMaxY = cluster.Max(r => r.Bottom);
+
+                double padW = cMaxX - cMinX;
+                double padH = cMaxY - cMinY;
+                double padCX = (cMinX + cMaxX) / 2;
+                double padCY = (cMinY + cMaxY) / 2;
+
+                // Determine if the clustered shape is roughly circular
+                bool isCircular = Math.Abs(padW - padH) < Math.Max(padW, padH) * 0.2;
+
                 features.Pads.Add(new PadInfo
                 {
-                    X = prim.X,
-                    Y = prim.Y,
-                    Width = bounds.Width,
-                    Height = bounds.Height,
-                    IsCircular = prim.Type == GerberPrimitiveType.Circle ||
-                                 (Math.Abs(bounds.Width - bounds.Height) < TOLERANCE),
-                    Area = bounds.Width * bounds.Height
+                    X = padCX,
+                    Y = padCY,
+                    Width = padW,
+                    Height = padH,
+                    IsCircular = isCircular,
+                    Area = padW * padH
                 });
             }
 
@@ -482,6 +510,86 @@ namespace PCBPlotter.Core.Services
         #endregion
 
         #region Feature Helpers
+
+        /// <summary>
+        /// Cluster overlapping or near-touching bounding boxes into groups.
+        /// Uses union-find to merge boxes whose inflated bounds intersect.
+        /// Each cluster represents one logical pad (lead).
+        /// </summary>
+        private static List<List<Rect>> ClusterOverlappingBounds(List<Rect> bounds)
+        {
+            int n = bounds.Count;
+            if (n == 0) return new List<List<Rect>>();
+
+            // Union-find parent array
+            int[] parent = new int[n];
+            int[] rank = new int[n];
+            for (int i = 0; i < n; i++) parent[i] = i;
+
+            // Find with path compression
+            int Find(int x)
+            {
+                while (parent[x] != x)
+                {
+                    parent[x] = parent[parent[x]];
+                    x = parent[x];
+                }
+                return x;
+            }
+
+            // Union by rank
+            void Union(int a, int b)
+            {
+                int ra = Find(a), rb = Find(b);
+                if (ra == rb) return;
+                if (rank[ra] < rank[rb]) { int t = ra; ra = rb; rb = t; }
+                parent[rb] = ra;
+                if (rank[ra] == rank[rb]) rank[ra]++;
+            }
+
+            // Small tolerance so near-touching shapes merge
+            // Use a fraction of the median shape size
+            double medianSize = 0;
+            if (n > 0)
+            {
+                var sizes = bounds.Select(r => Math.Max(r.Width, r.Height)).OrderBy(s => s).ToList();
+                medianSize = sizes[sizes.Count / 2];
+            }
+            double inflate = medianSize * 0.15; // 15% of median shape size
+            if (inflate < 0.01) inflate = 0.01;
+
+            // Compare all pairs - inflate bounds slightly before intersection test
+            for (int i = 0; i < n; i++)
+            {
+                var ri = new Rect(
+                    bounds[i].X - inflate, bounds[i].Y - inflate,
+                    bounds[i].Width + 2 * inflate, bounds[i].Height + 2 * inflate);
+
+                for (int j = i + 1; j < n; j++)
+                {
+                    var rj = new Rect(
+                        bounds[j].X - inflate, bounds[j].Y - inflate,
+                        bounds[j].Width + 2 * inflate, bounds[j].Height + 2 * inflate);
+
+                    if (ri.IntersectsWith(rj))
+                    {
+                        Union(i, j);
+                    }
+                }
+            }
+
+            // Group by root
+            var groups = new Dictionary<int, List<Rect>>();
+            for (int i = 0; i < n; i++)
+            {
+                int root = Find(i);
+                if (!groups.ContainsKey(root))
+                    groups[root] = new List<Rect>();
+                groups[root].Add(bounds[i]);
+            }
+
+            return groups.Values.ToList();
+        }
 
         private static double ComputeDominantPitch(List<PadInfo> pads)
         {
