@@ -551,16 +551,18 @@ namespace PCBPlotter.Core.Services
                 if (rank[ra] == rank[rb]) rank[ra]++;
             }
 
-            // Small tolerance so near-touching shapes merge
-            // Use a fraction of the median shape size
+            // Generous tolerance to merge shapes that form the same logical pad
+            // Gerber pads are often drawn with multiple overlapping shapes (circle + fill lines)
+            // Use a larger fraction of median size to ensure they cluster together
             double medianSize = 0;
             if (n > 0)
             {
                 var sizes = bounds.Select(r => Math.Max(r.Width, r.Height)).OrderBy(s => s).ToList();
                 medianSize = sizes[sizes.Count / 2];
             }
-            double inflate = medianSize * 0.15; // 15% of median shape size
-            if (inflate < 0.01) inflate = 0.01;
+            // Use 50% of median size as inflation - much more aggressive clustering
+            double inflate = medianSize * 0.5;
+            if (inflate < 0.02) inflate = 0.02;
 
             // Compare all pairs - inflate bounds slightly before intersection test
             for (int i = 0; i < n; i++)
