@@ -66,6 +66,14 @@
     <Compile Include="Services\ComponentClassifier.cs" />
     <Compile Include="Services\ValorMdbParser.cs" />
     <Compile Include="Services\CpfImporter.cs" />
+    <Compile Include="Services\AllegroFabmasterParser.cs" />
+    <Compile Include="Services\FabmasterImporter.cs" />
+    <Compile Include="Services\AltiumPcbDocParser.cs" />
+    <Compile Include="Services\AltiumImporter.cs" />
+    <Compile Include="Services\ProtelProParser.cs" />
+    <Compile Include="Services\ProtelImporter.cs" />
+    <Compile Include="Services\GenCadParser.cs" />
+    <Compile Include="Services\GenCadImporter.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
     <Compile Include="Utilities\UnicodeHelper.cs" />
     <Compile Include="Utilities\UnitConverter.cs" />
