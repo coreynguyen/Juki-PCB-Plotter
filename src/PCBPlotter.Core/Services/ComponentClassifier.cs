@@ -1282,33 +1282,84 @@ namespace PCBPlotter.Core.Services
                     break;
 
                 case PartClass.SOT:
-                    // SOT23/SOT223: Body is BETWEEN the leads, not encompassing them
-                    // Typical SOT23: 1 lead on one side, 2 leads on opposite side
-                    // Body inset from lead outer edges
+                    // SOT23/SOT223: Body is BETWEEN the leads
+                    // Typical SOT23: 2 leads on one side, 1 lead on opposite side
+                    // Compute body from actual pad positions
                     {
-                        // Find the extent of leads and compute body as inset region
-                        double leadInset = features.MaxPadSize * 0.6; // Body starts 60% into the leads
-                        double bodyInsetX = bw > bh ? leadInset : 0;
-                        double bodyInsetY = bh > bw ? leadInset : 0;
+                        if (features.Pads.Count < 2) break;
 
-                        // If roughly square, inset based on pad positions
-                        if (Math.Abs(bw - bh) < features.MaxPadSize)
+                        // Cluster pads by X and Y to find rows/columns
+                        var xClusters = ClusterValues(features.Pads.Select(p => p.X).ToList());
+                        var yClusters = ClusterValues(features.Pads.Select(p => p.Y).ToList());
+
+                        double bodyX, bodyY, bodyW, bodyH;
+
+                        if (xClusters.Count >= 2 && xClusters.Count >= yClusters.Count)
                         {
-                            bodyInsetX = leadInset * 0.5;
-                            bodyInsetY = leadInset * 0.5;
+                            // Pads arranged in columns (vertical orientation)
+                            var leftPads = features.Pads.Where(p => p.X < (xClusters[0] + xClusters.Last()) / 2).ToList();
+                            var rightPads = features.Pads.Where(p => p.X >= (xClusters[0] + xClusters.Last()) / 2).ToList();
+
+                            if (leftPads.Count == 0 || rightPads.Count == 0) break;
+
+                            // Body spans between inner edges of left and right pad groups
+                            double leftInner = leftPads.Max(p => p.X + p.Width / 2);
+                            double rightInner = rightPads.Min(p => p.X - p.Width / 2);
+
+                            // Body height: span the full vertical extent of pads
+                            double topEdge = features.Pads.Min(p => p.Y - p.Height / 2);
+                            double bottomEdge = features.Pads.Max(p => p.Y + p.Height / 2);
+
+                            bodyX = leftInner - cx;
+                            bodyY = topEdge - cy;
+                            bodyW = rightInner - leftInner;
+                            bodyH = bottomEdge - topEdge;
+                        }
+                        else if (yClusters.Count >= 2)
+                        {
+                            // Pads arranged in rows (horizontal orientation)
+                            var topPads = features.Pads.Where(p => p.Y < (yClusters[0] + yClusters.Last()) / 2).ToList();
+                            var bottomPads = features.Pads.Where(p => p.Y >= (yClusters[0] + yClusters.Last()) / 2).ToList();
+
+                            if (topPads.Count == 0 || bottomPads.Count == 0) break;
+
+                            // Body spans between inner edges of top and bottom pad groups
+                            double topInner = topPads.Max(p => p.Y + p.Height / 2);
+                            double bottomInner = bottomPads.Min(p => p.Y - p.Height / 2);
+
+                            // Body width: span the full horizontal extent of pads
+                            double leftEdge = features.Pads.Min(p => p.X - p.Width / 2);
+                            double rightEdge = features.Pads.Max(p => p.X + p.Width / 2);
+
+                            bodyX = leftEdge - cx;
+                            bodyY = topInner - cy;
+                            bodyW = rightEdge - leftEdge;
+                            bodyH = bottomInner - topInner;
+                        }
+                        else
+                        {
+                            // Fallback: single row/column, use small inset from bounding box
+                            bodyX = bx + bw * 0.15;
+                            bodyY = by + bh * 0.15;
+                            bodyW = bw * 0.7;
+                            bodyH = bh * 0.7;
                         }
 
-                        package.Graphics.Add(new PackageGraphic
+                        // Ensure minimum body size
+                        if (bodyW > 0.1 && bodyH > 0.1)
                         {
-                            ShapeType = GraphicShapeType.Rectangle,
-                            X = bx + bodyInsetX,
-                            Y = by + bodyInsetY,
-                            Width = bw - 2 * bodyInsetX,
-                            Height = bh - 2 * bodyInsetY,
-                            IsFilled = true,
-                            IsPad = false,
-                            FillColor = System.Windows.Media.Color.FromArgb(140, 50, 50, 50)
-                        });
+                            package.Graphics.Add(new PackageGraphic
+                            {
+                                ShapeType = GraphicShapeType.Rectangle,
+                                X = bodyX,
+                                Y = bodyY,
+                                Width = bodyW,
+                                Height = bodyH,
+                                IsFilled = true,
+                                IsPad = false,
+                                FillColor = System.Windows.Media.Color.FromArgb(140, 50, 50, 50)
+                            });
+                        }
                     }
                     break;
 
@@ -1540,29 +1591,34 @@ namespace PCBPlotter.Core.Services
                 case PartClass.SOP:
                 case PartClass.QFP:
                 case PartClass.QFN:
-                    // Place a small red dot near pin 1, outside the body
-                    // Position it at the outer corner closest to pin 1
-                    dotRadius = Math.Min(pin1Pad.Width, pin1Pad.Height) * 0.2;
-                    if (dotRadius < 0.1) dotRadius = 0.1;
-                    if (dotRadius > 0.3) dotRadius = 0.3;
+                    // Place a small red dot near pin 1, OUTSIDE the body and leads
+                    // Position it beyond the outer edge of pin 1, away from other leads
+                    dotRadius = Math.Min(pin1Pad.Width, pin1Pad.Height) * 0.15;
+                    if (dotRadius < 0.08) dotRadius = 0.08;
+                    if (dotRadius > 0.25) dotRadius = 0.25;
 
-                    // Calculate position: offset from pin 1 towards the nearest corner
-                    // The dot should be between pin 1 and the body corner
-                    double dotX = px;
-                    double dotY = py;
+                    // Calculate position: place dot outside pin 1, at the corner farthest from center
+                    // Get pin 1's outer edges
+                    double pin1Left = px - pin1Pad.Width / 2;
+                    double pin1Right = px + pin1Pad.Width / 2;
+                    double pin1Top = py - pin1Pad.Height / 2;
+                    double pin1Bottom = py + pin1Pad.Height / 2;
 
-                    // Offset towards the outer edge (away from center)
+                    double dotX, dotY;
+                    double offset = dotRadius * 1.5; // Gap between pin and dot
+
+                    // Place dot at the outermost corner of pin 1 (farthest from centroid at 0,0)
                     if (Math.Abs(px) > Math.Abs(py))
                     {
-                        // Pin 1 is more horizontal - offset vertically towards corner
-                        dotX = px + (px > 0 ? dotRadius * 1.5 : -dotRadius * 1.5);
-                        dotY = py + (py > 0 ? -dotRadius * 2 : dotRadius * 2);
+                        // Pin 1 is more to the side - place dot beyond the outer X edge
+                        dotX = px < 0 ? pin1Left - offset - dotRadius : pin1Right + offset + dotRadius;
+                        dotY = py < 0 ? pin1Top - offset : pin1Bottom + offset;
                     }
                     else
                     {
-                        // Pin 1 is more vertical - offset horizontally towards corner
-                        dotX = px + (px > 0 ? -dotRadius * 2 : dotRadius * 2);
-                        dotY = py + (py > 0 ? dotRadius * 1.5 : -dotRadius * 1.5);
+                        // Pin 1 is more to the top/bottom - place dot beyond the outer Y edge
+                        dotX = px < 0 ? pin1Left - offset : pin1Right + offset;
+                        dotY = py < 0 ? pin1Top - offset - dotRadius : pin1Bottom + offset + dotRadius;
                     }
 
                     package.Graphics.Add(new PackageGraphic
