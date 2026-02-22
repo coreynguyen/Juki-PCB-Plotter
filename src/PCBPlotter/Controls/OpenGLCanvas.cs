@@ -56,12 +56,14 @@ namespace PCBPlotter.Controls
 
         // GPU resources
         private int _shaderProgram;
-#pragma warning disable CS0649 // Field is never assigned (reserved for future direct GL rendering)
-        private int _vao;
-        private int _vbo;
-        private int _ebo;
-        private int _instanceVbo;
-#pragma warning restore CS0649
+        private int _directRenderShader;
+        private int _directRenderProjLoc;
+        private int _directRenderViewLoc;
+        private int _directRenderColorLoc;
+
+        // Direct rendering buffer for legacy fallback path
+        private GeometryBuffer _directRenderBuffer;
+        private bool _directRenderInitialized;
 
         // Modern batch renderer
         private BatchRenderer _batchRenderer;
@@ -83,9 +85,6 @@ namespace PCBPlotter.Controls
         // Uniform locations (basic shader)
         private int _projectionLoc;
         private int _viewLoc;
-#pragma warning disable CS0169 // Field is never used (reserved for future direct GL rendering)
-        private int _colorLoc;
-#pragma warning restore CS0169
 
         // Cached uniform locations for screen blend shader (avoid GetUniformLocation in render loop)
         private int _screenBlendBaseTextureLoc;
@@ -113,9 +112,7 @@ namespace PCBPlotter.Controls
         // Render state
         private Matrix4 _projection;
         private Matrix4 _view;
-#pragma warning disable CS0414 // Field is assigned but never used (reserved for future optimization)
         private bool _needsRebuild = true;
-#pragma warning restore CS0414
         private bool _needsRedraw = true; // Dirty flag to avoid continuous rendering
         private int _lastWidth, _lastHeight;
 
@@ -123,15 +120,11 @@ namespace PCBPlotter.Controls
         private double _lastZoom;
         private double _lastPanX;
         private double _lastPanY;
-#pragma warning disable CS0414 // Field is assigned but never used (reserved for future optimization)
         private bool _viewChanged = true;
-#pragma warning restore CS0414
 
         // Layer geometry caching - avoid rebuilding every frame
         private Dictionary<string, LayerGeometryCache> _layerGeometryCache = new Dictionary<string, LayerGeometryCache>();
-#pragma warning disable CS0414 // Field is assigned but never used (reserved for future optimization)
         private bool _geometryCacheDirty = true;
-#pragma warning restore CS0414
 
         // Static layer renderers - upload instance data to GPU once, render with just draw calls
         private Dictionary<string, StaticLayerRenderer> _staticLayerRenderers = new Dictionary<string, StaticLayerRenderer>();
@@ -494,10 +487,7 @@ namespace PCBPlotter.Controls
                 // Delete GPU resources
                 if (_shaderProgram != 0) GL.DeleteProgram(_shaderProgram);
                 if (_screenBlendShader != 0) GL.DeleteProgram(_screenBlendShader);
-                if (_vao != 0) GL.DeleteVertexArray(_vao);
-                if (_vbo != 0) GL.DeleteBuffer(_vbo);
-                if (_ebo != 0) GL.DeleteBuffer(_ebo);
-                if (_instanceVbo != 0) GL.DeleteBuffer(_instanceVbo);
+                if (_directRenderShader != 0) GL.DeleteProgram(_directRenderShader);
                 if (_quadVao != 0) GL.DeleteVertexArray(_quadVao);
                 if (_quadVbo != 0) GL.DeleteBuffer(_quadVbo);
                 if (_layerFbo != 0) GL.DeleteFramebuffer(_layerFbo);
@@ -506,6 +496,9 @@ namespace PCBPlotter.Controls
                 if (_compositeTextureA != 0) GL.DeleteTexture(_compositeTextureA);
                 if (_compositeFboB != 0) GL.DeleteFramebuffer(_compositeFboB);
                 if (_compositeTextureB != 0) GL.DeleteTexture(_compositeTextureB);
+
+                // Cleanup direct rendering buffer
+                _directRenderBuffer?.Dispose();
 
                 // Cleanup static layer renderers
                 foreach (var renderer in _staticLayerRenderers.Values)
@@ -549,6 +542,9 @@ namespace PCBPlotter.Controls
                 System.Diagnostics.Debug.WriteLine($"BatchRenderer initialization failed: {ex.Message}");
                 _useModernPipeline = false;
             }
+
+            // Initialize direct rendering resources for legacy fallback path
+            InitializeDirectRenderingResources();
 
             // Enable required states
             GL.Enable(EnableCap.Blend);
@@ -715,6 +711,50 @@ void main()
             GL.EnableVertexAttribArray(1);
 
             GL.BindVertexArray(0);
+        }
+
+        private void InitializeDirectRenderingResources()
+        {
+            // Create shader for direct (non-instanced) rendering
+            string vertexSource = "#version 330 core\n" + @"layout (location = 0) in vec2 aPos;
+
+uniform mat4 projection;
+uniform mat4 view;
+
+void main()
+{
+    gl_Position = projection * view * vec4(aPos, 0.0, 1.0);
+}
+";
+
+            string fragmentSource = "#version 330 core\n" + @"uniform vec4 color;
+out vec4 FragColor;
+
+void main()
+{
+    FragColor = color;
+}
+";
+
+            try
+            {
+                _directRenderShader = CreateShaderProgram(vertexSource, fragmentSource);
+                _directRenderProjLoc = GL.GetUniformLocation(_directRenderShader, "projection");
+                _directRenderViewLoc = GL.GetUniformLocation(_directRenderShader, "view");
+                _directRenderColorLoc = GL.GetUniformLocation(_directRenderShader, "color");
+
+                // Initialize geometry buffer for direct rendering (larger capacity for complex scenes)
+                _directRenderBuffer = new GeometryBuffer(32768, 65536, 0, BufferUsageHint.StreamDraw);
+                _directRenderBuffer.Initialize();
+
+                _directRenderInitialized = true;
+                System.Diagnostics.Debug.WriteLine("Direct rendering resources initialized successfully");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Direct rendering initialization failed: {ex.Message}");
+                _directRenderInitialized = false;
+            }
         }
 
         private int CreateShaderProgram(string vertexSource, string fragmentSource)
@@ -2662,6 +2702,13 @@ void main()
                     }
                     break;
 
+                case GerberPrimitiveType.Arc:
+                    if (prim.Points != null && prim.Points.Count >= 2)
+                    {
+                        RenderArc(prim.Points, (float)prim.Width, color);
+                    }
+                    break;
+
                 case GerberPrimitiveType.Contour:
                 case GerberPrimitiveType.Polygon:
                     if (prim.Points != null && prim.Points.Count >= 3)
@@ -2674,6 +2721,42 @@ void main()
 
         private void RenderCircle(float x, float y, float radius, OpenTK.Vector4 color)
         {
+            if (!_directRenderInitialized || _directRenderBuffer == null)
+            {
+                // Fallback to immediate mode if direct rendering not available
+                RenderCircleImmediate(x, y, radius, color);
+                return;
+            }
+
+            _directRenderBuffer.Clear();
+
+            // Build circle geometry
+            uint centerIdx = (uint)_directRenderBuffer.AddVertex(x, y);
+
+            for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+            {
+                float angle = (float)(2 * Math.PI * i / CIRCLE_SEGMENTS);
+                _directRenderBuffer.AddVertex(x + radius * (float)Math.Cos(angle), y + radius * (float)Math.Sin(angle));
+            }
+
+            // Triangle fan indices
+            for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+            {
+                _directRenderBuffer.AddTriangle(centerIdx, centerIdx + (uint)(i + 1), centerIdx + (uint)((i + 1) % CIRCLE_SEGMENTS + 1));
+            }
+
+            _directRenderBuffer.Upload();
+            DrawDirectBuffer(color);
+        }
+
+        private void RenderCircleImmediate(float x, float y, float radius, OpenTK.Vector4 color)
+        {
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
+
             GL.Begin(PrimitiveType.TriangleFan);
             GL.Color4(color.X, color.Y, color.Z, color.W);
             GL.Vertex2(x, y);
@@ -2688,8 +2771,37 @@ void main()
 
         private void RenderRectangle(float x, float y, float width, float height, OpenTK.Vector4 color)
         {
+            if (!_directRenderInitialized || _directRenderBuffer == null)
+            {
+                RenderRectangleImmediate(x, y, width, height, color);
+                return;
+            }
+
             float hw = width / 2;
             float hh = height / 2;
+
+            _directRenderBuffer.Clear();
+
+            uint v0 = (uint)_directRenderBuffer.AddVertex(x - hw, y - hh);
+            uint v1 = (uint)_directRenderBuffer.AddVertex(x + hw, y - hh);
+            uint v2 = (uint)_directRenderBuffer.AddVertex(x + hw, y + hh);
+            uint v3 = (uint)_directRenderBuffer.AddVertex(x - hw, y + hh);
+
+            _directRenderBuffer.AddQuad(v0, v1, v2, v3);
+            _directRenderBuffer.Upload();
+            DrawDirectBuffer(color);
+        }
+
+        private void RenderRectangleImmediate(float x, float y, float width, float height, OpenTK.Vector4 color)
+        {
+            float hw = width / 2;
+            float hh = height / 2;
+
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
 
             GL.Begin(PrimitiveType.Quads);
             GL.Color4(color.X, color.Y, color.Z, color.W);
@@ -2702,6 +2814,39 @@ void main()
 
         private void RenderEllipse(float x, float y, float radiusX, float radiusY, OpenTK.Vector4 color)
         {
+            if (!_directRenderInitialized || _directRenderBuffer == null)
+            {
+                RenderEllipseImmediate(x, y, radiusX, radiusY, color);
+                return;
+            }
+
+            _directRenderBuffer.Clear();
+
+            uint centerIdx = (uint)_directRenderBuffer.AddVertex(x, y);
+
+            for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+            {
+                float angle = (float)(2 * Math.PI * i / CIRCLE_SEGMENTS);
+                _directRenderBuffer.AddVertex(x + radiusX * (float)Math.Cos(angle), y + radiusY * (float)Math.Sin(angle));
+            }
+
+            for (int i = 0; i < CIRCLE_SEGMENTS; i++)
+            {
+                _directRenderBuffer.AddTriangle(centerIdx, centerIdx + (uint)(i + 1), centerIdx + (uint)((i + 1) % CIRCLE_SEGMENTS + 1));
+            }
+
+            _directRenderBuffer.Upload();
+            DrawDirectBuffer(color);
+        }
+
+        private void RenderEllipseImmediate(float x, float y, float radiusX, float radiusY, OpenTK.Vector4 color)
+        {
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
+
             GL.Begin(PrimitiveType.TriangleFan);
             GL.Color4(color.X, color.Y, color.Z, color.W);
             GL.Vertex2(x, y);
@@ -2726,13 +2871,7 @@ void main()
                 float rectHw = hw - radius;
 
                 // Center rectangle
-                GL.Begin(PrimitiveType.Quads);
-                GL.Color4(color.X, color.Y, color.Z, color.W);
-                GL.Vertex2(x - rectHw, y - hh);
-                GL.Vertex2(x + rectHw, y - hh);
-                GL.Vertex2(x + rectHw, y + hh);
-                GL.Vertex2(x - rectHw, y + hh);
-                GL.End();
+                RenderRectangle(x, y, rectHw * 2, height, color);
 
                 // End circles
                 RenderCircle(x - rectHw, y, radius, color);
@@ -2743,14 +2882,10 @@ void main()
                 float radius = hw;
                 float rectHh = hh - radius;
 
-                GL.Begin(PrimitiveType.Quads);
-                GL.Color4(color.X, color.Y, color.Z, color.W);
-                GL.Vertex2(x - hw, y - rectHh);
-                GL.Vertex2(x + hw, y - rectHh);
-                GL.Vertex2(x + hw, y + rectHh);
-                GL.Vertex2(x - hw, y + rectHh);
-                GL.End();
+                // Center rectangle
+                RenderRectangle(x, y, width, rectHh * 2, color);
 
+                // End circles
                 RenderCircle(x, y - rectHh, radius, color);
                 RenderCircle(x, y + rectHh, radius, color);
             }
@@ -2767,6 +2902,38 @@ void main()
             float nx = -dy / len * width / 2;
             float ny = dx / len * width / 2;
 
+            if (!_directRenderInitialized || _directRenderBuffer == null)
+            {
+                RenderLineImmediate(x1, y1, x2, y2, nx, ny, width, color);
+                return;
+            }
+
+            _directRenderBuffer.Clear();
+
+            // Line quad
+            uint v0 = (uint)_directRenderBuffer.AddVertex(x1 - nx, y1 - ny);
+            uint v1 = (uint)_directRenderBuffer.AddVertex(x1 + nx, y1 + ny);
+            uint v2 = (uint)_directRenderBuffer.AddVertex(x2 + nx, y2 + ny);
+            uint v3 = (uint)_directRenderBuffer.AddVertex(x2 - nx, y2 - ny);
+            _directRenderBuffer.AddQuad(v0, v1, v2, v3);
+
+            _directRenderBuffer.Upload();
+            DrawDirectBuffer(color);
+
+            // Round caps
+            float radius = width / 2;
+            RenderCircle(x1, y1, radius, color);
+            RenderCircle(x2, y2, radius, color);
+        }
+
+        private void RenderLineImmediate(float x1, float y1, float x2, float y2, float nx, float ny, float width, OpenTK.Vector4 color)
+        {
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
+
             GL.Begin(PrimitiveType.Quads);
             GL.Color4(color.X, color.Y, color.Z, color.W);
             GL.Vertex2(x1 - nx, y1 - ny);
@@ -2777,16 +2944,76 @@ void main()
 
             // Round caps
             float radius = width / 2;
-            RenderCircle(x1, y1, radius, color);
-            RenderCircle(x2, y2, radius, color);
+            RenderCircleImmediate(x1, y1, radius, color);
+            RenderCircleImmediate(x2, y2, radius, color);
+        }
+
+        private void RenderArc(IList<System.Windows.Point> points, float width, OpenTK.Vector4 color)
+        {
+            if (points == null || points.Count < 2) return;
+
+            // Render arc as connected line segments
+            for (int i = 0; i < points.Count - 1; i++)
+            {
+                var p1 = points[i];
+                var p2 = points[i + 1];
+                RenderLine((float)p1.X, (float)p1.Y, (float)p2.X, (float)p2.Y, width, color);
+            }
         }
 
         private void RenderPolygon(IList<System.Windows.Point> points, OpenTK.Vector4 color)
         {
             if (points.Count < 3) return;
 
-            // Simple triangle fan from first vertex (works for convex polygons)
-            // For complex polygons, we'd need triangulation
+            if (!_directRenderInitialized || _directRenderBuffer == null)
+            {
+                RenderPolygonImmediate(points, color);
+                return;
+            }
+
+            // Use proper triangulation for concave polygon support
+            List<System.Windows.Point> cleanedPoints;
+            var indices = Triangulator.TriangulateWithCleanedPoints(points, out cleanedPoints);
+
+            if (indices.Count == 0)
+            {
+                // Triangulation failed - fallback to immediate mode triangle fan
+                RenderPolygonImmediate(points, color);
+                return;
+            }
+
+            _directRenderBuffer.Clear();
+
+            uint baseVertex = (uint)_directRenderBuffer.VertexCount;
+
+            // Add vertices
+            foreach (var pt in cleanedPoints)
+            {
+                _directRenderBuffer.AddVertex((float)pt.X, (float)pt.Y);
+            }
+
+            // Add triangle indices
+            for (int i = 0; i < indices.Count; i += 3)
+            {
+                _directRenderBuffer.AddTriangle(
+                    baseVertex + (uint)indices[i],
+                    baseVertex + (uint)indices[i + 1],
+                    baseVertex + (uint)indices[i + 2]);
+            }
+
+            _directRenderBuffer.Upload();
+            DrawDirectBuffer(color);
+        }
+
+        private void RenderPolygonImmediate(IList<System.Windows.Point> points, OpenTK.Vector4 color)
+        {
+            GL.UseProgram(0);
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadMatrix(ref _projection);
+            GL.MatrixMode(MatrixMode.Modelview);
+            GL.LoadMatrix(ref _view);
+
+            // Simple triangle fan (works for convex polygons)
             GL.Begin(PrimitiveType.TriangleFan);
             GL.Color4(color.X, color.Y, color.Z, color.W);
 
@@ -2795,6 +3022,16 @@ void main()
                 GL.Vertex2(pt.X, pt.Y);
             }
             GL.End();
+        }
+
+        private void DrawDirectBuffer(OpenTK.Vector4 color)
+        {
+            GL.UseProgram(_directRenderShader);
+            GL.UniformMatrix4(_directRenderProjLoc, false, ref _projection);
+            GL.UniformMatrix4(_directRenderViewLoc, false, ref _view);
+            GL.Uniform4(_directRenderColorLoc, color.X, color.Y, color.Z, color.W);
+
+            _directRenderBuffer.Draw();
         }
 
         private void RenderGrid()
