@@ -52,10 +52,7 @@ namespace PCBPlotter.Core.Services
                     Name = shape.Name,
                     Description = "",
                     Width = data.ToMm(maxX - minX),
-                    Height = data.ToMm(maxY - minY),
-                    PadCount = shape.Pins.Count,
-                    MountType = shape.Insert == GenCadInsertType.SMD ? "SMD" :
-                                shape.Insert == GenCadInsertType.TH ? "THT" : "UNKNOWN"
+                    Length = data.ToMm(maxY - minY)
                 };
                 packages.Add(pkg);
                 pkgMap[shape.Name] = pkg;
@@ -78,12 +75,11 @@ namespace PCBPlotter.Core.Services
 
                 var plc = new Placement
                 {
-                    RefDes = comp.RefDes,
-                    PartNumber = partNumber,
+                    Reference = comp.RefDes,
                     X = data.ToMm(comp.PlaceX),
                     Y = data.ToMm(comp.PlaceY),
                     Rotation = comp.Rotation,
-                    IsBottom = comp.Layer == "BOTTOM",
+                    Side = comp.Layer == "BOTTOM" ? BoardSide.Bottom : BoardSide.Top,
                     Package = pkg
                 };
                 placements.Add(plc);
@@ -97,7 +93,7 @@ namespace PCBPlotter.Core.Services
                     Name = fid.Name,
                     X = data.ToMm(fid.X),
                     Y = data.ToMm(fid.Y),
-                    IsBottom = fid.Layer == "BOTTOM",
+                    Side = fid.Layer == "BOTTOM" ? BoardSide.Bottom : BoardSide.Top,
                     Type = FiducialType.Global
                 });
             }
@@ -128,8 +124,7 @@ namespace PCBPlotter.Core.Services
                     {
                         Width = maxX - minX,
                         Height = maxY - minY,
-                        OriginX = minX,
-                        OriginY = minY
+                        Origin = new System.Windows.Point(minX, minY)
                     };
                 }
             }

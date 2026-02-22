@@ -49,9 +49,7 @@ namespace PCBPlotter.Core.Services
                     Name = srcPkg.PatternName,
                     Description = srcPkg.Description,
                     Width = srcPkg.Width_mm,
-                    Height = srcPkg.Height_mm,
-                    PadCount = srcPkg.PadCount,
-                    MountType = srcPkg.MountType
+                    Length = srcPkg.Height_mm
                 };
                 packages.Add(pkg);
                 pkgMap[srcPkg.PatternName] = pkg;
@@ -67,7 +65,7 @@ namespace PCBPlotter.Core.Services
                         Name = comp.Designator,
                         X = comp.X_mm,
                         Y = comp.Y_mm,
-                        IsBottom = comp.Side == ProtelBoardSide.Bottom,
+                        Side = comp.Side == ProtelBoardSide.Bottom ? BoardSide.Bottom : BoardSide.Top,
                         Type = FiducialType.Global
                     };
                     fiducials.Add(fid);
@@ -80,12 +78,11 @@ namespace PCBPlotter.Core.Services
 
                     var plc = new Placement
                     {
-                        RefDes = comp.Designator,
-                        PartNumber = comp.Comment ?? "",
+                        Reference = comp.Designator,
                         X = comp.X_mm,
                         Y = comp.Y_mm,
                         Rotation = comp.Rotation,
-                        IsBottom = comp.Side == ProtelBoardSide.Bottom,
+                        Side = comp.Side == ProtelBoardSide.Bottom ? BoardSide.Bottom : BoardSide.Top,
                         Package = pkg
                     };
                     placements.Add(plc);
@@ -125,8 +122,7 @@ namespace PCBPlotter.Core.Services
                     {
                         Width = maxX - minX,
                         Height = maxY - minY,
-                        OriginX = minX,
-                        OriginY = minY
+                        Origin = new System.Windows.Point(minX, minY)
                     };
                 }
             }
