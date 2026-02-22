@@ -40,8 +40,7 @@ namespace PCBPlotter.Controls
         private GeometryBuffer _dynamicBuffer;
 
         // Batched primitives for the current frame
-        private List<CircleBatch> _circleBatches = new List<CircleBatch>();
-        private List<RectBatch> _rectBatches = new List<RectBatch>();
+        // Circles and rectangles use instanced rendering via GeometryCache
         private List<LineBatch> _lineBatches = new List<LineBatch>();
         private List<PolygonBatch> _polygonBatches = new List<PolygonBatch>();
 
@@ -230,8 +229,7 @@ void main()
             _drawCalls = 0;
             _trianglesRendered = 0;
 
-            _circleBatches.Clear();
-            _rectBatches.Clear();
+            // Clear batched primitives
             _lineBatches.Clear();
             _polygonBatches.Clear();
 
@@ -240,6 +238,7 @@ void main()
             _pendingStaticPolygonRenders.Clear();
             _pendingStaticClearPolygonRenders.Clear();
 
+            // Clear instanced geometry (circles, rectangles)
             _geometryCache.ClearInstances();
             _dynamicBuffer.Clear();
 
@@ -345,6 +344,23 @@ void main()
                 Width = width,
                 Color = color
             });
+        }
+
+        /// <summary>
+        /// Adds an arc (series of connected line segments with round caps) to the batch.
+        /// </summary>
+        public void AddArc(IList<System.Windows.Point> points, float width, Vector4 color)
+        {
+            if (points == null || points.Count < 2) return;
+
+            // Add line segments between consecutive points
+            for (int i = 0; i < points.Count - 1; i++)
+            {
+                AddLine(
+                    (float)points[i].X, (float)points[i].Y,
+                    (float)points[i + 1].X, (float)points[i + 1].Y,
+                    width, color);
+            }
         }
 
         /// <summary>
@@ -542,6 +558,17 @@ void main()
         /// </summary>
         public void Render(Matrix4 projection, Matrix4 view)
         {
+            Render(projection, view, 1.0f);
+        }
+
+        /// <summary>
+        /// Uploads all batched geometry to GPU and renders with specified opacity.
+        /// </summary>
+        /// <param name="projection">Projection matrix</param>
+        /// <param name="view">View matrix</param>
+        /// <param name="opacity">Layer opacity (0.0 to 1.0)</param>
+        public void Render(Matrix4 projection, Matrix4 view, float opacity)
+        {
             // Upload instanced geometry
             _geometryCache.Upload();
 
@@ -568,6 +595,9 @@ void main()
             _stateCache.UseProgram(_instancedShader);
             _stateCache.SetProjectionMatrix(_instancedProjLoc, ref projection);
             _stateCache.SetViewMatrix(_instancedViewLoc, ref view);
+
+            // Set layer opacity for instanced rendering
+            GL.Uniform1(_instancedOpacityLoc, opacity);
 
             _geometryCache.DrawCircles();
             if (_geometryCache.CircleCount > 0)
@@ -664,18 +694,21 @@ void main()
             _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
             _stateCache.SetViewMatrix(_solidViewLoc, ref view);
 
-            // Group lines by color for efficient batching
-            var colorBatches = new Dictionary<uint, List<LineBatch>>();
+            // Group lines by color for efficient batching (reuse dictionary to reduce allocations)
+            _lineColorBatchDict.Clear();
 
             foreach (var line in _lineBatches)
             {
                 uint colorKey = ColorToKey(line.Color);
-                if (!colorBatches.ContainsKey(colorKey))
-                    colorBatches[colorKey] = new List<LineBatch>();
-                colorBatches[colorKey].Add(line);
+                if (!_lineColorBatchDict.TryGetValue(colorKey, out var list))
+                {
+                    list = GetPooledLineList();
+                    _lineColorBatchDict[colorKey] = list;
+                }
+                list.Add(line);
             }
 
-            foreach (var kvp in colorBatches)
+            foreach (var kvp in _lineColorBatchDict)
             {
                 _dynamicBuffer.Clear();
 
@@ -705,6 +738,9 @@ void main()
                 _dynamicBuffer.Draw();
                 _drawCalls++;
                 _trianglesRendered += _dynamicBuffer.IndexCount / 3;
+
+                // Return list to pool
+                ReturnPooledLineList(kvp.Value);
             }
         }
 
@@ -739,37 +775,55 @@ void main()
             _stateCache.SetProjectionMatrix(_solidProjLoc, ref projection);
             _stateCache.SetViewMatrix(_solidViewLoc, ref view);
 
-            // Group polygons by color for batching
-            var colorBatches = new Dictionary<uint, List<PolygonBatch>>();
+            // Group polygons by color for batching (reuse dictionary to reduce allocations)
+            _colorBatchDict.Clear();
 
             foreach (var poly in _polygonBatches)
             {
                 uint colorKey = ColorToKey(poly.Color);
-                if (!colorBatches.ContainsKey(colorKey))
-                    colorBatches[colorKey] = new List<PolygonBatch>();
-                colorBatches[colorKey].Add(poly);
+                if (!_colorBatchDict.TryGetValue(colorKey, out var list))
+                {
+                    list = GetPooledPolygonList();
+                    _colorBatchDict[colorKey] = list;
+                }
+                list.Add(poly);
             }
 
-            foreach (var kvp in colorBatches)
+            foreach (var kvp in _colorBatchDict)
             {
                 _dynamicBuffer.Clear();
 
                 foreach (var poly in kvp.Value)
                 {
-                    // Simple triangle fan from first vertex (works for convex polygons)
                     uint baseVertex = (uint)_dynamicBuffer.VertexCount;
 
-                    foreach (var pt in poly.Points)
+                    // Use proper triangulation for concave polygon support
+                    List<System.Windows.Point> cleanedPoints;
+                    var indices = Triangulator.TriangulateWithCleanedPoints(poly.Points, out cleanedPoints);
+
+                    if (indices.Count == 0)
+                    {
+                        // Triangulation failed (degenerate polygon) - skip
+                        continue;
+                    }
+
+                    // Add cleaned vertices
+                    foreach (var pt in cleanedPoints)
                     {
                         _dynamicBuffer.AddVertex((float)pt.X, (float)pt.Y);
                     }
 
-                    // Triangle fan indices
-                    for (int i = 1; i < poly.Points.Count - 1; i++)
+                    // Add triangle indices
+                    for (int i = 0; i < indices.Count; i += 3)
                     {
-                        _dynamicBuffer.AddTriangle(baseVertex, baseVertex + (uint)i, baseVertex + (uint)(i + 1));
+                        _dynamicBuffer.AddTriangle(
+                            baseVertex + (uint)indices[i],
+                            baseVertex + (uint)indices[i + 1],
+                            baseVertex + (uint)indices[i + 2]);
                     }
                 }
+
+                if (_dynamicBuffer.IndexCount == 0) continue;
 
                 _dynamicBuffer.Upload();
 
@@ -779,7 +833,50 @@ void main()
                 _dynamicBuffer.Draw();
                 _drawCalls++;
                 _trianglesRendered += _dynamicBuffer.IndexCount / 3;
+
+                // Return list to pool
+                ReturnPooledPolygonList(kvp.Value);
             }
+        }
+
+        // Object pools to reduce allocations during rendering
+        private Dictionary<uint, List<PolygonBatch>> _colorBatchDict = new Dictionary<uint, List<PolygonBatch>>();
+        private Dictionary<uint, List<LineBatch>> _lineColorBatchDict = new Dictionary<uint, List<LineBatch>>();
+        private Stack<List<PolygonBatch>> _polygonListPool = new Stack<List<PolygonBatch>>();
+        private Stack<List<LineBatch>> _lineListPool = new Stack<List<LineBatch>>();
+
+        private List<PolygonBatch> GetPooledPolygonList()
+        {
+            if (_polygonListPool.Count > 0)
+            {
+                var list = _polygonListPool.Pop();
+                list.Clear();
+                return list;
+            }
+            return new List<PolygonBatch>();
+        }
+
+        private void ReturnPooledPolygonList(List<PolygonBatch> list)
+        {
+            list.Clear();
+            _polygonListPool.Push(list);
+        }
+
+        private List<LineBatch> GetPooledLineList()
+        {
+            if (_lineListPool.Count > 0)
+            {
+                var list = _lineListPool.Pop();
+                list.Clear();
+                return list;
+            }
+            return new List<LineBatch>();
+        }
+
+        private void ReturnPooledLineList(List<LineBatch> list)
+        {
+            list.Clear();
+            _lineListPool.Push(list);
         }
 
         private uint ColorToKey(Vector4 color)
@@ -894,20 +991,6 @@ void main()
             _staticLayerBuffers.Clear();
         }
 
-#pragma warning disable CS0649 // Field is never assigned (reserved for future batch rendering)
-        private struct CircleBatch
-        {
-            public float X, Y, Radius;
-            public Vector4 Color;
-        }
-
-        private struct RectBatch
-        {
-            public float X, Y, Width, Height;
-            public Vector4 Color;
-        }
-#pragma warning restore CS0649
-
         private struct LineBatch
         {
             public float X1, Y1, X2, Y2;
@@ -949,7 +1032,7 @@ void main()
             }
         }
 #else
-        // Stub implementation
+        // Stub implementation when OpenGL is not available
         public void Initialize() { }
         public void SetViewBounds(System.Windows.Rect viewBounds, double zoom) { }
         public bool UseFrustumCulling { get; set; }
@@ -958,8 +1041,10 @@ void main()
         public void AddRectangle(float x, float y, float width, float height, object color) { }
         public void AddObround(float x, float y, float width, float height, object color) { }
         public void AddLine(float x1, float y1, float x2, float y2, float width, object color) { }
+        public void AddArc(IList<System.Windows.Point> points, float width, object color) { }
         public void AddPolygon(IList<System.Windows.Point> points, object color) { }
         public void Render(object projection, object view) { }
+        public void Render(object projection, object view, float opacity) { }
         public RenderStats EndFrame() => new RenderStats();
         public CullingStats GetCullingStats() => new CullingStats();
         public RenderStateStats GetStateStats() => new RenderStateStats();
