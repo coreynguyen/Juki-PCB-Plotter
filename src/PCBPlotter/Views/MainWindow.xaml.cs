@@ -517,12 +517,16 @@ namespace PCBPlotter.Views
                 return;
             }
 
-            var dialog = new ImportCpfDialog(mainVm.CurrentProject);
-            dialog.Owner = this;
-
-            if (dialog.ShowDialog() == true)
+            // Show file open dialog first
+            var fileDialog = new Microsoft.Win32.OpenFileDialog
             {
-                ApplyCpfImportResults(mainVm, dialog);
+                Filter = "CircuitCAM Express Files (*.cpf;*.mdb)|*.cpf;*.mdb|All Files (*.*)|*.*",
+                Title = "Select CircuitCAM Express / Valor CIM File"
+            };
+
+            if (fileDialog.ShowDialog() == true)
+            {
+                ShowCpfImportDialogWithFile(fileDialog.FileName);
             }
         }
 
