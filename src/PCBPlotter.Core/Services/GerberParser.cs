@@ -28,7 +28,9 @@ namespace PCBPlotter.Core.Services
         private InterpolationMode _interpolation = InterpolationMode.Linear;
         private bool _regionMode;
         private bool _darkPolarity = true;  // true = dark (add), false = clear (subtract)
+#pragma warning disable CS0414 // Field is assigned but never used (reserved for future arc interpolation)
         private QuadrantMode _quadrantMode = QuadrantMode.Multi;
+#pragma warning restore CS0414
         private int _lastDCode = 2;  // Last D operation (1=draw, 2=move, 3=flash) - default to move
 
         // Apertures and macros

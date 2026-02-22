@@ -311,8 +311,10 @@ namespace PCBPlotter.Controls
         #region Events
 
         public event EventHandler<Point> CursorPositionChanged;
+#pragma warning disable CS0067 // Event is never used (reserved for future use)
         public event EventHandler<Rect> SelectionRectCompleted;
         public event EventHandler<Point> PointClicked;
+#pragma warning restore CS0067
         public event EventHandler<List<Placement>> SelectionChanged;
         public event EventHandler<List<GerberPrimitive>> GerberSelectionChanged;
         public event EventHandler<int> GraphicSelectionChanged;
@@ -2839,7 +2841,6 @@ namespace PCBPlotter.Controls
             _packageSelectStart = mousePos;
 
             bool isCtrlPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
-            bool hitSomething = false;
 
             // Hit test pins first (they're on top)
             double hitRadius = 10 / Zoom; // Screen pixels converted to world
@@ -2863,7 +2864,6 @@ namespace PCBPlotter.Controls
                         ClearPackageSelection();
                         _selectedPinIndices.Add(i);
                     }
-                    hitSomething = true;
                     _isDraggingGraphic = true;
                     SaveUndoState(); // Save state before move
                     CaptureMouse();
@@ -2892,7 +2892,6 @@ namespace PCBPlotter.Controls
                         ClearPackageSelection();
                         _selectedGraphicIndices.Add(i);
                     }
-                    hitSomething = true;
                     _isDraggingGraphic = true;
                     SaveUndoState(); // Save state before move
                     CaptureMouse();

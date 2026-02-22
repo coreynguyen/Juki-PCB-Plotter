@@ -894,6 +894,7 @@ void main()
             _staticLayerBuffers.Clear();
         }
 
+#pragma warning disable CS0649 // Field is never assigned (reserved for future batch rendering)
         private struct CircleBatch
         {
             public float X, Y, Radius;
@@ -905,6 +906,7 @@ void main()
             public float X, Y, Width, Height;
             public Vector4 Color;
         }
+#pragma warning restore CS0649
 
         private struct LineBatch
         {

@@ -213,13 +213,22 @@ namespace PCBPlotter.Services
             if (string.IsNullOrEmpty(text)) return;
 
             var typeface = new Typeface(fontFamily);
+            double pixelsPerDip = 1.0;
+            try
+            {
+                if (Application.Current?.MainWindow != null)
+                    pixelsPerDip = VisualTreeHelper.GetDpi(Application.Current.MainWindow).PixelsPerDip;
+            }
+            catch { /* Use default 1.0 */ }
+
             var formattedText = new FormattedText(
                 text,
                 System.Globalization.CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight,
                 typeface,
                 size,
-                GetCachedBrush(color)
+                GetCachedBrush(color),
+                pixelsPerDip
             );
 
             _drawingContext?.DrawText(formattedText, position);

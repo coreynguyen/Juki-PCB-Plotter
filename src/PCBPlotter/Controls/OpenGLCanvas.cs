@@ -56,10 +56,12 @@ namespace PCBPlotter.Controls
 
         // GPU resources
         private int _shaderProgram;
+#pragma warning disable CS0649 // Field is never assigned (reserved for future direct GL rendering)
         private int _vao;
         private int _vbo;
         private int _ebo;
         private int _instanceVbo;
+#pragma warning restore CS0649
 
         // Modern batch renderer
         private BatchRenderer _batchRenderer;
@@ -81,7 +83,9 @@ namespace PCBPlotter.Controls
         // Uniform locations (basic shader)
         private int _projectionLoc;
         private int _viewLoc;
+#pragma warning disable CS0169 // Field is never used (reserved for future direct GL rendering)
         private int _colorLoc;
+#pragma warning restore CS0169
 
         // Cached uniform locations for screen blend shader (avoid GetUniformLocation in render loop)
         private int _screenBlendBaseTextureLoc;
@@ -109,7 +113,9 @@ namespace PCBPlotter.Controls
         // Render state
         private Matrix4 _projection;
         private Matrix4 _view;
+#pragma warning disable CS0414 // Field is assigned but never used (reserved for future optimization)
         private bool _needsRebuild = true;
+#pragma warning restore CS0414
         private bool _needsRedraw = true; // Dirty flag to avoid continuous rendering
         private int _lastWidth, _lastHeight;
 
@@ -117,11 +123,15 @@ namespace PCBPlotter.Controls
         private double _lastZoom;
         private double _lastPanX;
         private double _lastPanY;
+#pragma warning disable CS0414 // Field is assigned but never used (reserved for future optimization)
         private bool _viewChanged = true;
+#pragma warning restore CS0414
 
         // Layer geometry caching - avoid rebuilding every frame
         private Dictionary<string, LayerGeometryCache> _layerGeometryCache = new Dictionary<string, LayerGeometryCache>();
+#pragma warning disable CS0414 // Field is assigned but never used (reserved for future optimization)
         private bool _geometryCacheDirty = true;
+#pragma warning restore CS0414
 
         // Static layer renderers - upload instance data to GPU once, render with just draw calls
         private Dictionary<string, StaticLayerRenderer> _staticLayerRenderers = new Dictionary<string, StaticLayerRenderer>();
