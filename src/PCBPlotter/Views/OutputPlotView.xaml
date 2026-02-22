@@ -28,13 +28,16 @@
                                   ToolTip="Assign new placements to Bottom side"/>
                 </StackPanel>
 
-                <!-- Camera View (Set 1: interlocking radio-style buttons) -->
+                <!-- Camera View (visual only - mirrors X for bottom view, does NOT affect placement coordinates) -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
-                    <TextBlock Text="Camera:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ToggleButton Content="Top Down" Padding="8,4" Margin="0,0,2,0"
-                                  IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Top}"/>
-                    <ToggleButton Content="Bottom Up" Padding="8,4"
-                                  IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"/>
+                    <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0"
+                               ToolTip="Camera perspective - mirrors X axis for bottom view. Does not affect placement coordinates."/>
+                    <ToggleButton Content="Top" Padding="8,4" Margin="0,0,2,0"
+                                  IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Top}"
+                                  ToolTip="View board from the top (normal orientation)"/>
+                    <ToggleButton Content="Bottom" Padding="8,4"
+                                  IsChecked="{Binding ViewSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"
+                                  ToolTip="View board from the bottom (X-axis mirrored)"/>
                 </StackPanel>
 
                 <!-- Layer Visibility (Set 2: independent toggles, user can override) -->
