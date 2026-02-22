@@ -65,14 +65,25 @@ namespace PCBPlotter.Views
             OpenGLCanvas.RightClicked += OnOpenGLCanvasRightClick;
 
             // Force refresh when the view becomes visible (e.g. switching to Gerber tab)
-            // This fixes layers not rendering after tab content is deferred-loaded by WPF
+            // IMPORTANT: Do NOT call InvalidateGerberCache() here - that clears quadtrees
+            // which causes large layers (>2000 primitives) to disappear until rebuilt async.
+            // Just call InvalidateVisual() to trigger a repaint with existing caches.
             IsVisibleChanged += (s, e) =>
             {
                 if ((bool)e.NewValue)
                 {
-                    GerberCanvas.InvalidateGerberCache();
+                    // Immediate invalidation for cases where layout is already done
+                    GerberCanvas.InvalidateVisual();
                     if (OpenGLCanvas.Visibility == Visibility.Visible)
                         OpenGLCanvas.Invalidate();
+
+                    // Deferred invalidation to catch cases where layout hasn't completed yet
+                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+                    {
+                        GerberCanvas.InvalidateVisual();
+                        if (OpenGLCanvas.Visibility == Visibility.Visible)
+                            OpenGLCanvas.Invalidate();
+                    }));
                 }
             };
 
