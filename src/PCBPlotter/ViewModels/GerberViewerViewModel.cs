@@ -759,7 +759,9 @@ namespace PCBPlotter.ViewModels
                 : inputDialog.Value.Trim();
 
             // Build classified package with body graphics, pins, and pin 1 indicator
-            var package = PackageBodyGenerator.BuildPackage(primitives, classification.SuggestedName);
+            // Use simplified lead bounding boxes for placement display
+            var package = PackageBodyGenerator.BuildPackage(
+                primitives, classification.SuggestedName, useSimplifiedLeads: true);
 
             // Compute the orientation of this specific instance
             var instanceAngle = ComponentClassifier.ComputePrincipalAngle(features);

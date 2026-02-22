@@ -26,6 +26,15 @@ namespace PCBPlotter.Core.Services
         public int SidesWithPads { get; set; }
         public bool IsHShape { get; set; }
         public List<PadInfo> Pads { get; set; } = new List<PadInfo>();
+
+        // New features for SMD/THT detection
+        public double AveragePadDiameter { get; set; }
+        public double MinPadSize { get; set; }
+        public double MaxPadSize { get; set; }
+        public MountType DetectedMountType { get; set; }
+
+        // Lead bounding boxes (simplified from pad clusters)
+        public List<Rect> LeadBounds { get; set; } = new List<Rect>();
     }
 
     /// <summary>
@@ -39,6 +48,8 @@ namespace PCBPlotter.Core.Services
         public double Height { get; set; }
         public bool IsCircular { get; set; }
         public double Area { get; set; }
+        public double Diameter => Math.Max(Width, Height);
+        public int LeadGroupIndex { get; set; } = -1; // For grouping pads into leads
     }
 
     /// <summary>
@@ -51,6 +62,9 @@ namespace PCBPlotter.Core.Services
         public bool HasPolarity { get; set; }
         public int Pin1Index { get; set; }
         public string Description { get; set; }
+        public MountType MountType { get; set; }
+        public SmdPackageDefinition MatchedPackage { get; set; }
+        public string SuggestedDesignator { get; set; }
     }
 
     /// <summary>
@@ -60,6 +74,8 @@ namespace PCBPlotter.Core.Services
     public static class ComponentClassifier
     {
         private const double TOLERANCE = 0.05; // mm tolerance for comparisons
+        private const double THT_MIN_DIAMETER = 0.6; // mm - minimum diameter for through-hole pads
+        private const double THT_TYPICAL_DIAMETER = 0.9; // mm - typical THT pad diameter
 
         /// <summary>
         /// Extract features from a set of gerber primitives (pads).
@@ -105,6 +121,14 @@ namespace PCBPlotter.Core.Services
             // All circular?
             features.AllCircular = features.Pads.All(p => p.IsCircular);
 
+            // Pad size statistics
+            features.AveragePadDiameter = features.Pads.Average(p => p.Diameter);
+            features.MinPadSize = features.Pads.Min(p => Math.Min(p.Width, p.Height));
+            features.MaxPadSize = features.Pads.Max(p => Math.Max(p.Width, p.Height));
+
+            // Detect mount type (SMD vs Through-hole)
+            features.DetectedMountType = DetectMountType(features);
+
             // Pad aspect ratio (dominant)
             var avgW = features.Pads.Average(p => p.Width);
             var avgH = features.Pads.Average(p => p.Height);
@@ -130,7 +154,113 @@ namespace PCBPlotter.Core.Services
             // H-shape detection (for tact switches)
             features.IsHShape = DetectHShape(features);
 
+            // Compute simplified lead bounding boxes
+            features.LeadBounds = ComputeLeadBoundingBoxes(features);
+
             return features;
+        }
+
+        /// <summary>
+        /// Detect mount type based on pad characteristics.
+        /// Through-hole pads are typically circular and larger (>0.6mm diameter).
+        /// SMD pads are typically rectangular and smaller.
+        /// </summary>
+        private static MountType DetectMountType(PadClusterFeatures features)
+        {
+            // All circular pads with diameter >= THT minimum suggests through-hole
+            if (features.AllCircular && features.AveragePadDiameter >= THT_MIN_DIAMETER)
+            {
+                // Additional check: THT pads tend to be uniform in size
+                double sizeVariance = features.Pads.Select(p => p.Diameter).Max() -
+                                      features.Pads.Select(p => p.Diameter).Min();
+                if (sizeVariance < features.AveragePadDiameter * 0.3)
+                    return MountType.ThroughHole;
+            }
+
+            // Mixed circular/rectangular or small pads suggest SMD
+            if (!features.AllCircular || features.AveragePadDiameter < THT_MIN_DIAMETER)
+                return MountType.SMD;
+
+            // Large circular pads in a grid pattern (BGA) are SMD
+            if (features.IsGrid && features.PadCount > 9)
+                return MountType.SMD;
+
+            return MountType.Unknown;
+        }
+
+        /// <summary>
+        /// Compute simplified lead bounding boxes from pad clusters.
+        /// Groups adjacent pads and creates bounding rectangles for each lead.
+        /// </summary>
+        private static List<Rect> ComputeLeadBoundingBoxes(PadClusterFeatures features)
+        {
+            var leadBounds = new List<Rect>();
+            if (features.Pads.Count == 0) return leadBounds;
+
+            // For simple 2-pad components, each pad is a lead
+            if (features.PadCount <= 2)
+            {
+                foreach (var pad in features.Pads)
+                {
+                    leadBounds.Add(new Rect(
+                        pad.X - pad.Width / 2,
+                        pad.Y - pad.Height / 2,
+                        pad.Width,
+                        pad.Height));
+                }
+                return leadBounds;
+            }
+
+            // For multi-pad components, group pads by proximity
+            // Use clustering based on dominant pitch
+            double clusterThreshold = features.DominantPitch > 0 ?
+                features.DominantPitch * 0.4 : features.MaxPadSize * 1.5;
+
+            var assigned = new bool[features.Pads.Count];
+            int leadIndex = 0;
+
+            for (int i = 0; i < features.Pads.Count; i++)
+            {
+                if (assigned[i]) continue;
+
+                // Start a new lead group
+                var group = new List<PadInfo> { features.Pads[i] };
+                assigned[i] = true;
+                features.Pads[i].LeadGroupIndex = leadIndex;
+
+                // Find all pads within cluster threshold
+                for (int j = i + 1; j < features.Pads.Count; j++)
+                {
+                    if (assigned[j]) continue;
+
+                    // Check if pad j is close to any pad in the group
+                    foreach (var gPad in group)
+                    {
+                        double dist = Math.Sqrt(
+                            Math.Pow(features.Pads[j].X - gPad.X, 2) +
+                            Math.Pow(features.Pads[j].Y - gPad.Y, 2));
+
+                        if (dist < clusterThreshold)
+                        {
+                            group.Add(features.Pads[j]);
+                            assigned[j] = true;
+                            features.Pads[j].LeadGroupIndex = leadIndex;
+                            break;
+                        }
+                    }
+                }
+
+                // Compute bounding box for this lead group
+                double minX = group.Min(p => p.X - p.Width / 2);
+                double minY = group.Min(p => p.Y - p.Height / 2);
+                double maxX = group.Max(p => p.X + p.Width / 2);
+                double maxY = group.Max(p => p.Y + p.Height / 2);
+
+                leadBounds.Add(new Rect(minX, minY, maxX - minX, maxY - minY));
+                leadIndex++;
+            }
+
+            return leadBounds;
         }
 
         /// <summary>
@@ -143,43 +273,92 @@ namespace PCBPlotter.Core.Services
                 {
                     PartClass = PartClass.Other,
                     SuggestedName = "UNKNOWN",
-                    Description = "No pads detected"
+                    Description = "No pads detected",
+                    MountType = MountType.Unknown
                 };
+
+            ClassificationResult result;
 
             // Decision tree
             if (features.PadCount == 2)
-                return ClassifyChip(features);
-
-            if (features.PadCount == 3)
-                return ClassifySOT3(features);
-
-            if (features.PadCount >= 3 && features.PadCount <= 6 && features.HasLargePad)
-                return ClassifySOTLarge(features);
-
-            if (features.PadCount == 4 && features.IsHShape)
-                return ClassifySwitch(features);
-
-            if (features.PadCount > 9 && features.AllCircular && features.IsGrid)
-                return ClassifyBGA(features);
-
-            if (features.PadCount >= 16 && features.SidesWithPads == 4)
-                return ClassifyQuadIC(features);
-
-            if (features.PadCount >= 4 && features.PadCount % 2 == 0 && HasTwoParallelRows(features))
-                return ClassifyDualRowIC(features);
-
-            if (features.PadCount >= 4 && HasSingleRow(features))
-                return ClassifyConnector(features);
-
-            // Fallback
-            return new ClassificationResult
+                result = ClassifyChip(features);
+            else if (features.PadCount == 3)
+                result = ClassifySOT3(features);
+            else if (features.PadCount >= 3 && features.PadCount <= 6 && features.HasLargePad)
+                result = ClassifySOTLarge(features);
+            else if (features.PadCount == 4 && features.IsHShape)
+                result = ClassifySwitch(features);
+            else if (features.PadCount > 9 && features.AllCircular && features.IsGrid)
+                result = ClassifyBGA(features);
+            else if (features.PadCount >= 16 && features.SidesWithPads == 4)
+                result = ClassifyQuadIC(features);
+            else if (features.PadCount >= 4 && features.PadCount % 2 == 0 && HasTwoParallelRows(features))
+                result = ClassifyDualRowIC(features);
+            else if (features.PadCount >= 4 && HasSingleRow(features))
+                result = ClassifyConnector(features);
+            else
             {
-                PartClass = PartClass.Other,
-                SuggestedName = $"PKG{features.PadCount}",
-                HasPolarity = false,
-                Pin1Index = 0,
-                Description = $"{features.PadCount}-pad component"
-            };
+                // Fallback
+                result = new ClassificationResult
+                {
+                    PartClass = PartClass.Other,
+                    SuggestedName = $"PKG{features.PadCount}",
+                    HasPolarity = false,
+                    Pin1Index = 0,
+                    Description = $"{features.PadCount}-pad component"
+                };
+            }
+
+            // Set mount type from detected type
+            result.MountType = features.DetectedMountType;
+
+            // Try to match to known package
+            result.MatchedPackage = MatchToKnownPackage(features, result);
+            if (result.MatchedPackage != null)
+            {
+                result.SuggestedName = result.MatchedPackage.Name;
+            }
+
+            // Set suggested designator
+            result.SuggestedDesignator = SmdPackageDatabase.GetDesignatorPrefix(
+                result.PartClass, result.SuggestedName);
+
+            return result;
+        }
+
+        /// <summary>
+        /// Try to match detected features to a known SMD package.
+        /// </summary>
+        private static SmdPackageDefinition MatchToKnownPackage(
+            PadClusterFeatures features, ClassificationResult classification)
+        {
+            // For 2-pad chips, use pad distance
+            if (features.PadCount == 2)
+            {
+                double padDistance = Math.Sqrt(
+                    Math.Pow(features.Pads[0].X - features.Pads[1].X, 2) +
+                    Math.Pow(features.Pads[0].Y - features.Pads[1].Y, 2));
+                return SmdPackageDatabase.FindChipByPadDistance(padDistance);
+            }
+
+            // For other packages, try dimension matching
+            var matches = SmdPackageDatabase.FindByDimensions(
+                features.BoundingBox.Width,
+                features.BoundingBox.Height,
+                0.25); // 25% tolerance
+
+            // Filter by pin count if reasonable
+            var pinMatches = matches.Where(p =>
+                p.PinCount == 0 || // Variable pin count
+                Math.Abs(p.PinCount - features.PadCount) <= features.PadCount * 0.1).ToList();
+
+            if (pinMatches.Count > 0)
+                return pinMatches.First();
+
+            if (matches.Count > 0)
+                return matches.First();
+
+            return null;
         }
 
         #region Classification Methods
@@ -531,9 +710,13 @@ namespace PCBPlotter.Core.Services
         /// <summary>
         /// Build a complete Package from selected gerber primitives with auto-classification.
         /// </summary>
+        /// <param name="selectedPrimitives">Gerber primitives (pads) to process</param>
+        /// <param name="packageName">Optional package name override</param>
+        /// <param name="useSimplifiedLeads">If true, use simplified lead bounding boxes instead of individual pads</param>
         public static Package BuildPackage(
             List<GerberPrimitive> selectedPrimitives,
-            string packageName = null)
+            string packageName = null,
+            bool useSimplifiedLeads = false)
         {
             var features = ComponentClassifier.ExtractFeatures(selectedPrimitives);
             var classification = ComponentClassifier.Classify(features);
@@ -548,16 +731,95 @@ namespace PCBPlotter.Core.Services
                 Description = classification.Description,
                 Width = features.BoundingBox.Width,
                 Length = features.BoundingBox.Height,
-                Height = 0.5
+                Height = classification.MatchedPackage?.HeightMm ?? 0.5
             };
 
             // Center offset: all coordinates relative to centroid
             double cx = features.Centroid.X;
             double cy = features.Centroid.Y;
 
-            // Add pad graphics and pins
+            if (useSimplifiedLeads && features.LeadBounds.Count > 0)
+            {
+                // Use simplified lead bounding boxes for placement display
+                AddSimplifiedLeadGraphics(package, features, cx, cy);
+            }
+            else
+            {
+                // Use individual pad details
+                AddDetailedPadGraphics(package, features, classification, cx, cy);
+            }
+
+            // Add body outline based on classification
+            AddBodyGraphics(package, features, classification, cx, cy);
+
+            // Add pin 1 indicator if polarized
+            var sortedPads = SortPadsForNumbering(features, classification);
+            if (classification.HasPolarity && classification.Pin1Index >= 0 &&
+                sortedPads.Count > 0)
+            {
+                AddPin1Indicator(package, sortedPads[0], cx, cy, classification);
+            }
+
+            return package;
+        }
+
+        /// <summary>
+        /// Add simplified lead graphics using bounding boxes (for placement display).
+        /// Each lead is represented as a single rectangular bounding box.
+        /// </summary>
+        private static void AddSimplifiedLeadGraphics(
+            Package package, PadClusterFeatures features, double cx, double cy)
+        {
             int pinNumber = 1;
-            // Sort pads for consistent pin numbering (top-left first, then clockwise)
+
+            // Sort lead bounds for consistent numbering (top-left first)
+            var sortedLeads = features.LeadBounds
+                .Select((rect, idx) => new { Rect = rect, Index = idx })
+                .OrderBy(r => r.Rect.X + r.Rect.Y)
+                .Select(r => r.Rect)
+                .ToList();
+
+            foreach (var leadRect in sortedLeads)
+            {
+                // Lead center relative to component centroid
+                double leadCenterX = leadRect.X + leadRect.Width / 2 - cx;
+                double leadCenterY = leadRect.Y + leadRect.Height / 2 - cy;
+
+                var graphic = new PackageGraphic
+                {
+                    X = leadRect.X - cx,
+                    Y = leadRect.Y - cy,
+                    Width = leadRect.Width,
+                    Height = leadRect.Height,
+                    ShapeType = GraphicShapeType.Rectangle,
+                    IsPad = true,
+                    IsFilled = true,
+                    FillColor = System.Windows.Media.Color.FromRgb(180, 140, 60) // Golden lead color
+                };
+                package.Graphics.Add(graphic);
+
+                // Add pin at lead center
+                package.Pins.Add(new Pin
+                {
+                    Number = pinNumber,
+                    X = leadCenterX,
+                    Y = leadCenterY,
+                    Width = leadRect.Width * 0.5,
+                    Height = leadRect.Height * 0.5,
+                    Shape = PinShape.Rectangle
+                });
+                pinNumber++;
+            }
+        }
+
+        /// <summary>
+        /// Add detailed pad graphics (original behavior for detailed view).
+        /// </summary>
+        private static void AddDetailedPadGraphics(
+            Package package, PadClusterFeatures features,
+            ClassificationResult classification, double cx, double cy)
+        {
+            int pinNumber = 1;
             var sortedPads = SortPadsForNumbering(features, classification);
 
             foreach (var pad in sortedPads)
@@ -585,18 +847,6 @@ namespace PCBPlotter.Core.Services
                 });
                 pinNumber++;
             }
-
-            // Add body outline based on classification
-            AddBodyGraphics(package, features, classification, cx, cy);
-
-            // Add pin 1 indicator if polarized
-            if (classification.HasPolarity && classification.Pin1Index >= 0 &&
-                classification.Pin1Index < sortedPads.Count)
-            {
-                AddPin1Indicator(package, sortedPads[0], cx, cy, classification);
-            }
-
-            return package;
         }
 
         private static List<PadInfo> SortPadsForNumbering(
