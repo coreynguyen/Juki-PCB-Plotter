@@ -108,9 +108,10 @@ namespace PCBPlotter.Views
 
         private void UpdatePreview()
         {
-            if (_importer.ParsedData == null)
+            if (_importer == null || _importer.ParsedData == null)
             {
-                PlacementsGrid.ItemsSource = null;
+                if (PlacementsGrid != null)
+                    PlacementsGrid.ItemsSource = null;
                 return;
             }
 
@@ -137,7 +138,8 @@ namespace PCBPlotter.Views
 
         private void UpdateSummary()
         {
-            SummaryText.Text = _importer.GetSummary();
+            if (SummaryText == null) return;
+            SummaryText.Text = _importer?.GetSummary() ?? "No data loaded.";
         }
 
         private void ImportButton_Click(object sender, RoutedEventArgs e)
