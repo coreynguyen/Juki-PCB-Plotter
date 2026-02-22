@@ -930,6 +930,8 @@ namespace PCBPlotter.Core.Services
             Package package, PadClusterFeatures features,
             ClassificationResult classification, double cx, double cy)
         {
+            // The body represents the plastic/ceramic package BETWEEN the leads
+            // Leads (pads) extend FROM the body - they are NOT inside it
             var bb = features.BoundingBox;
             double bx = bb.X - cx;
             double by = bb.Y - cy;
@@ -939,76 +941,196 @@ namespace PCBPlotter.Core.Services
             switch (classification.PartClass)
             {
                 case PartClass.Chip:
-                    // Body bridging the two pads (inset 30% from edges)
-                    double insetX = bw * 0.15;
-                    double insetY = bh * 0.05;
-                    package.Graphics.Add(new PackageGraphic
+                    // 2-terminal chip: body bridges between the two pads
+                    // Body is BETWEEN the pad centers, not encompassing them
+                    if (features.Pads.Count >= 2)
                     {
-                        ShapeType = GraphicShapeType.Rectangle,
-                        X = bx + insetX,
-                        Y = by - insetY,
-                        Width = bw - 2 * insetX,
-                        Height = bh + 2 * insetY,
-                        IsFilled = true,
-                        IsPad = false,
-                        FillColor = System.Windows.Media.Color.FromArgb(120, 80, 80, 80)
-                    });
+                        var sortedPads = features.Pads.OrderBy(p => p.X + p.Y).ToList();
+                        var pad1 = sortedPads[0];
+                        var pad2 = sortedPads[1];
+
+                        // Determine orientation (horizontal or vertical)
+                        bool isHorizontal = Math.Abs(pad1.Y - pad2.Y) < Math.Abs(pad1.X - pad2.X);
+
+                        if (isHorizontal)
+                        {
+                            // Pads are left-right, body spans between inner edges
+                            double bodyLeft = Math.Min(pad1.X, pad2.X) + Math.Min(pad1.Width, pad2.Width) * 0.3;
+                            double bodyRight = Math.Max(pad1.X, pad2.X) - Math.Min(pad1.Width, pad2.Width) * 0.3;
+                            double bodyTop = Math.Min(pad1.Y - pad1.Height / 2, pad2.Y - pad2.Height / 2);
+                            double bodyBottom = Math.Max(pad1.Y + pad1.Height / 2, pad2.Y + pad2.Height / 2);
+
+                            package.Graphics.Add(new PackageGraphic
+                            {
+                                ShapeType = GraphicShapeType.Rectangle,
+                                X = bodyLeft - cx,
+                                Y = bodyTop - cy,
+                                Width = bodyRight - bodyLeft,
+                                Height = bodyBottom - bodyTop,
+                                IsFilled = true,
+                                IsPad = false,
+                                FillColor = System.Windows.Media.Color.FromArgb(140, 60, 60, 60)
+                            });
+                        }
+                        else
+                        {
+                            // Pads are top-bottom, body spans between inner edges
+                            double bodyTop = Math.Min(pad1.Y, pad2.Y) + Math.Min(pad1.Height, pad2.Height) * 0.3;
+                            double bodyBottom = Math.Max(pad1.Y, pad2.Y) - Math.Min(pad1.Height, pad2.Height) * 0.3;
+                            double bodyLeft = Math.Min(pad1.X - pad1.Width / 2, pad2.X - pad2.Width / 2);
+                            double bodyRight = Math.Max(pad1.X + pad1.Width / 2, pad2.X + pad2.Width / 2);
+
+                            package.Graphics.Add(new PackageGraphic
+                            {
+                                ShapeType = GraphicShapeType.Rectangle,
+                                X = bodyLeft - cx,
+                                Y = bodyTop - cy,
+                                Width = bodyRight - bodyLeft,
+                                Height = bodyBottom - bodyTop,
+                                IsFilled = true,
+                                IsPad = false,
+                                FillColor = System.Windows.Media.Color.FromArgb(140, 60, 60, 60)
+                            });
+                        }
+                    }
                     break;
 
                 case PartClass.SOT:
-                    // Body rectangle encompassing pad centroids
-                    double sotMargin = features.DominantPitch * 0.15;
-                    package.Graphics.Add(new PackageGraphic
+                    // SOT23/SOT223: Body is BETWEEN the leads, not encompassing them
+                    // Typical SOT23: 1 lead on one side, 2 leads on opposite side
+                    // Body inset from lead outer edges
                     {
-                        ShapeType = GraphicShapeType.Rectangle,
-                        X = bx - sotMargin,
-                        Y = by - sotMargin,
-                        Width = bw + 2 * sotMargin,
-                        Height = bh + 2 * sotMargin,
-                        IsFilled = false,
-                        IsPad = false,
-                        StrokeThickness = 0.1
-                    });
+                        // Find the extent of leads and compute body as inset region
+                        double leadInset = features.MaxPadSize * 0.6; // Body starts 60% into the leads
+                        double bodyInsetX = bw > bh ? leadInset : 0;
+                        double bodyInsetY = bh > bw ? leadInset : 0;
+
+                        // If roughly square, inset based on pad positions
+                        if (Math.Abs(bw - bh) < features.MaxPadSize)
+                        {
+                            bodyInsetX = leadInset * 0.5;
+                            bodyInsetY = leadInset * 0.5;
+                        }
+
+                        package.Graphics.Add(new PackageGraphic
+                        {
+                            ShapeType = GraphicShapeType.Rectangle,
+                            X = bx + bodyInsetX,
+                            Y = by + bodyInsetY,
+                            Width = bw - 2 * bodyInsetX,
+                            Height = bh - 2 * bodyInsetY,
+                            IsFilled = true,
+                            IsPad = false,
+                            FillColor = System.Windows.Media.Color.FromArgb(140, 50, 50, 50)
+                        });
+                    }
                     break;
 
                 case PartClass.SOP:
-                    // Body between the two rows of pads
-                    double sopInset = bw * 0.2;
-                    package.Graphics.Add(new PackageGraphic
+                    // SOP/SOIC: Body is BETWEEN the two rows of leads
+                    // Leads extend from the body sides
                     {
-                        ShapeType = GraphicShapeType.Rectangle,
-                        X = bx + sopInset,
-                        Y = by - 0.1,
-                        Width = bw - 2 * sopInset,
-                        Height = bh + 0.2,
-                        IsFilled = false,
-                        IsPad = false,
-                        StrokeThickness = 0.12
-                    });
+                        // Cluster pads by position to find the two rows
+                        var xClusters = ClusterValues(features.Pads.Select(p => p.X).ToList());
+                        var yClusters = ClusterValues(features.Pads.Select(p => p.Y).ToList());
+
+                        double bodyX, bodyY, bodyW, bodyH;
+
+                        if (xClusters.Count == 2 && yClusters.Count >= 2)
+                        {
+                            // Two columns of pads (vertical orientation)
+                            // Body spans between the inner edges of the columns
+                            var leftPads = features.Pads.Where(p => p.X < (xClusters[0] + xClusters[1]) / 2).ToList();
+                            var rightPads = features.Pads.Where(p => p.X >= (xClusters[0] + xClusters[1]) / 2).ToList();
+
+                            double leftInnerEdge = leftPads.Max(p => p.X + p.Width / 2);
+                            double rightInnerEdge = rightPads.Min(p => p.X - p.Width / 2);
+                            double topEdge = features.Pads.Min(p => p.Y - p.Height / 2);
+                            double bottomEdge = features.Pads.Max(p => p.Y + p.Height / 2);
+
+                            // Body starts a bit inside the lead inner edges
+                            double leadOverlap = (leftPads.Average(p => p.Width) + rightPads.Average(p => p.Width)) / 4 * 0.3;
+                            bodyX = leftInnerEdge - leadOverlap - cx;
+                            bodyY = topEdge - cy - 0.1;
+                            bodyW = rightInnerEdge - leftInnerEdge + 2 * leadOverlap;
+                            bodyH = bottomEdge - topEdge + 0.2;
+                        }
+                        else if (yClusters.Count == 2)
+                        {
+                            // Two rows of pads (horizontal orientation)
+                            var topPads = features.Pads.Where(p => p.Y < (yClusters[0] + yClusters[1]) / 2).ToList();
+                            var bottomPads = features.Pads.Where(p => p.Y >= (yClusters[0] + yClusters[1]) / 2).ToList();
+
+                            double topInnerEdge = topPads.Max(p => p.Y + p.Height / 2);
+                            double bottomInnerEdge = bottomPads.Min(p => p.Y - p.Height / 2);
+                            double leftEdge = features.Pads.Min(p => p.X - p.Width / 2);
+                            double rightEdge = features.Pads.Max(p => p.X + p.Width / 2);
+
+                            double leadOverlap = (topPads.Average(p => p.Height) + bottomPads.Average(p => p.Height)) / 4 * 0.3;
+                            bodyX = leftEdge - cx - 0.1;
+                            bodyY = topInnerEdge - leadOverlap - cy;
+                            bodyW = rightEdge - leftEdge + 0.2;
+                            bodyH = bottomInnerEdge - topInnerEdge + 2 * leadOverlap;
+                        }
+                        else
+                        {
+                            // Fallback: simple inset
+                            double inset = Math.Max(bw, bh) * 0.15;
+                            bodyX = bx + inset;
+                            bodyY = by + inset;
+                            bodyW = bw - 2 * inset;
+                            bodyH = bh - 2 * inset;
+                        }
+
+                        package.Graphics.Add(new PackageGraphic
+                        {
+                            ShapeType = GraphicShapeType.Rectangle,
+                            X = bodyX,
+                            Y = bodyY,
+                            Width = bodyW,
+                            Height = bodyH,
+                            IsFilled = true,
+                            IsPad = false,
+                            FillColor = System.Windows.Media.Color.FromArgb(140, 40, 40, 40)
+                        });
+                    }
                     break;
 
                 case PartClass.QFP:
                 case PartClass.QFN:
-                    // Square body inside the ring of pads
-                    double qfpInset = Math.Min(bw, bh) * 0.15;
-                    package.Graphics.Add(new PackageGraphic
+                    // Quad packages: Body is INSIDE the ring of pads
                     {
-                        ShapeType = GraphicShapeType.Rectangle,
-                        X = bx + qfpInset,
-                        Y = by + qfpInset,
-                        Width = bw - 2 * qfpInset,
-                        Height = bh - 2 * qfpInset,
-                        IsFilled = classification.PartClass == PartClass.QFN,
-                        IsPad = false,
-                        StrokeThickness = 0.12,
-                        FillColor = classification.PartClass == PartClass.QFN
-                            ? System.Windows.Media.Color.FromArgb(80, 60, 60, 60)
-                            : System.Windows.Media.Colors.Transparent
-                    });
+                        // Find the inner edges of pads on all four sides
+                        double padMargin = Math.Min(bw, bh) * 0.12;
+                        var leftPads = features.Pads.Where(p => p.X < bb.X + bb.Width * 0.25 + cx).ToList();
+                        var rightPads = features.Pads.Where(p => p.X > bb.X + bb.Width * 0.75 + cx).ToList();
+                        var topPads = features.Pads.Where(p => p.Y < bb.Y + bb.Height * 0.25 + cy).ToList();
+                        var bottomPads = features.Pads.Where(p => p.Y > bb.Y + bb.Height * 0.75 + cy).ToList();
+
+                        double bodyLeft = leftPads.Count > 0 ? leftPads.Max(p => p.X + p.Width / 2) : bb.X + padMargin;
+                        double bodyRight = rightPads.Count > 0 ? rightPads.Min(p => p.X - p.Width / 2) : bb.X + bb.Width - padMargin;
+                        double bodyTop = topPads.Count > 0 ? topPads.Max(p => p.Y + p.Height / 2) : bb.Y + padMargin;
+                        double bodyBottom = bottomPads.Count > 0 ? bottomPads.Min(p => p.Y - p.Height / 2) : bb.Y + bb.Height - padMargin;
+
+                        package.Graphics.Add(new PackageGraphic
+                        {
+                            ShapeType = GraphicShapeType.Rectangle,
+                            X = bodyLeft - cx,
+                            Y = bodyTop - cy,
+                            Width = bodyRight - bodyLeft,
+                            Height = bodyBottom - bodyTop,
+                            IsFilled = classification.PartClass == PartClass.QFN,
+                            IsPad = false,
+                            StrokeThickness = 0.12,
+                            FillColor = classification.PartClass == PartClass.QFN
+                                ? System.Windows.Media.Color.FromArgb(100, 50, 50, 50)
+                                : System.Windows.Media.Colors.Transparent
+                        });
+                    }
                     break;
 
                 case PartClass.BGA:
-                    // Large square enclosing all pads
+                    // BGA: Body encompasses all pads (balls are under the package)
                     double bgaMargin = 0.3;
                     package.Graphics.Add(new PackageGraphic
                     {
@@ -1019,12 +1141,12 @@ namespace PCBPlotter.Core.Services
                         Height = bh + 2 * bgaMargin,
                         IsFilled = true,
                         IsPad = false,
-                        FillColor = System.Windows.Media.Color.FromArgb(100, 40, 60, 40)
+                        FillColor = System.Windows.Media.Color.FromArgb(120, 40, 60, 40)
                     });
                     break;
 
                 case PartClass.Connector:
-                    // Outline rectangle
+                    // Connector: Outline around all pins
                     package.Graphics.Add(new PackageGraphic
                     {
                         ShapeType = GraphicShapeType.Rectangle,
@@ -1082,10 +1204,13 @@ namespace PCBPlotter.Core.Services
             double py = pin1Pad.Y - cy;
             double dotRadius;
 
+            // Pin 1 indicator color: red for visibility
+            var pin1Color = System.Windows.Media.Color.FromRgb(220, 60, 60);
+
             switch (classification.PartClass)
             {
                 case PartClass.BGA:
-                    // Chamfer on corner
+                    // Chamfer on corner near pin A1
                     var bb = package.Bounds;
                     double chamferSize = Math.Min(bb.Width, bb.Height) * 0.12;
                     package.Graphics.Add(new PackageGraphic
@@ -1102,47 +1227,92 @@ namespace PCBPlotter.Core.Services
                         },
                         IsPin1Indicator = true,
                         IsPad = false,
-                        StrokeThickness = 0.15
+                        StrokeThickness = 0.15,
+                        StrokeColor = pin1Color
                     });
                     return;
 
                 case PartClass.Chip:
                     if (!classification.HasPolarity) return;
-                    // Bar on one end
-                    double barW = pin1Pad.Width * 0.3;
+                    // Cathode band (bar) on cathode end for diodes
+                    double barW = pin1Pad.Width * 0.25;
                     package.Graphics.Add(new PackageGraphic
                     {
                         ShapeType = GraphicShapeType.Rectangle,
                         X = px - barW / 2,
-                        Y = py - pin1Pad.Height / 2,
+                        Y = py - pin1Pad.Height * 0.6,
                         Width = barW,
-                        Height = pin1Pad.Height,
+                        Height = pin1Pad.Height * 1.2,
                         IsFilled = true,
                         IsPin1Indicator = true,
                         IsPad = false,
-                        FillColor = System.Windows.Media.Color.FromRgb(200, 200, 200)
+                        FillColor = System.Windows.Media.Color.FromRgb(180, 180, 180)
                     });
                     return;
 
-                default:
-                    // Dot near pin 1
-                    dotRadius = Math.Min(pin1Pad.Width, pin1Pad.Height) * 0.25;
-                    if (dotRadius < 0.08) dotRadius = 0.08;
-                    // Offset the dot slightly outside the pad
-                    double offsetX = px < 0 ? -dotRadius * 2 : dotRadius * 2;
-                    double offsetY = py < 0 ? -dotRadius * 2 : dotRadius * 2;
+                case PartClass.SOT:
+                case PartClass.SOP:
+                case PartClass.QFP:
+                case PartClass.QFN:
+                    // Place a small red dot near pin 1, outside the body
+                    // Position it at the outer corner closest to pin 1
+                    dotRadius = Math.Min(pin1Pad.Width, pin1Pad.Height) * 0.2;
+                    if (dotRadius < 0.1) dotRadius = 0.1;
+                    if (dotRadius > 0.3) dotRadius = 0.3;
+
+                    // Calculate position: offset from pin 1 towards the nearest corner
+                    // The dot should be between pin 1 and the body corner
+                    double dotX = px;
+                    double dotY = py;
+
+                    // Offset towards the outer edge (away from center)
+                    if (Math.Abs(px) > Math.Abs(py))
+                    {
+                        // Pin 1 is more horizontal - offset vertically towards corner
+                        dotX = px + (px > 0 ? dotRadius * 1.5 : -dotRadius * 1.5);
+                        dotY = py + (py > 0 ? -dotRadius * 2 : dotRadius * 2);
+                    }
+                    else
+                    {
+                        // Pin 1 is more vertical - offset horizontally towards corner
+                        dotX = px + (px > 0 ? -dotRadius * 2 : dotRadius * 2);
+                        dotY = py + (py > 0 ? dotRadius * 1.5 : -dotRadius * 1.5);
+                    }
 
                     package.Graphics.Add(new PackageGraphic
                     {
                         ShapeType = GraphicShapeType.Circle,
-                        X = px - offsetX - dotRadius,
-                        Y = py - offsetY - dotRadius,
+                        X = dotX - dotRadius,
+                        Y = dotY - dotRadius,
                         Width = dotRadius * 2,
                         Height = dotRadius * 2,
                         IsFilled = true,
                         IsPin1Indicator = true,
                         IsPad = false,
-                        FillColor = System.Windows.Media.Color.FromRgb(255, 255, 255)
+                        FillColor = pin1Color
+                    });
+                    return;
+
+                default:
+                    // Generic dot near pin 1
+                    dotRadius = Math.Min(pin1Pad.Width, pin1Pad.Height) * 0.25;
+                    if (dotRadius < 0.08) dotRadius = 0.08;
+
+                    // Place dot at corner nearest to pin 1
+                    double defaultDotX = px + (px < 0 ? -dotRadius * 2.5 : dotRadius * 2.5);
+                    double defaultDotY = py + (py < 0 ? -dotRadius * 2.5 : dotRadius * 2.5);
+
+                    package.Graphics.Add(new PackageGraphic
+                    {
+                        ShapeType = GraphicShapeType.Circle,
+                        X = defaultDotX - dotRadius,
+                        Y = defaultDotY - dotRadius,
+                        Width = dotRadius * 2,
+                        Height = dotRadius * 2,
+                        IsFilled = true,
+                        IsPin1Indicator = true,
+                        IsPad = false,
+                        FillColor = pin1Color
                     });
                     break;
             }
