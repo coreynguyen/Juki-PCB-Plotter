@@ -199,6 +199,7 @@ namespace PCBPlotter.ViewModels
         public ICommand ImportCadCommand { get; private set; }
         public ICommand ImportBomCommand { get; private set; }
         public ICommand ImportGerberCommand { get; private set; }
+        public ICommand ImportCpfCommand { get; private set; }
         public ICommand ExportMachineFileCommand { get; private set; }
         public ICommand ExportBomCommand { get; private set; }
         public ICommand FloatDesignViewCommand { get; private set; }
@@ -250,6 +251,7 @@ namespace PCBPlotter.ViewModels
             ImportCadCommand = new RelayCommand(ExecuteImportCad, () => IsProjectLoaded);
             ImportBomCommand = new RelayCommand(ExecuteImportBom, () => IsProjectLoaded);
             ImportGerberCommand = new RelayCommand(ExecuteImportGerber, () => IsProjectLoaded);
+            ImportCpfCommand = new RelayCommand(ExecuteImportCpf, () => IsProjectLoaded);
             ExportMachineFileCommand = new RelayCommand(ExecuteExportMachineFile, () => IsProjectLoaded);
             ExportBomCommand = new RelayCommand(ExecuteExportBom, () => IsProjectLoaded);
             FloatDesignViewCommand = new RelayCommand(o => ExecuteFloatWindow("Design"));
@@ -510,6 +512,11 @@ namespace PCBPlotter.ViewModels
         private void ExecuteImportBom()
         {
             Publish(new ShowDialogEvent { DialogType = "BomImport" });
+        }
+
+        private void ExecuteImportCpf()
+        {
+            Publish(new ShowDialogEvent { DialogType = "CpfImport" });
         }
 
         /// <summary>

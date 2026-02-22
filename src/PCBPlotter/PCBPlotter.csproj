@@ -151,6 +151,10 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Views\ImportCpfDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="App.xaml.cs">
@@ -206,6 +210,9 @@
     </Compile>
     <Compile Include="Views\ImportOdbDialog.xaml.cs">
       <DependentUpon>ImportOdbDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ImportCpfDialog.xaml.cs">
+      <DependentUpon>ImportCpfDialog.xaml</DependentUpon>
     </Compile>
     <Compile Include="ViewModels\ViewModelBase.cs" />
     <Compile Include="ViewModels\RelayCommand.cs" />

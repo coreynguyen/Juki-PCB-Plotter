@@ -101,6 +101,8 @@
                 <MenuItem Header="Import _CAD Data..." Command="{Binding ImportCadCommand}"/>
                 <MenuItem Header="Import _BOM..." Command="{Binding ImportBomCommand}"/>
                 <MenuItem Header="Import _Gerber..." Command="{Binding ImportGerberCommand}"/>
+                <Separator/>
+                <MenuItem Header="Import C_PF (CircuitCAM Express)..." Command="{Binding ImportCpfCommand}"/>
             </MenuItem>
             <MenuItem Header="E_xport">
                 <MenuItem Header="Export _Machine File..." Command="{Binding ExportMachineFileCommand}"/>

@@ -64,6 +64,8 @@
     <Compile Include="Services\OdbPlusPlusParser.cs" />
     <Compile Include="Services\GerberParser.cs" />
     <Compile Include="Services\ComponentClassifier.cs" />
+    <Compile Include="Services\ValorMdbParser.cs" />
+    <Compile Include="Services\CpfImporter.cs" />
     <Compile Include="Rendering\RenderContext.cs" />
     <Compile Include="Utilities\UnicodeHelper.cs" />
     <Compile Include="Utilities\UnitConverter.cs" />

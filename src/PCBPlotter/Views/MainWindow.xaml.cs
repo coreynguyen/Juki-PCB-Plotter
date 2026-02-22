@@ -113,6 +113,10 @@ namespace PCBPlotter.Views
                     ShowIpc356ImportDialog();
                     break;
 
+                case "CpfImport":
+                    ShowCpfImportDialog();
+                    break;
+
                 default:
                     System.Diagnostics.Debug.WriteLine("Unknown dialog type: " + e.DialogType);
                     break;
@@ -342,7 +346,8 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz|" +
+                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb|" +
+                         "CircuitCAM Express / Valor CIM (*.cpf;*.mdb)|*.cpf;*.mdb|" +
                          "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|" +
                          "ODB++ Archives (*.tgz;*.tar;*.zip;*.odb;*.tar.gz)|*.tgz;*.tar;*.zip;*.odb;*.tar.gz|" +
                          "All Files (*.*)|*.*",
@@ -355,8 +360,13 @@ namespace PCBPlotter.Views
                 string fileName = System.IO.Path.GetFileName(dialog.FileName).ToLowerInvariant();
                 string fullPath = dialog.FileName.ToLowerInvariant();
 
+                // Route CircuitCAM Express / Valor CIM files
+                if (ext == ".cpf" || ext == ".mdb")
+                {
+                    ShowCpfImportDialogWithFile(dialog.FileName);
+                }
                 // Route IPC-D-356 files to the dedicated importer
-                if (ext == ".ipc" || ext == ".356" || ext == ".net")
+                else if (ext == ".ipc" || ext == ".356" || ext == ".net")
                 {
                     ShowIpc356ImportDialogWithFile(dialog.FileName);
                 }
@@ -373,7 +383,6 @@ namespace PCBPlotter.Views
                 }
                 else
                 {
-                    // TODO: Implement other CAD formats (XML)
                     MessageBox.Show("CAD import for this format not yet implemented.\nSelected: " + dialog.FileName,
                         "Import CAD", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
@@ -496,6 +505,85 @@ namespace PCBPlotter.Views
                         dialog.ImportedPackages.Count, dialog.ImportedPlacements.Count)
                 });
             }
+        }
+
+        private void ShowCpfImportDialog()
+        {
+            var mainVm = DataContext as MainViewModel;
+            if (mainVm?.CurrentProject == null)
+            {
+                System.Windows.MessageBox.Show("Please create or open a project first.",
+                    "No Project", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var dialog = new ImportCpfDialog(mainVm.CurrentProject);
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                ApplyCpfImportResults(mainVm, dialog);
+            }
+        }
+
+        private void ShowCpfImportDialogWithFile(string filePath)
+        {
+            var mainVm = DataContext as MainViewModel;
+            if (mainVm?.CurrentProject == null)
+            {
+                System.Windows.MessageBox.Show("Please create or open a project first.",
+                    "No Project", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var dialog = new ImportCpfDialog(mainVm.CurrentProject, filePath);
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                ApplyCpfImportResults(mainVm, dialog);
+            }
+        }
+
+        private void ApplyCpfImportResults(MainViewModel mainVm, ImportCpfDialog dialog)
+        {
+            // Add packages to project
+            foreach (var pkg in dialog.ImportedPackages)
+                mainVm.CurrentProject.Packages.Add(pkg);
+
+            // Add placements to project
+            foreach (var placement in dialog.ImportedPlacements)
+                mainVm.CurrentProject.Placements.Add(placement);
+
+            // Add fiducials to project
+            foreach (var fid in dialog.ImportedFiducials)
+                mainVm.CurrentProject.Fiducials.Add(fid);
+
+            // Apply board definition if we got outline data
+            if (dialog.ImportedBoard != null)
+            {
+                var board = mainVm.CurrentProject.Board;
+                if (dialog.ImportedBoard.Width > 0)
+                    board.Width = dialog.ImportedBoard.Width;
+                if (dialog.ImportedBoard.Height > 0)
+                    board.Height = dialog.ImportedBoard.Height;
+                if (dialog.ImportedBoard.BoardOutline != null && dialog.ImportedBoard.BoardOutline.Count > 0)
+                    board.BoardOutline = dialog.ImportedBoard.BoardOutline;
+                if (dialog.ImportedBoard.CircuitOutline != null && dialog.ImportedBoard.CircuitOutline.Count > 0)
+                    board.CircuitOutline = dialog.ImportedBoard.CircuitOutline;
+                if (dialog.ImportedBoard.Origin.X != 0 || dialog.ImportedBoard.Origin.Y != 0)
+                    board.Origin = dialog.ImportedBoard.Origin;
+            }
+
+            // Refresh views
+            EventAggregator.Instance.Publish(new RequestRefreshEvent { FullRefresh = true });
+            EventAggregator.Instance.Publish(new ZoomFitRequestEvent());
+            EventAggregator.Instance.Publish(new StatusMessageEvent
+            {
+                Message = string.Format("Imported {0} placements, {1} packages, {2} fiducials from CPF",
+                    dialog.ImportedPlacements.Count, dialog.ImportedPackages.Count,
+                    dialog.ImportedFiducials.Count)
+            });
         }
 
         private void ShowMachineExportDialog()
