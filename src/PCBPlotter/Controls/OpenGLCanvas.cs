@@ -112,7 +112,9 @@ namespace PCBPlotter.Controls
         // Render state
         private Matrix4 _projection;
         private Matrix4 _view;
+#pragma warning disable CS0414 // Fields assigned but not yet used (reserved for future optimization)
         private bool _needsRebuild = true;
+#pragma warning restore CS0414
         private bool _needsRedraw = true; // Dirty flag to avoid continuous rendering
         private int _lastWidth, _lastHeight;
 
@@ -120,11 +122,15 @@ namespace PCBPlotter.Controls
         private double _lastZoom;
         private double _lastPanX;
         private double _lastPanY;
+#pragma warning disable CS0414 // Fields assigned but not yet used (reserved for future optimization)
         private bool _viewChanged = true;
+#pragma warning restore CS0414
 
         // Layer geometry caching - avoid rebuilding every frame
         private Dictionary<string, LayerGeometryCache> _layerGeometryCache = new Dictionary<string, LayerGeometryCache>();
+#pragma warning disable CS0414 // Fields assigned but not yet used (reserved for future optimization)
         private bool _geometryCacheDirty = true;
+#pragma warning restore CS0414
 
         // Static layer renderers - upload instance data to GPU once, render with just draw calls
         private Dictionary<string, StaticLayerRenderer> _staticLayerRenderers = new Dictionary<string, StaticLayerRenderer>();
