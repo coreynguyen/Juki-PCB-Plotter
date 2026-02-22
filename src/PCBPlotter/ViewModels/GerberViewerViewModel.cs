@@ -707,8 +707,9 @@ namespace PCBPlotter.ViewModels
             if (Project == null || SelectedPrimitives.Count == 0) return;
 
             // Use the classifier pipeline to create an intelligent package
+            // Use simplified leads so each pad is drawn as a single lead rectangle
             var package = PackageBodyGenerator.BuildPackage(
-                SelectedPrimitives.ToList());
+                SelectedPrimitives.ToList(), useSimplifiedLeads: true);
 
             Project.Packages.Add(package);
             Publish(new PackageAddedEvent { Package = package });

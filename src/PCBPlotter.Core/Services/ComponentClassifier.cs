@@ -147,9 +147,18 @@ namespace PCBPlotter.Core.Services
             }
 
             // Step 5: Convert components to PadInfo
+            // Filter out noise: require minimum pixel count (at least 0.5% of largest component)
+            int maxComponentPixels = componentBounds.Count > 0
+                ? componentBounds.Values.Max(c => c.pixelCount)
+                : 0;
+            int minPixelThreshold = Math.Max(4, (int)(maxComponentPixels * 0.02));
+
             foreach (var kvp in componentBounds)
             {
                 var (cMinX, cMinY, cMaxX, cMaxY, pixelCount) = kvp.Value;
+
+                // Skip tiny noise islands
+                if (pixelCount < minPixelThreshold) continue;
 
                 // Convert back to world coordinates
                 double padLeft = minX + cMinX / scale;
@@ -1282,9 +1291,9 @@ namespace PCBPlotter.Core.Services
                     break;
 
                 case PartClass.SOT:
-                    // SOT23/SOT223: Body is BETWEEN the leads
+                    // SOT23/SOT223: Body is the plastic rectangle BETWEEN the leads
                     // Typical SOT23: 2 leads on one side, 1 lead on opposite side
-                    // Compute body from actual pad positions
+                    // The body bridges across the gap, leads stick out from it
                     {
                         if (features.Pads.Count < 2) break;
 
@@ -1296,15 +1305,26 @@ namespace PCBPlotter.Core.Services
 
                         if (xClusters.Count >= 2 && xClusters.Count >= yClusters.Count)
                         {
-                            // Pads arranged in columns (vertical orientation)
-                            var leftPads = features.Pads.Where(p => p.X < (xClusters[0] + xClusters.Last()) / 2).ToList();
-                            var rightPads = features.Pads.Where(p => p.X >= (xClusters[0] + xClusters.Last()) / 2).ToList();
+                            // Pads arranged in columns (e.g. left/right)
+                            double midX = (xClusters[0] + xClusters.Last()) / 2;
+                            var leftPads = features.Pads.Where(p => p.X < midX).ToList();
+                            var rightPads = features.Pads.Where(p => p.X >= midX).ToList();
 
                             if (leftPads.Count == 0 || rightPads.Count == 0) break;
 
-                            // Body spans between inner edges of left and right pad groups
+                            // Body spans from inner edge of left pads to inner edge of right pads
                             double leftInner = leftPads.Max(p => p.X + p.Width / 2);
                             double rightInner = rightPads.Min(p => p.X - p.Width / 2);
+
+                            // If the pads overlap or are very close, use pad centers with a fraction of pad width
+                            if (rightInner - leftInner < 0.05)
+                            {
+                                double leftCenter = leftPads.Average(p => p.X);
+                                double rightCenter = rightPads.Average(p => p.X);
+                                double avgPadW = features.Pads.Average(p => p.Width);
+                                leftInner = leftCenter + avgPadW * 0.15;
+                                rightInner = rightCenter - avgPadW * 0.15;
+                            }
 
                             // Body height: span the full vertical extent of pads
                             double topEdge = features.Pads.Min(p => p.Y - p.Height / 2);
@@ -1317,15 +1337,26 @@ namespace PCBPlotter.Core.Services
                         }
                         else if (yClusters.Count >= 2)
                         {
-                            // Pads arranged in rows (horizontal orientation)
-                            var topPads = features.Pads.Where(p => p.Y < (yClusters[0] + yClusters.Last()) / 2).ToList();
-                            var bottomPads = features.Pads.Where(p => p.Y >= (yClusters[0] + yClusters.Last()) / 2).ToList();
+                            // Pads arranged in rows (e.g. top/bottom)
+                            double midY = (yClusters[0] + yClusters.Last()) / 2;
+                            var topPads = features.Pads.Where(p => p.Y < midY).ToList();
+                            var bottomPads = features.Pads.Where(p => p.Y >= midY).ToList();
 
                             if (topPads.Count == 0 || bottomPads.Count == 0) break;
 
-                            // Body spans between inner edges of top and bottom pad groups
+                            // Body spans from inner edge of top pads to inner edge of bottom pads
                             double topInner = topPads.Max(p => p.Y + p.Height / 2);
                             double bottomInner = bottomPads.Min(p => p.Y - p.Height / 2);
+
+                            // If the pads overlap or are very close, use pad centers with a fraction of pad height
+                            if (bottomInner - topInner < 0.05)
+                            {
+                                double topCenter = topPads.Average(p => p.Y);
+                                double bottomCenter = bottomPads.Average(p => p.Y);
+                                double avgPadH = features.Pads.Average(p => p.Height);
+                                topInner = topCenter + avgPadH * 0.15;
+                                bottomInner = bottomCenter - avgPadH * 0.15;
+                            }
 
                             // Body width: span the full horizontal extent of pads
                             double leftEdge = features.Pads.Min(p => p.X - p.Width / 2);
@@ -1345,21 +1376,27 @@ namespace PCBPlotter.Core.Services
                             bodyH = bh * 0.7;
                         }
 
-                        // Ensure minimum body size
-                        if (bodyW > 0.1 && bodyH > 0.1)
+                        // Ensure minimum body size - if body is still too small, use a
+                        // percentage of the overall bounding box as the body
+                        if (bodyW <= 0.1 || bodyH <= 0.1)
                         {
-                            package.Graphics.Add(new PackageGraphic
-                            {
-                                ShapeType = GraphicShapeType.Rectangle,
-                                X = bodyX,
-                                Y = bodyY,
-                                Width = bodyW,
-                                Height = bodyH,
-                                IsFilled = true,
-                                IsPad = false,
-                                FillColor = System.Windows.Media.Color.FromArgb(140, 50, 50, 50)
-                            });
+                            bodyX = bx + bw * 0.15;
+                            bodyY = by + bh * 0.15;
+                            bodyW = bw * 0.7;
+                            bodyH = bh * 0.7;
                         }
+
+                        package.Graphics.Add(new PackageGraphic
+                        {
+                            ShapeType = GraphicShapeType.Rectangle,
+                            X = bodyX,
+                            Y = bodyY,
+                            Width = bodyW,
+                            Height = bodyH,
+                            IsFilled = true,
+                            IsPad = false,
+                            FillColor = System.Windows.Media.Color.FromArgb(140, 50, 50, 50)
+                        });
                     }
                     break;
 
