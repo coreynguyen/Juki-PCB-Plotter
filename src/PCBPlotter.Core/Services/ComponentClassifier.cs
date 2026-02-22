@@ -79,8 +79,7 @@ namespace PCBPlotter.Core.Services
 
         /// <summary>
         /// Extract features from a set of gerber primitives (pads).
-        /// Clusters overlapping/adjacent primitives into logical pads first,
-        /// since each physical lead may be drawn with multiple Gerber shapes.
+        /// Uses rasterization and connected component detection to find logical pads.
         /// </summary>
         public static PadClusterFeatures ExtractFeatures(List<GerberPrimitive> primitives)
         {
@@ -88,41 +87,90 @@ namespace PCBPlotter.Core.Services
             if (primitives == null || primitives.Count == 0)
                 return features;
 
-            // Step 1: Get bounding boxes for all dark primitives
-            var primBounds = new List<Rect>();
-            foreach (var prim in primitives)
+            // Filter to dark primitives only
+            var darkPrimitives = primitives.Where(p => p.IsDark).ToList();
+            if (darkPrimitives.Count == 0) return features;
+
+            // Step 1: Find overall bounding box
+            double minX = double.MaxValue, minY = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var prim in darkPrimitives)
             {
-                if (!prim.IsDark) continue;
-                primBounds.Add(prim.GetBounds());
+                var bounds = prim.GetBounds();
+                minX = Math.Min(minX, bounds.Left);
+                minY = Math.Min(minY, bounds.Top);
+                maxX = Math.Max(maxX, bounds.Right);
+                maxY = Math.Max(maxY, bounds.Bottom);
             }
 
-            if (primBounds.Count == 0) return features;
+            double totalWidth = maxX - minX;
+            double totalHeight = maxY - minY;
+            if (totalWidth <= 0 || totalHeight <= 0) return features;
 
-            // Step 2: Cluster overlapping/touching primitives into logical pads
-            // Each physical lead on the PCB may be drawn with multiple shapes
-            // (e.g., an oval + fill lines to create a rectangular pad appearance)
-            var clusters = ClusterOverlappingBounds(primBounds);
+            // Step 2: Create rasterization grid
+            // Use ~100 pixels per mm for good resolution, cap at reasonable size
+            const double pixelsPerMm = 100.0;
+            const int maxGridSize = 2000;
 
-            // Step 3: Create one PadInfo per cluster (logical pad)
-            foreach (var cluster in clusters)
+            int gridWidth = Math.Min(maxGridSize, Math.Max(10, (int)(totalWidth * pixelsPerMm) + 2));
+            int gridHeight = Math.Min(maxGridSize, Math.Max(10, (int)(totalHeight * pixelsPerMm) + 2));
+
+            double scaleX = (gridWidth - 1) / totalWidth;
+            double scaleY = (gridHeight - 1) / totalHeight;
+            double scale = Math.Min(scaleX, scaleY);
+
+            bool[,] grid = new bool[gridWidth, gridHeight];
+
+            // Step 3: Rasterize each primitive onto the grid
+            foreach (var prim in darkPrimitives)
             {
-                // Compute bounding box of the cluster
-                double cMinX = cluster.Min(r => r.Left);
-                double cMinY = cluster.Min(r => r.Top);
-                double cMaxX = cluster.Max(r => r.Right);
-                double cMaxY = cluster.Max(r => r.Bottom);
+                RasterizePrimitive(grid, prim, minX, minY, scale, gridWidth, gridHeight);
+            }
 
-                double padW = cMaxX - cMinX;
-                double padH = cMaxY - cMinY;
-                double padCX = (cMinX + cMaxX) / 2;
-                double padCY = (cMinY + cMaxY) / 2;
+            // Step 4: Find connected components using flood fill
+            int[,] labels = new int[gridWidth, gridHeight];
+            int nextLabel = 1;
+            var componentBounds = new Dictionary<int, (int minX, int minY, int maxX, int maxY, int pixelCount)>();
 
-                // Determine if the clustered shape is truly circular
-                // Be very strict - only perfect circles should be marked as circular
-                // Most SMD pads are rectangular; circles are rare (BGA balls, vias)
-                // A true circle has aspect ratio of 1.0; allow only 2% tolerance
+            for (int y = 0; y < gridHeight; y++)
+            {
+                for (int x = 0; x < gridWidth; x++)
+                {
+                    if (grid[x, y] && labels[x, y] == 0)
+                    {
+                        // Flood fill this component
+                        var bounds = FloodFill(grid, labels, x, y, nextLabel, gridWidth, gridHeight);
+                        componentBounds[nextLabel] = bounds;
+                        nextLabel++;
+                    }
+                }
+            }
+
+            // Step 5: Convert components to PadInfo
+            foreach (var kvp in componentBounds)
+            {
+                var (cMinX, cMinY, cMaxX, cMaxY, pixelCount) = kvp.Value;
+
+                // Convert back to world coordinates
+                double padLeft = minX + cMinX / scale;
+                double padTop = minY + cMinY / scale;
+                double padRight = minX + (cMaxX + 1) / scale;
+                double padBottom = minY + (cMaxY + 1) / scale;
+
+                double padW = padRight - padLeft;
+                double padH = padBottom - padTop;
+                double padCX = (padLeft + padRight) / 2;
+                double padCY = (padTop + padBottom) / 2;
+
+                // Determine if circular by comparing pixel count to what a circle vs rectangle would have
+                // Rectangle fills 100% of bounding box, circle fills ~78.5% (pi/4)
+                int boundingPixels = (cMaxX - cMinX + 1) * (cMaxY - cMinY + 1);
+                double fillRatio = boundingPixels > 0 ? (double)pixelCount / boundingPixels : 1.0;
+
+                // Circle has fill ratio ~0.785, rectangle has ~1.0
+                // Also require aspect ratio to be very close to 1.0
                 double aspectRatio = Math.Min(padW, padH) / Math.Max(padW, padH);
-                bool isCircular = aspectRatio > 0.98;
+                bool isCircular = aspectRatio > 0.95 && fillRatio < 0.88 && fillRatio > 0.70;
 
                 features.Pads.Add(new PadInfo
                 {
@@ -516,85 +564,207 @@ namespace PCBPlotter.Core.Services
         #region Feature Helpers
 
         /// <summary>
-        /// Cluster overlapping or near-touching bounding boxes into groups.
-        /// Uses union-find to merge boxes whose inflated bounds intersect.
-        /// Each cluster represents one logical pad (lead).
+        /// Rasterize a Gerber primitive onto a boolean grid.
         /// </summary>
-        private static List<List<Rect>> ClusterOverlappingBounds(List<Rect> bounds)
+        private static void RasterizePrimitive(bool[,] grid, GerberPrimitive prim,
+            double offsetX, double offsetY, double scale, int gridWidth, int gridHeight)
         {
-            int n = bounds.Count;
-            if (n == 0) return new List<List<Rect>>();
+            var bounds = prim.GetBounds();
 
-            // Union-find parent array
-            int[] parent = new int[n];
-            int[] rank = new int[n];
-            for (int i = 0; i < n; i++) parent[i] = i;
+            // Convert world bounds to grid coordinates
+            int gxMin = Math.Max(0, (int)((bounds.Left - offsetX) * scale));
+            int gyMin = Math.Max(0, (int)((bounds.Top - offsetY) * scale));
+            int gxMax = Math.Min(gridWidth - 1, (int)((bounds.Right - offsetX) * scale) + 1);
+            int gyMax = Math.Min(gridHeight - 1, (int)((bounds.Bottom - offsetY) * scale) + 1);
 
-            // Find with path compression
-            int Find(int x)
+            double cx = prim.X;
+            double cy = prim.Y;
+            double halfW = prim.Width / 2;
+            double halfH = prim.Height / 2;
+
+            for (int gy = gyMin; gy <= gyMax; gy++)
             {
-                while (parent[x] != x)
+                for (int gx = gxMin; gx <= gxMax; gx++)
                 {
-                    parent[x] = parent[parent[x]];
-                    x = parent[x];
-                }
-                return x;
-            }
+                    // Convert grid coord back to world coord (center of pixel)
+                    double wx = offsetX + (gx + 0.5) / scale;
+                    double wy = offsetY + (gy + 0.5) / scale;
 
-            // Union by rank
-            void Union(int a, int b)
-            {
-                int ra = Find(a), rb = Find(b);
-                if (ra == rb) return;
-                if (rank[ra] < rank[rb]) { int t = ra; ra = rb; rb = t; }
-                parent[rb] = ra;
-                if (rank[ra] == rank[rb]) rank[ra]++;
-            }
+                    bool inside = false;
 
-            // Generous tolerance to merge shapes that form the same logical pad
-            // Gerber pads are often drawn with multiple overlapping shapes (circle + fill lines)
-            // Use a larger fraction of median size to ensure they cluster together
-            double medianSize = 0;
-            if (n > 0)
-            {
-                var sizes = bounds.Select(r => Math.Max(r.Width, r.Height)).OrderBy(s => s).ToList();
-                medianSize = sizes[sizes.Count / 2];
-            }
-            // Use 50% of median size as inflation - much more aggressive clustering
-            double inflate = medianSize * 0.5;
-            if (inflate < 0.02) inflate = 0.02;
-
-            // Compare all pairs - inflate bounds slightly before intersection test
-            for (int i = 0; i < n; i++)
-            {
-                var ri = new Rect(
-                    bounds[i].X - inflate, bounds[i].Y - inflate,
-                    bounds[i].Width + 2 * inflate, bounds[i].Height + 2 * inflate);
-
-                for (int j = i + 1; j < n; j++)
-                {
-                    var rj = new Rect(
-                        bounds[j].X - inflate, bounds[j].Y - inflate,
-                        bounds[j].Width + 2 * inflate, bounds[j].Height + 2 * inflate);
-
-                    if (ri.IntersectsWith(rj))
+                    switch (prim.Type)
                     {
-                        Union(i, j);
+                        case GerberPrimitiveType.Circle:
+                            // Circle: check distance from center
+                            double dx = wx - cx;
+                            double dy = wy - cy;
+                            inside = (dx * dx + dy * dy) <= (halfW * halfW);
+                            break;
+
+                        case GerberPrimitiveType.Rectangle:
+                        case GerberPrimitiveType.Flash:
+                            // Rectangle: check bounds
+                            inside = wx >= (cx - halfW) && wx <= (cx + halfW) &&
+                                     wy >= (cy - halfH) && wy <= (cy + halfH);
+                            break;
+
+                        case GerberPrimitiveType.Obround:
+                            // Obround: rectangle with semicircle ends
+                            if (prim.Width > prim.Height)
+                            {
+                                // Horizontal obround
+                                double r = halfH;
+                                double rectHalfW = halfW - r;
+                                if (wx >= (cx - rectHalfW) && wx <= (cx + rectHalfW) &&
+                                    wy >= (cy - r) && wy <= (cy + r))
+                                {
+                                    inside = true;
+                                }
+                                else
+                                {
+                                    // Check semicircle ends
+                                    double d1 = Math.Pow(wx - (cx - rectHalfW), 2) + Math.Pow(wy - cy, 2);
+                                    double d2 = Math.Pow(wx - (cx + rectHalfW), 2) + Math.Pow(wy - cy, 2);
+                                    inside = d1 <= r * r || d2 <= r * r;
+                                }
+                            }
+                            else
+                            {
+                                // Vertical obround
+                                double r = halfW;
+                                double rectHalfH = halfH - r;
+                                if (wy >= (cy - rectHalfH) && wy <= (cy + rectHalfH) &&
+                                    wx >= (cx - r) && wx <= (cx + r))
+                                {
+                                    inside = true;
+                                }
+                                else
+                                {
+                                    double d1 = Math.Pow(wy - (cy - rectHalfH), 2) + Math.Pow(wx - cx, 2);
+                                    double d2 = Math.Pow(wy - (cy + rectHalfH), 2) + Math.Pow(wx - cx, 2);
+                                    inside = d1 <= r * r || d2 <= r * r;
+                                }
+                            }
+                            break;
+
+                        case GerberPrimitiveType.Line:
+                            // Line: check distance to line segment
+                            if (prim.Points != null && prim.Points.Count >= 2)
+                            {
+                                double lineWidth = Math.Max(prim.Width, prim.Height);
+                                if (lineWidth <= 0) lineWidth = 0.1;
+                                double halfLine = lineWidth / 2;
+
+                                for (int i = 0; i < prim.Points.Count - 1; i++)
+                                {
+                                    var p1 = prim.Points[i];
+                                    var p2 = prim.Points[i + 1];
+                                    double dist = DistanceToSegment(wx, wy, p1.X, p1.Y, p2.X, p2.Y);
+                                    if (dist <= halfLine)
+                                    {
+                                        inside = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            break;
+
+                        case GerberPrimitiveType.Polygon:
+                        case GerberPrimitiveType.Contour:
+                            // Polygon: point-in-polygon test
+                            if (prim.Points != null && prim.Points.Count >= 3)
+                            {
+                                inside = PointInPolygon(wx, wy, prim.Points);
+                            }
+                            break;
+
+                        default:
+                            // Default: use bounding box
+                            inside = bounds.Contains(new Point(wx, wy));
+                            break;
+                    }
+
+                    if (inside)
+                    {
+                        grid[gx, gy] = true;
                     }
                 }
             }
+        }
 
-            // Group by root
-            var groups = new Dictionary<int, List<Rect>>();
-            for (int i = 0; i < n; i++)
+        private static double DistanceToSegment(double px, double py, double x1, double y1, double x2, double y2)
+        {
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            double lengthSq = dx * dx + dy * dy;
+
+            if (lengthSq == 0) return Math.Sqrt(Math.Pow(px - x1, 2) + Math.Pow(py - y1, 2));
+
+            double t = Math.Max(0, Math.Min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSq));
+            double projX = x1 + t * dx;
+            double projY = y1 + t * dy;
+
+            return Math.Sqrt(Math.Pow(px - projX, 2) + Math.Pow(py - projY, 2));
+        }
+
+        private static bool PointInPolygon(double x, double y, List<Point> polygon)
+        {
+            bool inside = false;
+            int n = polygon.Count;
+
+            for (int i = 0, j = n - 1; i < n; j = i++)
             {
-                int root = Find(i);
-                if (!groups.ContainsKey(root))
-                    groups[root] = new List<Rect>();
-                groups[root].Add(bounds[i]);
+                double xi = polygon[i].X, yi = polygon[i].Y;
+                double xj = polygon[j].X, yj = polygon[j].Y;
+
+                if (((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi))
+                {
+                    inside = !inside;
+                }
             }
 
-            return groups.Values.ToList();
+            return inside;
+        }
+
+        /// <summary>
+        /// Flood fill to find a connected component and compute its bounds.
+        /// Returns (minX, minY, maxX, maxY, pixelCount).
+        /// </summary>
+        private static (int minX, int minY, int maxX, int maxY, int pixelCount) FloodFill(
+            bool[,] grid, int[,] labels, int startX, int startY, int label, int width, int height)
+        {
+            int minX = startX, maxX = startX;
+            int minY = startY, maxY = startY;
+            int count = 0;
+
+            var stack = new Stack<(int x, int y)>();
+            stack.Push((startX, startY));
+
+            while (stack.Count > 0)
+            {
+                var (x, y) = stack.Pop();
+
+                if (x < 0 || x >= width || y < 0 || y >= height)
+                    continue;
+                if (!grid[x, y] || labels[x, y] != 0)
+                    continue;
+
+                labels[x, y] = label;
+                count++;
+
+                minX = Math.Min(minX, x);
+                maxX = Math.Max(maxX, x);
+                minY = Math.Min(minY, y);
+                maxY = Math.Max(maxY, y);
+
+                // 4-connectivity
+                stack.Push((x + 1, y));
+                stack.Push((x - 1, y));
+                stack.Push((x, y + 1));
+                stack.Push((x, y - 1));
+            }
+
+            return (minX, minY, maxX, maxY, count);
         }
 
         private static double ComputeDominantPitch(List<PadInfo> pads)
