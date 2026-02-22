@@ -194,6 +194,10 @@ namespace PCBPlotter.Controls
             DependencyProperty.Register("UseModernPipeline", typeof(bool), typeof(OpenGLCanvas),
                 new PropertyMetadata(true, OnPipelineChanged));
 
+        public static readonly DependencyProperty ViewOrientationProperty =
+            DependencyProperty.Register("ViewOrientation", typeof(ViewOrientation), typeof(OpenGLCanvas),
+                new PropertyMetadata(ViewOrientation.TopDown, OnViewChanged));
+
         public double Zoom
         {
             get => (double)GetValue(ZoomProperty);
@@ -246,6 +250,12 @@ namespace PCBPlotter.Controls
         {
             get => (bool)GetValue(UseModernPipelineProperty);
             set => SetValue(UseModernPipelineProperty, value);
+        }
+
+        public ViewOrientation ViewOrientation
+        {
+            get => (ViewOrientation)GetValue(ViewOrientationProperty);
+            set => SetValue(ViewOrientationProperty, value);
         }
 
         #endregion
@@ -1112,6 +1122,16 @@ void main()
             float worldRight = (float)((width - PanX) / Zoom);
             float worldBottom = (float)(-PanY / Zoom);
             float worldTop = (float)((height - PanY) / Zoom);
+
+            // Apply horizontal mirror for BottomUp view (X-ray view from bottom)
+            // This is a VISUAL-ONLY transform - coordinates are never modified
+            if (ViewOrientation == ViewOrientation.BottomUp)
+            {
+                // Swap left and right to mirror horizontally
+                float temp = worldLeft;
+                worldLeft = worldRight;
+                worldRight = temp;
+            }
 
             _projection = Matrix4.CreateOrthographicOffCenter(
                 worldLeft, worldRight,

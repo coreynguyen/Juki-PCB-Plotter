@@ -159,6 +159,18 @@
                                       IsChecked="{Binding ActiveAssignmentSide, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Bottom}"/>
                     </StackPanel>
 
+                    <!-- Camera View (visual only - mirrors X for bottom view, does NOT affect placement coordinates) -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                        <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   ToolTip="Camera perspective - mirrors X axis for bottom view. Does not affect placement coordinates."/>
+                        <ToggleButton Content="Top" Padding="8,4" Margin="0,0,2,0"
+                                      IsChecked="{Binding ViewOrientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=TopDown}"
+                                      ToolTip="View board from the top (normal orientation)"/>
+                        <ToggleButton Content="Bottom" Padding="8,4"
+                                      IsChecked="{Binding ViewOrientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=BottomUp}"
+                                      ToolTip="View board from the bottom (X-axis mirrored)"/>
+                    </StackPanel>
+
                     <!-- Renderer Selection -->
                     <StackPanel Orientation="Horizontal" Margin="16,0,0,0">
                         <TextBlock Text="Renderer:" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -184,6 +196,7 @@
                                        PanX="{Binding PanX, Mode=TwoWay}"
                                        PanY="{Binding PanY, Mode=TwoWay}"
                                        GerberLayers="{Binding GerberLayersCollection}"
+                                       ViewOrientation="{Binding ViewOrientation}"
                                        UseScreenBlend="True"
                                        ShowGrid="True"/>
 
@@ -193,6 +206,7 @@
                                        PanX="{Binding PanX, Mode=TwoWay}"
                                        PanY="{Binding PanY, Mode=TwoWay}"
                                        GerberLayers="{Binding GerberLayersCollection}"
+                                       ViewOrientation="{Binding ViewOrientation}"
                                        UseScreenBlend="True"
                                        ShowGrid="True"/>
             </Grid>

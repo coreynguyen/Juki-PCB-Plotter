@@ -28,6 +28,7 @@ namespace PCBPlotter.ViewModels
         private ObservableCollection<GerberPrimitive> _selectedPrimitives;
         private string _coordinateDisplay;
         private BoardSide _activeAssignmentSide = BoardSide.Top;
+        private ViewOrientation _viewOrientation = ViewOrientation.TopDown;
 
         public Project Project
         {
@@ -85,6 +86,15 @@ namespace PCBPlotter.ViewModels
         {
             get { return _activeAssignmentSide; }
             set { SetProperty(ref _activeAssignmentSide, value); }
+        }
+
+        /// <summary>
+        /// View orientation (camera perspective - visual only, does not affect coordinates)
+        /// </summary>
+        public ViewOrientation ViewOrientation
+        {
+            get { return _viewOrientation; }
+            set { SetProperty(ref _viewOrientation, value); }
         }
 
         public GerberLayer SelectedLayer
