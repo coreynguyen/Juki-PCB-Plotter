@@ -28,9 +28,7 @@ namespace PCBPlotter.Core.Services
         private InterpolationMode _interpolation = InterpolationMode.Linear;
         private bool _regionMode;
         private bool _darkPolarity = true;  // true = dark (add), false = clear (subtract)
-#pragma warning disable CS0414 // Field is assigned but never used (reserved for future arc interpolation)
         private QuadrantMode _quadrantMode = QuadrantMode.Multi;
-#pragma warning restore CS0414
         private int _lastDCode = 2;  // Last D operation (1=draw, 2=move, 3=flash) - default to move
 
         // Apertures and macros
@@ -837,12 +835,28 @@ namespace PCBPlotter.Core.Services
         private List<Point> CalculateArcPoints(double x1, double y1, double x2, double y2, double i, double j)
         {
             var points = new List<Point>();
+            bool clockwise = _interpolation == InterpolationMode.ClockwiseArc;
 
-            // Arc center
+            if (_quadrantMode == QuadrantMode.Single)
+            {
+                return CalculateSingleQuadrantArc(x1, y1, x2, y2, i, j, clockwise);
+            }
+            else
+            {
+                return CalculateMultiQuadrantArc(x1, y1, x2, y2, i, j, clockwise);
+            }
+        }
+
+        private List<Point> CalculateMultiQuadrantArc(double x1, double y1, double x2, double y2,
+            double i, double j, bool clockwise)
+        {
+            var points = new List<Point>();
+
+            // Arc center is start point plus I,J offsets
             double cx = x1 + i;
             double cy = y1 + j;
 
-            // Radius
+            // Radius from center to start point
             double radius = Math.Sqrt(i * i + j * j);
             if (radius < 0.0001) return points;
 
@@ -850,23 +864,34 @@ namespace PCBPlotter.Core.Services
             double startAngle = Math.Atan2(y1 - cy, x1 - cx);
             double endAngle = Math.Atan2(y2 - cy, x2 - cx);
 
-            // Determine sweep
-            bool clockwise = _interpolation == InterpolationMode.ClockwiseArc;
-            double sweep;
+            // Check for full circle (start and end points are the same or very close)
+            double distStartEnd = Math.Sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
+            bool isFullCircle = distStartEnd < 0.0001;
 
-            if (clockwise)
+            double sweep;
+            if (isFullCircle)
             {
-                sweep = startAngle - endAngle;
-                if (sweep <= 0) sweep += 2 * Math.PI;
+                // Full circle - sweep is 2*PI
+                sweep = 2 * Math.PI;
             }
             else
             {
-                sweep = endAngle - startAngle;
-                if (sweep <= 0) sweep += 2 * Math.PI;
+                // Calculate sweep based on direction
+                if (clockwise)
+                {
+                    sweep = startAngle - endAngle;
+                    if (sweep <= 0) sweep += 2 * Math.PI;
+                }
+                else
+                {
+                    sweep = endAngle - startAngle;
+                    if (sweep <= 0) sweep += 2 * Math.PI;
+                }
             }
 
-            // Calculate number of segments based on arc length
+            // Calculate number of segments based on arc length (minimum 8, ~0.1mm per segment)
             int segments = Math.Max(8, (int)(sweep * radius / 0.1));
+            segments = Math.Min(segments, 360); // Cap at 360 segments
 
             for (int s = 0; s <= segments; s++)
             {
@@ -880,6 +905,137 @@ namespace PCBPlotter.Core.Services
 
                 double px = cx + radius * Math.Cos(angle);
                 double py = cy + radius * Math.Sin(angle);
+                points.Add(new Point(px, py));
+            }
+
+            return points;
+        }
+
+        private List<Point> CalculateSingleQuadrantArc(double x1, double y1, double x2, double y2,
+            double i, double j, bool clockwise)
+        {
+            var points = new List<Point>();
+
+            // In single quadrant mode, I and J magnitudes are given but signs may need to be determined
+            // We need to find the center that produces a valid arc (≤90°) in the correct direction
+            double absI = Math.Abs(i);
+            double absJ = Math.Abs(j);
+
+            // If both I and J are zero, no valid arc
+            if (absI < 0.0001 && absJ < 0.0001) return points;
+
+            // Try all four possible sign combinations for I,J
+            int[] signs = { -1, 1 };
+            double bestSweep = double.MaxValue;
+            double bestCx = 0, bestCy = 0, bestRadius = 0;
+            double bestStartAngle = 0;
+            bool foundValid = false;
+
+            foreach (int si in signs)
+            {
+                foreach (int sj in signs)
+                {
+                    double testI = si * absI;
+                    double testJ = sj * absJ;
+                    double testCx = x1 + testI;
+                    double testCy = y1 + testJ;
+
+                    // Calculate radius from this center to start point
+                    double r1 = Math.Sqrt(testI * testI + testJ * testJ);
+
+                    // Calculate distance from this center to end point
+                    double dx2 = x2 - testCx;
+                    double dy2 = y2 - testCy;
+                    double r2 = Math.Sqrt(dx2 * dx2 + dy2 * dy2);
+
+                    // Radii must match (within tolerance) for a valid arc
+                    if (Math.Abs(r1 - r2) > r1 * 0.01 + 0.001) continue;
+
+                    double radius = r1;
+                    if (radius < 0.0001) continue;
+
+                    // Calculate angles
+                    double startAngle = Math.Atan2(y1 - testCy, x1 - testCx);
+                    double endAngle = Math.Atan2(y2 - testCy, x2 - testCx);
+
+                    // Calculate sweep in the specified direction
+                    double sweep;
+                    if (clockwise)
+                    {
+                        sweep = startAngle - endAngle;
+                        if (sweep < 0) sweep += 2 * Math.PI;
+                        if (sweep == 0) sweep = 2 * Math.PI; // Avoid zero sweep
+                    }
+                    else
+                    {
+                        sweep = endAngle - startAngle;
+                        if (sweep < 0) sweep += 2 * Math.PI;
+                        if (sweep == 0) sweep = 2 * Math.PI;
+                    }
+
+                    // Single quadrant mode: arc must be ≤90° (π/2 radians)
+                    // Allow small tolerance for numerical precision
+                    if (sweep <= Math.PI / 2 + 0.001 && sweep < bestSweep)
+                    {
+                        bestSweep = sweep;
+                        bestCx = testCx;
+                        bestCy = testCy;
+                        bestRadius = radius;
+                        bestStartAngle = startAngle;
+                        foundValid = true;
+                    }
+                }
+            }
+
+            if (!foundValid)
+            {
+                // Fall back to using provided I,J directly (some files may have correct signs)
+                double cx = x1 + i;
+                double cy = y1 + j;
+                double radius = Math.Sqrt(i * i + j * j);
+                if (radius < 0.0001) return points;
+
+                double startAngle = Math.Atan2(y1 - cy, x1 - cx);
+                double endAngle = Math.Atan2(y2 - cy, x2 - cx);
+
+                double sweep;
+                if (clockwise)
+                {
+                    sweep = startAngle - endAngle;
+                    if (sweep <= 0) sweep += 2 * Math.PI;
+                }
+                else
+                {
+                    sweep = endAngle - startAngle;
+                    if (sweep <= 0) sweep += 2 * Math.PI;
+                }
+
+                // Clamp to 90° for single quadrant
+                sweep = Math.Min(sweep, Math.PI / 2);
+
+                bestCx = cx;
+                bestCy = cy;
+                bestRadius = radius;
+                bestStartAngle = startAngle;
+                bestSweep = sweep;
+            }
+
+            // Generate arc points
+            int segments = Math.Max(8, (int)(bestSweep * bestRadius / 0.1));
+            segments = Math.Min(segments, 90); // Single quadrant needs fewer segments
+
+            for (int s = 0; s <= segments; s++)
+            {
+                double t = (double)s / segments;
+                double angle;
+
+                if (clockwise)
+                    angle = bestStartAngle - t * bestSweep;
+                else
+                    angle = bestStartAngle + t * bestSweep;
+
+                double px = bestCx + bestRadius * Math.Cos(angle);
+                double py = bestCy + bestRadius * Math.Sin(angle);
                 points.Add(new Point(px, py));
             }
 
