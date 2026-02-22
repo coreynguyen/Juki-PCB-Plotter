@@ -6,6 +6,7 @@ using System.Windows.Input;
 using PCBPlotter.Core.Events;
 using PCBPlotter.Core.Models;
 using PCBPlotter.Core.Services;
+using PCBPlotter.Views;
 
 namespace PCBPlotter.ViewModels
 {
@@ -41,6 +42,23 @@ namespace PCBPlotter.ViewModels
         private bool _useSystemTheme = true;
         private bool _useDarkTheme;
         private bool _useLightTheme;
+        private bool _hasUnsavedChanges;
+        private int _savedUndoCount; // Track undo count at last save
+
+        /// <summary>
+        /// Gets whether the current project has unsaved changes
+        /// </summary>
+        public bool HasUnsavedChanges
+        {
+            get { return _hasUnsavedChanges; }
+            private set
+            {
+                if (SetProperty(ref _hasUnsavedChanges, value))
+                {
+                    UpdateTitle();
+                }
+            }
+        }
 
         public Project CurrentProject
         {
@@ -295,6 +313,8 @@ namespace PCBPlotter.ViewModels
             {
                 ((RelayCommand)UndoCommand).RaiseCanExecuteChanged();
                 ((RelayCommand)RedoCommand).RaiseCanExecuteChanged();
+                // Track unsaved changes based on undo stack
+                HasUnsavedChanges = UndoRedoService.UndoCount != _savedUndoCount;
             };
         }
 
@@ -309,9 +329,10 @@ namespace PCBPlotter.ViewModels
 
         private void UpdateTitle()
         {
+            string dirtyMarker = HasUnsavedChanges ? "*" : "";
             if (CurrentProject != null && !string.IsNullOrEmpty(CurrentProject.Name))
             {
-                Title = string.Format("{0} - PCB Plotter", CurrentProject.Name);
+                Title = string.Format("{0}{1} - PCB Plotter", CurrentProject.Name, dirtyMarker);
             }
             else
             {
@@ -371,12 +392,51 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteNewProject()
         {
+            if (!PromptSaveChanges())
+                return;
+
             CurrentProject = ProjectService.Instance.NewProject();
+            _savedUndoCount = 0;
+            HasUnsavedChanges = false;
+            UndoRedoService.Clear();
             StatusMessage = "New project created";
+        }
+
+        /// <summary>
+        /// Prompts the user to save changes if there are any unsaved modifications.
+        /// Returns true if the operation should proceed, false if cancelled.
+        /// </summary>
+        private bool PromptSaveChanges()
+        {
+            if (!HasUnsavedChanges)
+                return true;
+
+            var result = ThemedMessageBox.Show(
+                "Do you want to save changes to the current project before continuing?",
+                "Save Changes",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                ExecuteSaveProject();
+                return !HasUnsavedChanges; // Only proceed if save was successful
+            }
+            else if (result == MessageBoxResult.No)
+            {
+                return true; // Discard changes and proceed
+            }
+            else // Cancel
+            {
+                return false; // Don't proceed
+            }
         }
 
         private void ExecuteOpenProject()
         {
+            if (!PromptSaveChanges())
+                return;
+
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
                 Filter = "PCB Plotter Project (*.jpp)|*.jpp|All Files (*.*)|*.*",
@@ -391,6 +451,9 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteOpenRecentProject(string filePath)
         {
+            if (!PromptSaveChanges())
+                return;
+
             if (!string.IsNullOrEmpty(filePath))
             {
                 OpenProjectFile(filePath);
@@ -407,12 +470,15 @@ namespace PCBPlotter.ViewModels
             if (project != null)
             {
                 CurrentProject = project;
+                UndoRedoService.Clear();
+                _savedUndoCount = 0;
+                HasUnsavedChanges = false;
                 AddToRecentProjects(filePath, project.Name);
                 StatusMessage = "Project loaded: " + filePath;
             }
             else
             {
-                MessageBox.Show("Failed to load project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ThemedMessageBox.Show("Failed to load project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -426,11 +492,13 @@ namespace PCBPlotter.ViewModels
 
             if (ProjectService.Instance.SaveProject())
             {
+                _savedUndoCount = UndoRedoService.UndoCount;
+                HasUnsavedChanges = false;
                 StatusMessage = "Project saved";
             }
             else
             {
-                MessageBox.Show("Failed to save project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ThemedMessageBox.Show("Failed to save project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -449,21 +517,28 @@ namespace PCBPlotter.ViewModels
                 {
                     CurrentProject.Name = System.IO.Path.GetFileNameWithoutExtension(dialog.FileName);
                     AddToRecentProjects(dialog.FileName, CurrentProject.Name);
+                    _savedUndoCount = UndoRedoService.UndoCount;
+                    HasUnsavedChanges = false;
                     UpdateTitle();
                     StatusMessage = "Project saved: " + dialog.FileName;
                 }
                 else
                 {
-                    MessageBox.Show("Failed to save project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    ThemedMessageBox.Show("Failed to save project.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
         }
 
         private void ExecuteCloseProject()
         {
-            // TODO: Check for unsaved changes
+            if (!PromptSaveChanges())
+                return;
+
             ProjectService.Instance.CloseProject();
             CurrentProject = null;
+            _savedUndoCount = 0;
+            HasUnsavedChanges = false;
+            UndoRedoService.Clear();
             StatusMessage = "Project closed";
         }
 
@@ -479,7 +554,9 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteExit()
         {
-            // TODO: Check for unsaved changes
+            if (!PromptSaveChanges())
+                return;
+
             Application.Current.Shutdown();
         }
 
@@ -565,14 +642,9 @@ namespace PCBPlotter.ViewModels
 
         private void ExecuteAbout()
         {
-            MessageBox.Show(
-                "PCB Plotter v1.0\n\n" +
-                "A modern PCB pick-and-place data preparation tool.\n\n" +
-                "Supports Juki H8H export format.",
-                "About PCB Plotter",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information
-            );
+            var dialog = new Views.AboutDialog();
+            dialog.Owner = Application.Current.MainWindow;
+            dialog.ShowDialog();
         }
 
         private void ExecuteQuickImportPnp()
