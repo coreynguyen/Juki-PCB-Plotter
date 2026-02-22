@@ -342,8 +342,8 @@ namespace PCBPlotter.Views
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2|" +
-                         "CircuitCAM / Fabmaster (*.cpf;*.mdb;*.val;*.fab;*.va2)|*.cpf;*.mdb;*.val;*.fab;*.va2|" +
+                Filter = "All CAD Files (*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro)|*.ipc;*.356;*.net;*.tgz;*.tar;*.zip;*.odb;*.tar.gz;*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro|" +
+                         "CircuitCAM / Fabmaster / Altium (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro|" +
                          "IPC-D-356 Files (*.ipc;*.356;*.net)|*.ipc;*.356;*.net|" +
                          "ODB++ Archives (*.tgz;*.tar;*.zip;*.odb;*.tar.gz)|*.tgz;*.tar;*.zip;*.odb;*.tar.gz|" +
                          "All Files (*.*)|*.*",
@@ -356,8 +356,9 @@ namespace PCBPlotter.Views
                 string fileName = System.IO.Path.GetFileName(dialog.FileName).ToLowerInvariant();
                 string fullPath = dialog.FileName.ToLowerInvariant();
 
-                // Route CircuitCAM Express / Valor CIM files and Allegro Fabmaster files
-                if (ext == ".cpf" || ext == ".mdb" || ext == ".val" || ext == ".fab" || ext == ".va2")
+                // Route CircuitCAM Express / Valor CIM files, Allegro Fabmaster files, and Altium files
+                if (ext == ".cpf" || ext == ".mdb" || ext == ".val" || ext == ".fab" || ext == ".va2" ||
+                    ext == ".pcbdoc" || ext == ".pcb" || ext == ".pro")
                 {
                     ShowUnifiedCadImportDialogWithFile(dialog.FileName);
                 }

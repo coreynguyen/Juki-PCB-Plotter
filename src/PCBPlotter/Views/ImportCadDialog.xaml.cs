@@ -14,14 +14,16 @@ namespace PCBPlotter.Views
     /// Unified dialog for importing CAD data from multiple formats:
     /// - CircuitCAM Express (.cpf, .mdb)
     /// - Allegro Fabmaster (.val, .fab, .va2)
+    /// - Altium Designer (.pcbdoc, .pcb, .pro)
     /// </summary>
     public partial class ImportCadDialog : Window
     {
-        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster }
+        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster, AltiumPcbDoc }
 
         private CadFormat _detectedFormat = CadFormat.Unknown;
         private CpfImporter _cpfImporter;
         private FabmasterImporter _fabmasterImporter;
+        private AltiumImporter _altiumImporter;
         private Project _project;
 
         // Unified placement data for preview
@@ -59,9 +61,10 @@ namespace PCBPlotter.Views
         {
             var dialog = new OpenFileDialog
             {
-                Filter = "CAD Files (*.cpf;*.mdb;*.val;*.fab;*.va2)|*.cpf;*.mdb;*.val;*.fab;*.va2|" +
+                Filter = "CAD Files (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro|" +
                          "CircuitCAM Express (*.cpf;*.mdb)|*.cpf;*.mdb|" +
                          "Allegro Fabmaster (*.val;*.fab;*.va2)|*.val;*.fab;*.va2|" +
+                         "Altium Designer (*.pcbdoc;*.pcb;*.pro)|*.pcbdoc;*.pcb;*.pro|" +
                          "All Files (*.*)|*.*",
                 Title = "Select CAD Data File"
             };
@@ -93,6 +96,13 @@ namespace PCBPlotter.Views
                     FormatText.Text = "Allegro Fabmaster (.val/.fab/.va2)";
                     break;
 
+                case ".pcbdoc":
+                case ".pcb":
+                case ".pro":
+                    _detectedFormat = CadFormat.AltiumPcbDoc;
+                    FormatText.Text = "Altium Designer (.pcbdoc/.pcb/.pro)";
+                    break;
+
                 default:
                     _detectedFormat = CadFormat.Unknown;
                     FormatText.Text = "(unknown format)";
@@ -120,7 +130,8 @@ namespace PCBPlotter.Views
                 ThemedMessageBox.Show(
                     "Unable to determine file format. Please select a supported CAD file:\n" +
                     "- CircuitCAM Express (.cpf, .mdb)\n" +
-                    "- Allegro Fabmaster (.val, .fab, .va2)",
+                    "- Allegro Fabmaster (.val, .fab, .va2)\n" +
+                    "- Altium Designer (.pcbdoc, .pcb, .pro)",
                     "Format Error", MessageBoxButton.OK, MessageBoxImage.Warning, this);
                 return;
             }
@@ -140,6 +151,10 @@ namespace PCBPlotter.Views
                 else if (_detectedFormat == CadFormat.AllegroFabmaster)
                 {
                     ParseFabmaster(sourcePath);
+                }
+                else if (_detectedFormat == CadFormat.AltiumPcbDoc)
+                {
+                    ParseAltium(sourcePath);
                 }
 
                 UpdatePreview();
@@ -246,6 +261,52 @@ namespace PCBPlotter.Views
             ImportButton.IsEnabled = plcCount > 0;
         }
 
+        private void ParseAltium(string sourcePath)
+        {
+            _altiumImporter = new AltiumImporter();
+            _altiumImporter.Parse(sourcePath);
+
+            var data = _altiumImporter.ParsedData;
+
+            // Convert to unified display records
+            foreach (var rec in data.Components)
+            {
+                if (rec.IsFiducial)
+                {
+                    _allFiducials.Add(new CadPlacementRecord
+                    {
+                        RefDes = rec.Designator,
+                        X = rec.X_mm,
+                        Y = rec.Y_mm,
+                        Rotation = rec.Rotation,
+                        IsBottom = rec.IsBottomSide,
+                        Package = "",
+                        PartNumber = "FIDUCIAL"
+                    });
+                }
+                else if (rec.MountType != "THT")
+                {
+                    _allPlacements.Add(new CadPlacementRecord
+                    {
+                        RefDes = rec.Designator,
+                        X = rec.X_mm,
+                        Y = rec.Y_mm,
+                        Rotation = rec.Rotation,
+                        IsBottom = rec.IsBottomSide,
+                        Package = rec.Pattern ?? "",
+                        PartNumber = rec.SourceLibReference ?? rec.Comment ?? ""
+                    });
+                }
+            }
+
+            int plcCount = _allPlacements.Count;
+            int fidCount = _allFiducials.Count;
+
+            StatusText.Text = string.Format("Parsed: {0} SMD placements, {1} fiducials",
+                plcCount, fidCount);
+            ImportButton.IsEnabled = plcCount > 0;
+        }
+
         private void CategoryRadio_Changed(object sender, RoutedEventArgs e)
         {
             UpdatePreview();
@@ -283,6 +344,10 @@ namespace PCBPlotter.Views
             {
                 SummaryText.Text = _fabmasterImporter.GetSummary();
             }
+            else if (_detectedFormat == CadFormat.AltiumPcbDoc && _altiumImporter != null)
+            {
+                SummaryText.Text = _altiumImporter.GetSummary();
+            }
             else
             {
                 SummaryText.Text = "No data loaded.";
@@ -319,6 +384,17 @@ namespace PCBPlotter.Views
                     }
 
                     _fabmasterImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
+                }
+                else if (_detectedFormat == CadFormat.AltiumPcbDoc)
+                {
+                    if (_altiumImporter?.ParsedData == null || _altiumImporter.ParsedData.Components.Count == 0)
+                    {
+                        ThemedMessageBox.Show("No data to import.", "Import Error",
+                            MessageBoxButton.OK, MessageBoxImage.Warning, this);
+                        return;
+                    }
+
+                    _altiumImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
                 }
                 else
                 {
