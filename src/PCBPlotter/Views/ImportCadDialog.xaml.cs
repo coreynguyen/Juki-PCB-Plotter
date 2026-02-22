@@ -14,16 +14,18 @@ namespace PCBPlotter.Views
     /// Unified dialog for importing CAD data from multiple formats:
     /// - CircuitCAM Express (.cpf, .mdb)
     /// - Allegro Fabmaster (.val, .fab, .va2)
-    /// - Altium Designer (.pcbdoc, .pcb, .pro)
+    /// - Altium Designer (.pcbdoc, .pcb)
+    /// - Protel PCB 2.8 (.pro, .pcb)
     /// </summary>
     public partial class ImportCadDialog : Window
     {
-        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster, AltiumPcbDoc }
+        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster, AltiumPcbDoc, ProtelPro }
 
         private CadFormat _detectedFormat = CadFormat.Unknown;
         private CpfImporter _cpfImporter;
         private FabmasterImporter _fabmasterImporter;
         private AltiumImporter _altiumImporter;
+        private ProtelImporter _protelImporter;
         private Project _project;
 
         // Unified placement data for preview
@@ -64,7 +66,8 @@ namespace PCBPlotter.Views
                 Filter = "CAD Files (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro|" +
                          "CircuitCAM Express (*.cpf;*.mdb)|*.cpf;*.mdb|" +
                          "Allegro Fabmaster (*.val;*.fab;*.va2)|*.val;*.fab;*.va2|" +
-                         "Altium Designer (*.pcbdoc;*.pcb;*.pro)|*.pcbdoc;*.pcb;*.pro|" +
+                         "Altium Designer (*.pcbdoc;*.pcb)|*.pcbdoc;*.pcb|" +
+                         "Protel PCB 2.8 (*.pro;*.pcb)|*.pro;*.pcb|" +
                          "All Files (*.*)|*.*",
                 Title = "Select CAD Data File"
             };
@@ -97,10 +100,23 @@ namespace PCBPlotter.Views
                     break;
 
                 case ".pcbdoc":
+                    _detectedFormat = CadFormat.AltiumPcbDoc;
+                    FormatText.Text = "Altium Designer (.pcbdoc)";
+                    break;
+
                 case ".pcb":
                 case ".pro":
-                    _detectedFormat = CadFormat.AltiumPcbDoc;
-                    FormatText.Text = "Altium Designer (.pcbdoc/.pcb/.pro)";
+                    // .pro and .pcb can be either Altium ASCII or Protel 2.8 - check content
+                    if (ProtelProParser.IsProtelFormat(filePath))
+                    {
+                        _detectedFormat = CadFormat.ProtelPro;
+                        FormatText.Text = "Protel PCB 2.8 (.pro/.pcb)";
+                    }
+                    else
+                    {
+                        _detectedFormat = CadFormat.AltiumPcbDoc;
+                        FormatText.Text = "Altium Designer (.pcb/.pro)";
+                    }
                     break;
 
                 default:
@@ -131,7 +147,8 @@ namespace PCBPlotter.Views
                     "Unable to determine file format. Please select a supported CAD file:\n" +
                     "- CircuitCAM Express (.cpf, .mdb)\n" +
                     "- Allegro Fabmaster (.val, .fab, .va2)\n" +
-                    "- Altium Designer (.pcbdoc, .pcb, .pro)",
+                    "- Altium Designer (.pcbdoc, .pcb)\n" +
+                    "- Protel PCB 2.8 (.pro, .pcb)",
                     "Format Error", MessageBoxButton.OK, MessageBoxImage.Warning, this);
                 return;
             }
@@ -155,6 +172,10 @@ namespace PCBPlotter.Views
                 else if (_detectedFormat == CadFormat.AltiumPcbDoc)
                 {
                     ParseAltium(sourcePath);
+                }
+                else if (_detectedFormat == CadFormat.ProtelPro)
+                {
+                    ParseProtel(sourcePath);
                 }
 
                 UpdatePreview();
@@ -307,6 +328,52 @@ namespace PCBPlotter.Views
             ImportButton.IsEnabled = plcCount > 0;
         }
 
+        private void ParseProtel(string sourcePath)
+        {
+            _protelImporter = new ProtelImporter();
+            _protelImporter.Parse(sourcePath);
+
+            var data = _protelImporter.ParsedData;
+
+            // Convert to unified display records
+            foreach (var rec in data.Components)
+            {
+                if (rec.IsFiducial)
+                {
+                    _allFiducials.Add(new CadPlacementRecord
+                    {
+                        RefDes = rec.Designator,
+                        X = rec.X_mm,
+                        Y = rec.Y_mm,
+                        Rotation = rec.Rotation,
+                        IsBottom = rec.Side == ProtelBoardSide.Bottom,
+                        Package = "",
+                        PartNumber = "FIDUCIAL"
+                    });
+                }
+                else if (rec.MountType != "THT")
+                {
+                    _allPlacements.Add(new CadPlacementRecord
+                    {
+                        RefDes = rec.Designator,
+                        X = rec.X_mm,
+                        Y = rec.Y_mm,
+                        Rotation = rec.Rotation,
+                        IsBottom = rec.Side == ProtelBoardSide.Bottom,
+                        Package = rec.Pattern ?? "",
+                        PartNumber = rec.Comment ?? ""
+                    });
+                }
+            }
+
+            int plcCount = _allPlacements.Count;
+            int fidCount = _allFiducials.Count;
+
+            StatusText.Text = string.Format("Parsed: {0} SMD placements, {1} fiducials",
+                plcCount, fidCount);
+            ImportButton.IsEnabled = plcCount > 0;
+        }
+
         private void CategoryRadio_Changed(object sender, RoutedEventArgs e)
         {
             UpdatePreview();
@@ -347,6 +414,10 @@ namespace PCBPlotter.Views
             else if (_detectedFormat == CadFormat.AltiumPcbDoc && _altiumImporter != null)
             {
                 SummaryText.Text = _altiumImporter.GetSummary();
+            }
+            else if (_detectedFormat == CadFormat.ProtelPro && _protelImporter != null)
+            {
+                SummaryText.Text = _protelImporter.GetSummary();
             }
             else
             {
@@ -395,6 +466,17 @@ namespace PCBPlotter.Views
                     }
 
                     _altiumImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
+                }
+                else if (_detectedFormat == CadFormat.ProtelPro)
+                {
+                    if (_protelImporter?.ParsedData == null || _protelImporter.ParsedData.Components.Count == 0)
+                    {
+                        ThemedMessageBox.Show("No data to import.", "Import Error",
+                            MessageBoxButton.OK, MessageBoxImage.Warning, this);
+                        return;
+                    }
+
+                    _protelImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
                 }
                 else
                 {
