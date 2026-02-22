@@ -16,16 +16,18 @@ namespace PCBPlotter.Views
     /// - Allegro Fabmaster (.val, .fab, .va2)
     /// - Altium Designer (.pcbdoc, .pcb)
     /// - Protel PCB 2.8 (.pro, .pcb)
+    /// - GenCAD (.cad)
     /// </summary>
     public partial class ImportCadDialog : Window
     {
-        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster, AltiumPcbDoc, ProtelPro }
+        private enum CadFormat { Unknown, CircuitCAM, AllegroFabmaster, AltiumPcbDoc, ProtelPro, GenCad }
 
         private CadFormat _detectedFormat = CadFormat.Unknown;
         private CpfImporter _cpfImporter;
         private FabmasterImporter _fabmasterImporter;
         private AltiumImporter _altiumImporter;
         private ProtelImporter _protelImporter;
+        private GenCadImporter _genCadImporter;
         private Project _project;
 
         // Unified placement data for preview
@@ -63,11 +65,12 @@ namespace PCBPlotter.Views
         {
             var dialog = new OpenFileDialog
             {
-                Filter = "CAD Files (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro|" +
+                Filter = "CAD Files (*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad)|*.cpf;*.mdb;*.val;*.fab;*.va2;*.pcbdoc;*.pcb;*.pro;*.cad|" +
                          "CircuitCAM Express (*.cpf;*.mdb)|*.cpf;*.mdb|" +
                          "Allegro Fabmaster (*.val;*.fab;*.va2)|*.val;*.fab;*.va2|" +
                          "Altium Designer (*.pcbdoc;*.pcb)|*.pcbdoc;*.pcb|" +
                          "Protel PCB 2.8 (*.pro;*.pcb)|*.pro;*.pcb|" +
+                         "GenCAD (*.cad)|*.cad|" +
                          "All Files (*.*)|*.*",
                 Title = "Select CAD Data File"
             };
@@ -119,6 +122,11 @@ namespace PCBPlotter.Views
                     }
                     break;
 
+                case ".cad":
+                    _detectedFormat = CadFormat.GenCad;
+                    FormatText.Text = "GenCAD (.cad)";
+                    break;
+
                 default:
                     _detectedFormat = CadFormat.Unknown;
                     FormatText.Text = "(unknown format)";
@@ -148,7 +156,8 @@ namespace PCBPlotter.Views
                     "- CircuitCAM Express (.cpf, .mdb)\n" +
                     "- Allegro Fabmaster (.val, .fab, .va2)\n" +
                     "- Altium Designer (.pcbdoc, .pcb)\n" +
-                    "- Protel PCB 2.8 (.pro, .pcb)",
+                    "- Protel PCB 2.8 (.pro, .pcb)\n" +
+                    "- GenCAD (.cad)",
                     "Format Error", MessageBoxButton.OK, MessageBoxImage.Warning, this);
                 return;
             }
@@ -176,6 +185,10 @@ namespace PCBPlotter.Views
                 else if (_detectedFormat == CadFormat.ProtelPro)
                 {
                     ParseProtel(sourcePath);
+                }
+                else if (_detectedFormat == CadFormat.GenCad)
+                {
+                    ParseGenCad(sourcePath);
                 }
 
                 UpdatePreview();
@@ -374,6 +387,59 @@ namespace PCBPlotter.Views
             ImportButton.IsEnabled = plcCount > 0;
         }
 
+        private void ParseGenCad(string sourcePath)
+        {
+            _genCadImporter = new GenCadImporter();
+            _genCadImporter.Parse(sourcePath);
+
+            var data = _genCadImporter.ParsedData;
+
+            // Convert to unified display records - components
+            foreach (var comp in data.Components)
+            {
+                bool isSmd = comp.Shape != null && comp.Shape.Insert == GenCadInsertType.SMD;
+                if (!isSmd && comp.Shape != null && comp.Shape.Insert == GenCadInsertType.TH)
+                    continue; // Skip through-hole only
+
+                string partNumber = "";
+                if (comp.Device != null && !string.IsNullOrEmpty(comp.Device.PartNumber))
+                    partNumber = comp.Device.PartNumber;
+
+                _allPlacements.Add(new CadPlacementRecord
+                {
+                    RefDes = comp.RefDes,
+                    X = data.ToMm(comp.PlaceX),
+                    Y = data.ToMm(comp.PlaceY),
+                    Rotation = comp.Rotation,
+                    IsBottom = comp.Layer == "BOTTOM",
+                    Package = comp.ShapeName ?? "",
+                    PartNumber = partNumber
+                });
+            }
+
+            // Convert fiducials
+            foreach (var fid in data.Fiducials)
+            {
+                _allFiducials.Add(new CadPlacementRecord
+                {
+                    RefDes = fid.Name,
+                    X = data.ToMm(fid.X),
+                    Y = data.ToMm(fid.Y),
+                    Rotation = fid.Rotation,
+                    IsBottom = fid.Layer == "BOTTOM",
+                    Package = fid.ShapeName ?? "",
+                    PartNumber = "FIDUCIAL"
+                });
+            }
+
+            int plcCount = _allPlacements.Count;
+            int fidCount = _allFiducials.Count;
+
+            StatusText.Text = string.Format("Parsed: {0} placements, {1} fiducials",
+                plcCount, fidCount);
+            ImportButton.IsEnabled = plcCount > 0;
+        }
+
         private void CategoryRadio_Changed(object sender, RoutedEventArgs e)
         {
             UpdatePreview();
@@ -418,6 +484,10 @@ namespace PCBPlotter.Views
             else if (_detectedFormat == CadFormat.ProtelPro && _protelImporter != null)
             {
                 SummaryText.Text = _protelImporter.GetSummary();
+            }
+            else if (_detectedFormat == CadFormat.GenCad && _genCadImporter != null)
+            {
+                SummaryText.Text = _genCadImporter.GetSummary();
             }
             else
             {
@@ -477,6 +547,17 @@ namespace PCBPlotter.Views
                     }
 
                     _protelImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
+                }
+                else if (_detectedFormat == CadFormat.GenCad)
+                {
+                    if (_genCadImporter?.ParsedData == null || _genCadImporter.ParsedData.Components.Count == 0)
+                    {
+                        ThemedMessageBox.Show("No data to import.", "Import Error",
+                            MessageBoxButton.OK, MessageBoxImage.Warning, this);
+                        return;
+                    }
+
+                    _genCadImporter.ConvertToProject(_project, out packages, out placements, out fiducials, out board);
                 }
                 else
                 {
