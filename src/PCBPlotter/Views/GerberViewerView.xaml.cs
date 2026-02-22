@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using PCBPlotter.Controls;
 using PCBPlotter.Core.Models;
 using PCBPlotter.ViewModels;
@@ -96,6 +97,7 @@ namespace PCBPlotter.Views
                 oldVm.ActiveLayerChanged -= OnActiveLayerChanged;
                 oldVm.RequestLayerListSelection -= OnRequestLayerListSelection;
                 oldVm.CanvasRefreshRequested -= OnCanvasRefreshRequested;
+                oldVm.RequestLayerFlash -= OnRequestLayerFlash;
             }
 
             // Subscribe to new view model
@@ -106,6 +108,7 @@ namespace PCBPlotter.Views
                 newVm.ActiveLayerChanged += OnActiveLayerChanged;
                 newVm.RequestLayerListSelection += OnRequestLayerListSelection;
                 newVm.CanvasRefreshRequested += OnCanvasRefreshRequested;
+                newVm.RequestLayerFlash += OnRequestLayerFlash;
             }
         }
 
@@ -186,6 +189,56 @@ namespace PCBPlotter.Views
         private void OnCanvasRefreshRequested()
         {
             // Refresh both canvases to show consumed region overlays
+            GerberCanvas.InvalidateGerberCache();
+            if (OpenGLCanvas.Visibility == Visibility.Visible)
+                OpenGLCanvas.Invalidate();
+        }
+
+        /// <summary>
+        /// Flash the active layer 3 times to indicate which layer is now active
+        /// </summary>
+        private void OnRequestLayerFlash(GerberLayer layer)
+        {
+            if (layer == null) return;
+
+            // Remember original visibility state
+            bool originalVisibility = layer.IsVisible;
+
+            // Flash counter (3 flashes = 6 toggles: off-on-off-on-off-on)
+            int flashCount = 0;
+            const int totalFlashes = 6;
+
+            var timer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(100)
+            };
+
+            timer.Tick += (s, args) =>
+            {
+                flashCount++;
+
+                if (flashCount >= totalFlashes)
+                {
+                    // Restore original visibility and stop
+                    layer.IsVisible = originalVisibility;
+                    timer.Stop();
+                    RefreshCanvas();
+                    return;
+                }
+
+                // Toggle visibility
+                layer.IsVisible = !layer.IsVisible;
+                RefreshCanvas();
+            };
+
+            // Start with layer hidden (first flash off)
+            layer.IsVisible = false;
+            RefreshCanvas();
+            timer.Start();
+        }
+
+        private void RefreshCanvas()
+        {
             GerberCanvas.InvalidateGerberCache();
             if (OpenGLCanvas.Visibility == Visibility.Visible)
                 OpenGLCanvas.Invalidate();

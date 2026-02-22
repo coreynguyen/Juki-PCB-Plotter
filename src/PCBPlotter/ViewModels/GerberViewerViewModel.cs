@@ -158,6 +158,9 @@ namespace PCBPlotter.ViewModels
         // Event to request the view to select a layer in the ListBox
         public event Action<GerberLayer> RequestLayerListSelection;
 
+        // Event to request the view to flash a layer (visual feedback)
+        public event Action<GerberLayer> RequestLayerFlash;
+
         public GerberViewerViewModel()
         {
             _selectedPrimitives = new ObservableCollection<GerberPrimitive>();
@@ -246,6 +249,9 @@ namespace PCBPlotter.ViewModels
             layer.IsActive = true;
             SelectedLayer = layer;
             ActiveLayerChanged?.Invoke(layer);
+
+            // Request visual flash to indicate the new active layer
+            RequestLayerFlash?.Invoke(layer);
         }
 
         /// <summary>
@@ -389,6 +395,16 @@ namespace PCBPlotter.ViewModels
                 {
                     Message = $"Imported {importedCount} Gerber layer(s) with {Layers.Sum(l => l.Primitives?.Count ?? 0)} primitives"
                 });
+
+                // Auto-select first layer as active if no layer is currently active
+                if (Project?.GerberLayers != null && Project.GerberLayers.Count > 0)
+                {
+                    bool hasActiveLayer = Project.GerberLayers.Any(l => l.IsActive);
+                    if (!hasActiveLayer)
+                    {
+                        SetActiveLayer(Project.GerberLayers[0]);
+                    }
+                }
 
                 // Auto zoom-to-fit after import
                 ExecuteZoomFit();
