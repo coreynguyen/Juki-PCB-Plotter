@@ -64,20 +64,18 @@ namespace PCBPlotter.Views
             GerberCanvas.MouseRightButtonUp += OnCanvasRightClick;
             OpenGLCanvas.RightClicked += OnOpenGLCanvasRightClick;
 
-            // Force full cache rebuild when the view becomes visible (e.g. switching to Gerber tab)
-            // This ensures layers don't stay invisible due to corrupted cache state.
+            // Force refresh when the view becomes visible (e.g. switching to Gerber tab)
+            // IMPORTANT: Do NOT call InvalidateGerberCache() here - that clears quadtrees
+            // which causes large layers (>2000 primitives) to disappear until rebuilt async.
+            // Just call InvalidateVisual() to trigger a repaint with existing caches.
             IsVisibleChanged += (s, e) =>
             {
                 if ((bool)e.NewValue)
                 {
-                    // Force full cache rebuild to fix any corrupted state
-                    GerberCanvas.InvalidateGerberCache();
-
+                    // Immediate invalidation for cases where layout is already done
+                    GerberCanvas.InvalidateVisual();
                     if (OpenGLCanvas.Visibility == Visibility.Visible)
-                    {
-                        OpenGLCanvas.ForceRebuildAllCaches();
                         OpenGLCanvas.Invalidate();
-                    }
 
                     // Deferred invalidation to catch cases where layout hasn't completed yet
                     Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
