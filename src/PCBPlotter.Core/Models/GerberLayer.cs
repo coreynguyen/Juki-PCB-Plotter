@@ -137,6 +137,15 @@ namespace PCBPlotter.Core.Models
         }
 
         /// <summary>
+        /// Removes consumed regions that were created for a specific placement reference.
+        /// Used for undo operations.
+        /// </summary>
+        public void RemoveConsumedRegionsByReference(string placementReference)
+        {
+            _consumedRegions.RemoveAll(r => r.PlacementReference == placementReference);
+        }
+
+        /// <summary>
         /// Invalidate cached bounds (call after modifying primitives list)
         /// </summary>
         public void InvalidateBounds()

@@ -308,6 +308,7 @@ namespace PCBPlotter.ViewModels
             Subscribe<StatusMessageEvent>(OnStatusMessage);
             Subscribe<SelectionChangedEvent>(OnSelectionChanged);
             Subscribe<NavigateToTabEvent>(OnNavigateToTab);
+            Subscribe<ExecuteUndoableCommandEvent>(OnExecuteUndoableCommand);
 
             UndoRedoService.StackChanged += (s, e) =>
             {
@@ -783,6 +784,14 @@ namespace PCBPlotter.ViewModels
                     Placement = e.ScrollToPlacement,
                     CenterView = false
                 });
+            }
+        }
+
+        private void OnExecuteUndoableCommand(ExecuteUndoableCommandEvent e)
+        {
+            if (e.Command != null)
+            {
+                UndoRedoService.Execute(e.Command);
             }
         }
 

@@ -769,6 +769,7 @@ namespace PCBPlotter.ViewModels
 
             // Check if a package with this name already exists
             double placementRotation = 0;
+            bool isNewPackage = false;
             var existingPackage = Project.Packages.FirstOrDefault(
                 p => p.Name == package.Name && p.Pins.Count == package.Pins.Count);
             if (existingPackage != null)
@@ -786,8 +787,7 @@ namespace PCBPlotter.ViewModels
             {
                 // First instance defines the canonical orientation
                 package.DefaultRotation = instanceAngle;
-                Project.Packages.Add(package);
-                Publish(new PackageAddedEvent { Package = package });
+                isNewPackage = true;
             }
 
             // Create placement at the centroid
@@ -801,8 +801,16 @@ namespace PCBPlotter.ViewModels
                 Package = package
             };
 
-            Project.Placements.Add(placement);
-            Publish(new PlacementAddedEvent { Placement = placement });
+            // Create and execute the undoable command
+            var command = new AddPlacementFromSelectionCommand(
+                Project,
+                placement,
+                package,
+                isNewPackage,
+                primitives,
+                SelectedLayer);
+
+            Publish(new ExecuteUndoableCommandEvent { Command = command });
 
             Publish(new StatusMessageEvent
             {
@@ -810,20 +818,6 @@ namespace PCBPlotter.ViewModels
                     reference, package.Name, classification.PartClass,
                     package.Pins.Count, features.Centroid.X, features.Centroid.Y, placementRotation)
             });
-
-            // Mark primitives as consumed and create simplified bounding shapes for visualization
-            foreach (var prim in primitives)
-            {
-                prim.IsConsumed = true;
-                prim.IsSelected = false;
-            }
-
-            // Add consumed regions (clustered bounding shapes) to the active layer
-            // These will be rendered as solid yellow shapes to indicate used areas
-            if (SelectedLayer != null)
-            {
-                SelectedLayer.AddConsumedRegions(primitives, reference);
-            }
 
             // Clear selection so user can immediately start the next selection
             SelectedPrimitives.Clear();

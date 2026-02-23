@@ -284,4 +284,17 @@ namespace PCBPlotter.Core.Events
     }
 
     #endregion
+
+    #region Undo/Redo Events
+
+    /// <summary>
+    /// Event to request execution of an undoable command.
+    /// MainViewModel subscribes to this and executes the command through UndoRedoService.
+    /// </summary>
+    public class ExecuteUndoableCommandEvent
+    {
+        public Services.IUndoableCommand Command { get; set; }
+    }
+
+    #endregion
 }
