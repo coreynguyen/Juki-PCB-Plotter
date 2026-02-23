@@ -602,6 +602,10 @@ namespace PCBPlotter.Views
                     GerberCanvas.Visibility = Visibility.Collapsed;
                     OpenGLCanvas.Visibility = Visibility.Visible;
 
+                    // CRITICAL: Invalidate static GPU buffers when switching to GPU mode.
+                    // Same issue as tab switch - static buffers may be invalid after being hidden.
+                    OpenGLCanvas.InvalidateStaticGpuBuffers();
+
                     // Apply screen blend setting
                     OpenGLCanvas.UseScreenBlend = ScreenBlendCheckBox?.IsChecked ?? true;
                 }
