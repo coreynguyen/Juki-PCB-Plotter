@@ -3341,6 +3341,37 @@ void main()
 #endif
         }
 
+        /// <summary>
+        /// Force rebuild of all geometry caches. Use this when layers appear invisible
+        /// after tab switches or other state changes that may corrupt cache state.
+        /// </summary>
+        public void ForceRebuildAllCaches()
+        {
+#if USE_OPENGL
+            lock (_cacheLock)
+            {
+                // Clear all caches
+                _layerGeometryCache.Clear();
+                _pendingCacheBuilds.Clear();
+
+                // Dispose and clear static renderers
+                foreach (var renderer in _staticLayerRenderers.Values)
+                {
+                    renderer.Dispose();
+                }
+                _staticLayerRenderers.Clear();
+
+                // Clear quadtrees
+                _layerQuadtrees.Clear();
+            }
+
+            // Mark for rebuild
+            _needsRebuild = true;
+            _geometryCacheDirty = true;
+            _needsRedraw = true;
+#endif
+        }
+
         #region Coordinate Conversion
 
         /// <summary>
