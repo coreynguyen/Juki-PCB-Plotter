@@ -59,6 +59,7 @@
     <Compile Include="Interfaces\IMachineExporter.cs" />
     <Compile Include="Services\ProjectService.cs" />
     <Compile Include="Services\UndoRedoService.cs" />
+    <Compile Include="Services\PlacementCommands.cs" />
     <Compile Include="Services\Ipc356Parser.cs" />
     <Compile Include="Services\JukiFx3Exporter.cs" />
     <Compile Include="Services\OdbPlusPlusParser.cs" />
