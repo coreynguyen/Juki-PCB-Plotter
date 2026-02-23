@@ -1625,6 +1625,15 @@ void main()
             if (cache.ClearCircles.Count == 0 && cache.ClearRectangles.Count == 0 && !hasClearPolygons)
                 return;
 
+            // Skip clear primitives if the layer has no dark content to cut.
+            // Clear primitives only make sense to "cut holes" in previously rendered dark content.
+            // Without this, clear primitives would render as solid background-colored shapes
+            // that cover the grid/background, which is visually incorrect.
+            bool hasDarkPolygons = cache.PolygonMesh != null && cache.PolygonMesh.HasData;
+            bool hasLineMesh = cache.LineMesh != null && cache.LineMesh.HasData;
+            if (cache.Circles.Count == 0 && cache.Rectangles.Count == 0 && !hasDarkPolygons && !hasLineMesh)
+                return;
+
             // Use background color for holes (creates visual cutout effect)
             var bg = BackgroundColor;
             var holeColor = new OpenTK.Vector4(bg.R / 255f, bg.G / 255f, bg.B / 255f, 1.0f);

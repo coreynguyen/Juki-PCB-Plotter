@@ -1087,6 +1087,7 @@ namespace PCBPlotter.Controls
             StreamGeometryContext polyCtx = null;
             int polyCount = 0;
             SolidColorBrush currentBatchBrush = brush; // Track which brush the current batch uses
+            bool hasRenderedDarkContent = false; // Track if we've rendered any dark primitives
 
             foreach (var prim in visiblePrimitives)
             {
@@ -1111,6 +1112,17 @@ namespace PCBPlotter.Controls
                 if (double.IsNaN(prim.X) || double.IsInfinity(prim.X) ||
                     double.IsNaN(prim.Y) || double.IsInfinity(prim.Y))
                     continue;
+
+                // Skip clear primitives if no dark content has been rendered yet.
+                // Clear primitives only make sense to "cut holes" in previously rendered dark content.
+                // Without this, clear primitives would render as solid background-colored shapes
+                // that cover the grid/background, which is visually incorrect.
+                if (!prim.IsDark && !hasRenderedDarkContent)
+                    continue;
+
+                // Track when we render dark content
+                if (prim.IsDark)
+                    hasRenderedDarkContent = true;
 
                 // Select brush based on polarity - dark primitives add, clear primitives erase
                 SolidColorBrush primBrush = prim.IsDark ? brush : holeBrush;
