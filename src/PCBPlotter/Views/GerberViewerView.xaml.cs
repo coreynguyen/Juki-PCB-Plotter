@@ -84,6 +84,14 @@ namespace PCBPlotter.Views
                         if (OpenGLCanvas.Visibility == Visibility.Visible)
                             OpenGLCanvas.Invalidate();
                     }));
+
+                    // Extra deferred invalidation at Render priority for WindowsFormsHost
+                    // which may need additional time to become active after tab switch
+                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() =>
+                    {
+                        if (OpenGLCanvas.Visibility == Visibility.Visible)
+                            OpenGLCanvas.Invalidate();
+                    }));
                 }
             };
 
@@ -126,7 +134,11 @@ namespace PCBPlotter.Views
         private void OnLayerVisibilityChanged()
         {
             // Refresh both canvases when layer visibility changes
-            GerberCanvas.InvalidateGerberCache();
+            // IMPORTANT: Only invalidate visual, NOT the gerber cache.
+            // InvalidateGerberCache() clears quadtrees, which causes large layers
+            // (>2000 primitives) to disappear until async rebuild completes.
+            // Visibility changes don't require quadtree rebuilds - just a repaint.
+            GerberCanvas.InvalidateVisual();
             if (OpenGLCanvas.Visibility == Visibility.Visible)
                 OpenGLCanvas.Invalidate();
         }
@@ -200,7 +212,9 @@ namespace PCBPlotter.Views
         private void OnCanvasRefreshRequested()
         {
             // Refresh both canvases to show consumed region overlays
-            GerberCanvas.InvalidateGerberCache();
+            // Only invalidate visual, not the full cache - consumed regions
+            // don't change the geometry, just the overlay rendering.
+            GerberCanvas.InvalidateVisual();
             if (OpenGLCanvas.Visibility == Visibility.Visible)
                 OpenGLCanvas.Invalidate();
         }
@@ -250,7 +264,8 @@ namespace PCBPlotter.Views
 
         private void RefreshCanvas()
         {
-            GerberCanvas.InvalidateGerberCache();
+            // Only invalidate visual for repaint - don't clear quadtrees/caches
+            GerberCanvas.InvalidateVisual();
             if (OpenGLCanvas.Visibility == Visibility.Visible)
                 OpenGLCanvas.Invalidate();
         }
@@ -536,7 +551,10 @@ namespace PCBPlotter.Views
                 {
                     layer.Color = capturedColor;
                     contextMenu.IsOpen = false;
-                    GerberCanvas.InvalidateGerberCache();
+                    // Only invalidate visual - color changes don't require quadtree rebuilds
+                    GerberCanvas.InvalidateVisual();
+                    if (OpenGLCanvas.Visibility == Visibility.Visible)
+                        OpenGLCanvas.Invalidate();
                 };
 
                 grid.Children.Add(colorRect);
