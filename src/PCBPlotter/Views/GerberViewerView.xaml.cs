@@ -404,6 +404,16 @@ namespace PCBPlotter.Views
         }
 
         /// <summary>
+        /// Called when a layer visibility checkbox is checked or unchecked.
+        /// Triggers canvas refresh since the binding doesn't automatically notify the canvas.
+        /// </summary>
+        private void VisibilityCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            var vm = DataContext as GerberViewerViewModel;
+            vm?.NotifyLayerVisibilityChanged();
+        }
+
+        /// <summary>
         /// CPU canvas fires this when gerber primitives are selected/deselected.
         /// Sync the VM's SelectedPrimitives so commands like "Add to Output" work.
         /// </summary>

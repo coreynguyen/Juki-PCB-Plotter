@@ -38,7 +38,9 @@
 
                             <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}"
                                       VerticalAlignment="Center" Margin="0,0,8,0"
-                                      PreviewMouseLeftButtonDown="VisibilityCheckBox_PreviewMouseLeftButtonDown"/>
+                                      PreviewMouseLeftButtonDown="VisibilityCheckBox_PreviewMouseLeftButtonDown"
+                                      Checked="VisibilityCheckBox_Changed"
+                                      Unchecked="VisibilityCheckBox_Changed"/>
                             <Border Grid.Column="1" Width="18" Height="18" Margin="0,0,8,0"
                                     BorderBrush="{StaticResource BorderDarkBrush}" BorderThickness="1"
                                     Cursor="Hand" ToolTip="Click to change color"
