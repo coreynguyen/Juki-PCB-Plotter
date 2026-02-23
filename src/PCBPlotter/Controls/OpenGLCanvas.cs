@@ -2596,39 +2596,32 @@ void main()
         /// </summary>
         private void UploadStaticMeshesIfNeeded(string layerId, LayerGeometryCache cache)
         {
-            // Upload static line mesh if needed
-            if (cache.LineMesh != null && cache.LineMesh.HasData && cache.LineMesh.NeedsUpload)
+            // Upload static line mesh if not already on GPU
+            // NOTE: Check HasStaticLineMesh regardless of NeedsUpload flag because GPU buffers
+            // can be lost when WPF tab is hidden (WindowsFormsHost/GL context issues)
+            if (cache.LineMesh != null && cache.LineMesh.HasData && !_batchRenderer.HasStaticLineMesh(layerId))
             {
-                if (!_batchRenderer.HasStaticLineMesh(layerId))
-                {
-                    _batchRenderer.UploadStaticLineMesh(layerId,
-                        cache.LineMesh.Vertices, cache.LineMesh.VertexCount,
-                        cache.LineMesh.Indices, cache.LineMesh.IndexCount);
-                }
+                _batchRenderer.UploadStaticLineMesh(layerId,
+                    cache.LineMesh.Vertices, cache.LineMesh.VertexCount,
+                    cache.LineMesh.Indices, cache.LineMesh.IndexCount);
                 cache.LineMesh.NeedsUpload = false;
             }
 
-            // Upload static polygon mesh if needed
-            if (cache.PolygonMesh != null && cache.PolygonMesh.HasData && cache.PolygonMesh.NeedsUpload)
+            // Upload static polygon mesh if not already on GPU
+            if (cache.PolygonMesh != null && cache.PolygonMesh.HasData && !_batchRenderer.HasStaticPolygonMesh(layerId))
             {
-                if (!_batchRenderer.HasStaticPolygonMesh(layerId))
-                {
-                    _batchRenderer.UploadStaticPolygonMesh(layerId,
-                        cache.PolygonMesh.Vertices, cache.PolygonMesh.VertexCount,
-                        cache.PolygonMesh.Indices, cache.PolygonMesh.IndexCount);
-                }
+                _batchRenderer.UploadStaticPolygonMesh(layerId,
+                    cache.PolygonMesh.Vertices, cache.PolygonMesh.VertexCount,
+                    cache.PolygonMesh.Indices, cache.PolygonMesh.IndexCount);
                 cache.PolygonMesh.NeedsUpload = false;
             }
 
-            // Upload static clear polygon mesh if needed (for holes/cutouts)
-            if (cache.ClearPolygonMesh != null && cache.ClearPolygonMesh.HasData && cache.ClearPolygonMesh.NeedsUpload)
+            // Upload static clear polygon mesh if not already on GPU (for holes/cutouts)
+            if (cache.ClearPolygonMesh != null && cache.ClearPolygonMesh.HasData && !_batchRenderer.HasStaticClearPolygonMesh(layerId))
             {
-                if (!_batchRenderer.HasStaticClearPolygonMesh(layerId))
-                {
-                    _batchRenderer.UploadStaticClearPolygonMesh(layerId,
-                        cache.ClearPolygonMesh.Vertices, cache.ClearPolygonMesh.VertexCount,
-                        cache.ClearPolygonMesh.Indices, cache.ClearPolygonMesh.IndexCount);
-                }
+                _batchRenderer.UploadStaticClearPolygonMesh(layerId,
+                    cache.ClearPolygonMesh.Vertices, cache.ClearPolygonMesh.VertexCount,
+                    cache.ClearPolygonMesh.Indices, cache.ClearPolygonMesh.IndexCount);
                 cache.ClearPolygonMesh.NeedsUpload = false;
             }
         }
@@ -3337,6 +3330,19 @@ void main()
         public void Invalidate()
         {
 #if USE_OPENGL
+            _needsRedraw = true;
+#endif
+        }
+
+        /// <summary>
+        /// Invalidates all static GPU buffers. Call when GL context may have been affected
+        /// (e.g., after tab switch in WPF TabControl with WindowsFormsHost).
+        /// The CPU-side geometry caches are preserved and will be re-uploaded on next render.
+        /// </summary>
+        public void InvalidateStaticGpuBuffers()
+        {
+#if USE_OPENGL
+            _batchRenderer?.InvalidateAllStaticBuffers();
             _needsRedraw = true;
 #endif
         }

@@ -554,6 +554,20 @@ void main()
         }
 
         /// <summary>
+        /// Invalidates ALL static GPU buffers. Call when GL context may have been affected
+        /// (e.g., tab switch with WindowsFormsHost). CPU-side geometry caches are preserved
+        /// and will be re-uploaded on next render.
+        /// </summary>
+        public void InvalidateAllStaticBuffers()
+        {
+            foreach (var buffer in _staticLayerBuffers.Values)
+            {
+                buffer.Dispose();
+            }
+            _staticLayerBuffers.Clear();
+        }
+
+        /// <summary>
         /// Uploads all batched geometry to GPU and renders.
         /// </summary>
         public void Render(Matrix4 projection, Matrix4 view)

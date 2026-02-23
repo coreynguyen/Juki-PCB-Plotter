@@ -75,7 +75,13 @@ namespace PCBPlotter.Views
                     // Immediate invalidation for cases where layout is already done
                     GerberCanvas.InvalidateVisual();
                     if (OpenGLCanvas.Visibility == Visibility.Visible)
-                        OpenGLCanvas.Invalidate();
+                    {
+                        // CRITICAL: Invalidate static GPU buffers when tab becomes visible.
+                        // WindowsFormsHost + GLControl can have GL context issues after being hidden,
+                        // causing static buffers (line bodies, polygons) to become invalid while
+                        // instanced geometry (circles) still works since it's re-uploaded each frame.
+                        OpenGLCanvas.InvalidateStaticGpuBuffers();
+                    }
 
                     // Deferred invalidation to catch cases where layout hasn't completed yet
                     Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
